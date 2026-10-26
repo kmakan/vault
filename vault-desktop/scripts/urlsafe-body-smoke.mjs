@@ -90,6 +90,7 @@ export const ensureAccountNamespace = async () => 'fp:testnamespace';
 export const resetAccountNamespaceCache = () => {};
 export const resolveAlias = async (a) => a;
 export const rememberAlias = async () => {};
+export const isOwnSender = async (a, e) => String(a||'').trim().toLowerCase() === String(e||'').trim().toLowerCase();
 `);
 writeFileSync(MOCKS + '/recovery-session.js', `
 export const isRecoveryPending = () => false;

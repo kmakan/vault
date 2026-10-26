@@ -18,7 +18,10 @@
 //   * правило форм адреса, разрешённый словарь и правило записи не
 //     возвращаются в мост (мутанты «мост считает сам»);
 //   * запись идёт в строку ЭТОГО аккаунта, под тем же ключом и в том же
-//     направлении, а ответ — уже разрешённые строки нового словаря.
+//     направлении, а ответ — уже разрешённые строки нового словаря;
+//   * гейт «это письмо от нас?» получает СВОЙ словарь (цепочка old→new
+//     резолвится ядром), а не сравнивает строки в мосте; ошибка чтения kv
+//     отдаётся ошибкой, а не «чужим письмом».
 //
 // СОЗНАТЕЛЬНО НЕ МУТИРУЕТСЯ (не измеримо, а не «забыто»):
 //   * ЭКВИВАЛЕНТНЫЕ мутанты ветки «строки в kv нет»: `let Some(s) = raw else
@@ -40,7 +43,7 @@
 //     бы проверкой SQLite, а не правила. Контракт закреплён кодом (`?`).
 //
 // ИМЕНА ПРОБ (смоук-фильтр `identity_alias_tests` обязан собрать все
-// семнадцать; живость фильтра меряет `npm run gate:rust-smokes`, вердикт даёт
+// двадцать; живость фильтра меряет `npm run gate:rust-smokes`, вердикт даёт
 // весь либ-прогон):
 //   alias_dictionary_absent_reads_as_no_variants
 //   alias_dictionary_broken_json_fails_soft_to_the_bare_address
@@ -59,6 +62,9 @@
 //   alias_remember_writes_to_this_account_only
 //   alias_remember_repairs_a_broken_dictionary
 //   alias_remember_read_error_does_not_wipe_the_dictionary
+//   own_address_command_matches_normal_form_and_follows_the_chain
+//   own_address_command_reads_the_dictionary_of_this_account_only
+//   own_address_command_unreadable_dictionary_is_an_error_not_false
 
 export default {
   id: 'rust-bridge-identity-alias',
@@ -148,5 +154,37 @@ export default {
     .map_err(|e| e.to_string())`,
       replacement: `    let _ = obj;
     Ok(())` },
+    // ── «это письмо от нас?»: команда `identity_is_own_address` ──
+    { name: 'гейт «это мы» не читает словарь (письмо старого нашего адреса после смены — чужое)',
+      pattern: `    let aliases = alias_dictionary(&db, &account)?;
+    Ok(vault_core::identity::is_own_address(
+        &aliases,`,
+      replacement: `    let aliases = Vec::new();
+    Ok(vault_core::identity::is_own_address(
+        &aliases,` },
+    { name: 'правило «это мы» вернулось в мост: ядро не спрашивается, цепочка не резолвится',
+      pattern: `    Ok(vault_core::identity::is_own_address(
+        &aliases,
+        &own_email,
+        &address,
+    ))`,
+      replacement: `    let _ = aliases;
+    Ok(vault_core::identity::normalize(&address) == vault_core::identity::normalize(&own_email))` },
+    { name: 'аргументы гейта перепутаны (отправитель сравнивается с адресом письма)',
+      pattern: `    Ok(vault_core::identity::is_own_address(
+        &aliases,
+        &own_email,
+        &address,
+    ))`,
+      replacement: `    Ok(vault_core::identity::is_own_address(
+        &aliases,
+        &address,
+        &own_email,
+    ))` },
+    { name: 'ошибку чтения словаря гейт глотает (своё письмо молча считается чужим)',
+      pattern: `    let aliases = alias_dictionary(&db, &account)?;
+    Ok(vault_core::identity::is_own_address`,
+      replacement: `    let aliases = alias_dictionary(&db, &account).unwrap_or_default();
+    Ok(vault_core::identity::is_own_address` },
   ],
 };

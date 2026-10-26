@@ -42,6 +42,9 @@ const state = {
   rememberCalls: [],
   rememberFails: false,
   rememberAnswer: null,
+  ownCalls: [],
+  ownFails: false,
+  ownAnswer: (a, own) => String(a || '').trim().toLowerCase() === String(own || '').trim().toLowerCase(),
 };
 globalThis.__state = state;
 
@@ -101,6 +104,13 @@ globalThis.__invoke = async (cmd, args) => {
     if (state.rememberFails) throw new Error('словарь недоступен');
     return state.rememberAnswer;
   }
+  // «Это письмо от нас?» — правило (резолв цепочки + нормальная форма) живёт
+  // в ядре; здесь проверяется адаптер: форма вопроса, кэш и fail-open.
+  if (cmd === 'identity_is_own_address') {
+    state.ownCalls.push(args);
+    if (state.ownFails) throw new Error('команда недоступна');
+    return state.ownAnswer(args.address, args.ownEmail);
+  }
   return null;
 };
 
@@ -131,6 +141,9 @@ function reset() {
   state.rememberCalls = [];
   state.rememberFails = false;
   state.rememberAnswer = null;
+  state.ownCalls = [];
+  state.ownFails = false;
+  state.ownAnswer = (a, own) => String(a || '').trim().toLowerCase() === String(own || '').trim().toLowerCase();
   I.resetAccountNamespaceCache();
 }
 
@@ -383,6 +396,74 @@ function reset() {
   await I.resolveAlias('old@bk.ru', 'other@bk.ru');
   ok('смена аккаунта перечитывает словарь (кэш привязан к namespace)',
     state.aliasCalls.length === 2, state.aliasCalls.length);
+}
+
+// ── «Это наше письмо?»: один вопрос в ядро вместо сравнения строк ───────
+{
+  reset();
+  const own = await I.isOwnSender(' ME@BK.ru ', ' Me@BK.ru ');
+  ok('свой адрес в другом регистре — наше письмо', own === true, own);
+  ok('вопрос ушёл в ядро нормализованным и по namespace',
+    state.ownCalls.length === 1
+      && state.ownCalls[0].account === 'fp:aa:bb:cc:dd:ee:ff'
+      && state.ownCalls[0].ownEmail === 'me@bk.ru'
+      && state.ownCalls[0].address === 'me@bk.ru', state.ownCalls);}
+{
+  reset();
+  const peer = await I.isOwnSender('anna@bk.ru', 'me@bk.ru');
+  ok('чужой адрес — не наше письмо', peer === false, peer);
+}
+{
+  reset();
+  await I.isOwnSender('me@bk.ru', 'me@bk.ru');
+  await I.isOwnSender('me@bk.ru', 'me@bk.ru');
+  ok('ответ кэшируется по отправителю (поллинг писем не дёргает мост)',
+    state.ownCalls.length === 1, state.ownCalls.length);
+  await I.isOwnSender('anna@bk.ru', 'me@bk.ru');
+  ok('новый отправитель — новый вопрос', state.ownCalls.length === 2, state.ownCalls.length);
+}
+{
+  reset();
+  const empty = await I.isOwnSender('', 'me@bk.ru');
+  const noOwn = await I.isOwnSender('me@bk.ru', '');
+  ok('пустой отправитель или пустой свой адрес — не наше письмо, мост не спрошен',
+    empty === false && noOwn === false && state.ownCalls.length === 0,
+    { empty, noOwn, calls: state.ownCalls });
+}
+{
+  reset();
+  state.ownFails = true;
+  let own = null, peer = null, threw = null;
+  try {
+    own = await I.isOwnSender('ME@BK.ru', 'me@bk.ru');
+    peer = await I.isOwnSender('anna@bk.ru', 'me@bk.ru');
+  } catch (e) { threw = e; }
+  ok('мост молчит — fail-open сравнением нормальных форм (письма не теряются)',
+    threw === null && own === true && peer === false, { own, peer, threw: String(threw) });
+}
+{
+  reset();
+  state.ownAnswer = () => 'не bool';
+  const own = await I.isOwnSender('ME@BK.ru', 'me@bk.ru');
+  ok('неожиданный ответ моста — прежнее сравнение, а не «чужая почта»',
+    own === true, own);
+}
+{
+  reset();
+  await I.isOwnSender('old@bk.ru', 'me@bk.ru');
+  state.ns = 'fp:11:22:33:44:55:66';
+  await I.isOwnSender('old@bk.ru', 'other@bk.ru');
+  ok('смена аккаунта спрашивает заново (кэш привязан к namespace)',
+    state.ownCalls.length === 2, state.ownCalls.length);
+}
+{
+  reset();
+  await I.isOwnSender('old@bk.ru', 'me@bk.ru');
+  state.rememberAnswer = [['old@bk.ru', 'new@bk.ru']];
+  await I.rememberAlias('old@bk.ru', 'new@bk.ru', 'me@bk.ru');
+  await I.isOwnSender('old@bk.ru', 'me@bk.ru');
+  ok('запись смены сбрасывает кэш гейта (старый адрес мог стать нашим)',
+    state.ownCalls.length === 2, state.ownCalls.length);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

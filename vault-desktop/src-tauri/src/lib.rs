@@ -1347,6 +1347,28 @@ fn identity_alias_remember(
     Ok(vault_core::identity::alias_resolutions(&next))
 }
 
+/// «Это письмо от нас?» — один предикат для всех handshake-путей фронта
+/// (sweep старых писем, попап инвайта, авто-принятие accept). Отправитель
+/// приводится к свежему адресу и сравнивается с нашим нормальной формой;
+/// четыре прежние копии сравнивали строки ПОСЛЕ резолва регистрозависимо,
+/// поэтому своё письмо с адресом в другом регистре возвращало наш ключ в
+/// контакты. Ошибку чтения словаря отдаём ошибкой, а не `false`: фронт
+/// откатывается к прежнему сравнению, а не считает своё письмо чужим молча.
+#[tauri::command]
+fn identity_is_own_address(
+    account: String,
+    own_email: String,
+    address: String,
+) -> Result<bool, String> {
+    let db = open_db()?;
+    let aliases = alias_dictionary(&db, &account)?;
+    Ok(vault_core::identity::is_own_address(
+        &aliases,
+        &own_email,
+        &address,
+    ))
+}
+
 /// Словарь `email-aliases` (kv, JSON-объект `{старый: новый}`) в пары ядра.
 /// Неразобранное значение — пустой словарь: фронт тогда резолвит по голому
 /// адресу, как до переноса правила в Rust.
@@ -1364,8 +1386,9 @@ fn alias_pairs(raw: Option<String>) -> Vec<(String, String)> {
     }
 }
 
-/// Чтение словаря аккаунта — единственная строка kv, из которой живут все три
-/// команды (`address_variants`, `alias_resolutions`, `alias_remember`).
+/// Чтение словаря аккаунта — единственная строка kv, из которой живут все
+/// четыре команды (`address_variants`, `alias_resolutions`, `alias_remember`,
+/// `is_own_address`).
 /// Ошибку чтения отдаём ошибкой, а не пустым словарём (тот же контракт, что у
 /// `settings_flag`): соврать «алиасов нет» хуже, чем вернуть ошибку.
 fn alias_dictionary(db: &Storage, account: &str) -> Result<Vec<(String, String)>, String> {
@@ -2479,6 +2502,7 @@ pub fn run() {
             identity_address_variants,
             identity_alias_resolutions,
             identity_alias_remember,
+            identity_is_own_address,
             groups_access,
             groups_has_member,
             groups_rename_address,
@@ -2797,6 +2821,14 @@ mod identity_alias_tests {
         identity_alias_remember(account.to_string(), old.to_string(), new.to_string())
     }
 
+    fn own(account: &str, own_email: &str, address: &str) -> Result<bool, String> {
+        identity_is_own_address(
+            account.to_string(),
+            own_email.to_string(),
+            address.to_string(),
+        )
+    }
+
     fn stored(db: &Path, account: &str) -> String {
         open_at(db)
             .kv_get(account, DICT_KEY)
@@ -2917,6 +2949,62 @@ mod identity_alias_tests {
                 .expect("нечитаемое значение записано");
             },
             |_| variants(ME, "petr@post.ru"),
+        );
+        assert!(
+            got.is_err(),
+            "нечитаемая строка kv должна отдаваться ошибкой, получено {got:?}"
+        );
+    }
+
+    // ── «это письмо от нас?» — один предикат для всех handshake-путей ──
+    #[test]
+    fn own_address_command_matches_normal_form_and_follows_the_chain() {
+        // Своё письмо в другом регистре — всё ещё своё: прежние четыре копии
+        // сравнивали строки после резолва регистрозависимо и возвращали наш
+        // ключ в контакты.
+        let got = with_alias_db(|_| {}, |_| own(ME, "Me@Post.RU", " me@post.ru "));
+        assert_eq!(got, Ok(true), "регистр и обрамление не делают письмо чужим");
+
+        let rows = [(ME, r#"{"old@me":"new@me"}"#)];
+        let chained = with_alias_db(dict(&rows), |_| own(ME, "New@Me", "OLD@me"));
+        assert_eq!(chained, Ok(true), "письмо старого нашего адреса после смены — наше");
+
+        let peer = with_alias_db(|_| {}, |_| own(ME, ME, "anna@post.ru"));
+        assert_eq!(peer, Ok(false));
+        let empty = with_alias_db(|_| {}, |_| own(ME, ME, ""));
+        assert_eq!(empty, Ok(false), "пустой отправитель не адрес");
+    }
+
+    #[test]
+    fn own_address_command_reads_the_dictionary_of_this_account_only() {
+        // Чужой словарь не должен превращать письмо постороннего в наше:
+        // решение о «своё» принимается по своему словарю.
+        let rows = [
+            (ME, r#"{"a@x":"b@x"}"#),
+            (OTHER, r#"{"c@x":"me@post.ru"}"#),
+        ];
+        let mine = with_alias_db(dict(&rows), |_| own(ME, "me@post.ru", "a@x"));
+        assert_eq!(mine, Ok(false), "цепочка своего словаря ведёт не к нам");
+        let cross = with_alias_db(dict(&rows), |_| own(ME, "me@post.ru", "c@x"));
+        assert_eq!(cross, Ok(false), "чужой словарь не подмешивается");
+    }
+
+    #[test]
+    fn own_address_command_unreadable_dictionary_is_an_error_not_false() {
+        // `false` здесь означал бы «письмо чужое» и вернул бы наш ключ в
+        // контакты. Ошибка — честный ответ: фронт откатывается к прежнему
+        // сравнению, а не решает за нас.
+        let got = with_alias_db(
+            |db| {
+                drop(open_at(db));
+                let s = rusqlite::Connection::open(db).expect("база открыта напрямую");
+                s.execute(
+                    "INSERT INTO kv_store(account, key, value) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ME, DICT_KEY, &[0xffu8, 0xfeu8][..]],
+                )
+                .expect("нечитаемое значение записано");
+            },
+            |_| own(ME, ME, "me@post.ru"),
         );
         assert!(
             got.is_err(),

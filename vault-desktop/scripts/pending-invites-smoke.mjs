@@ -28,6 +28,7 @@ globalThis.localStorage = {
 };
 
 const calls = [];
+globalThis.__ownCalls = [];
 globalThis.__invoke = async (cmd, args) => {
   calls.push({ cmd, args });
   if (args.groupId === 'g-bridge-down') throw new Error('мост недоступен');
@@ -45,6 +46,13 @@ writeFileSync(MOCKS + '/identity.mjs', [
   'export const resetAccountNamespaceCache = () => {};',
   'export const resolveAlias = async (a) => a;',
   'export const rememberAlias = async () => {};',
+  // Гейт «это наше письмо?»: ядро сравнивает нормальные формы. Здесь —
+  // его контракт без словаря; смена адреса приходит уже разрешённой сверху.
+  'export const isOwnSender = async (a, e) => {',
+  '  globalThis.__ownCalls.push(String(a || ""));',
+  '  const r = String(a || "").trim().toLowerCase();',
+  '  return !!r && r === String(e || "").trim().toLowerCase();',
+  '};',
   '',
 ].join('\n'));
 writeFileSync(MOCKS + '/recovery-session.mjs',
@@ -92,7 +100,7 @@ api.getDeclinedInvites = async () => [];
 api.getAcceptedInvites = async () => [];
 api.email = 'me@local.example';
 
-const reset = () => { calls.length = 0; };
+const reset = () => { calls.length = 0; globalThis.__ownCalls.length = 0; };
 
 // ── 1. Своя группа скрыта, остальные показаны ─────────────────────────────
 reset();
@@ -145,10 +153,15 @@ const acceptLetter = (sender, uid = '5') => ({
     // Письмо СТАРОГО нашего адреса: резолв alias'а приводит его к текущему —
     // второй гейт («это мы») иначе пропустил бы свой ключ в peer_keys.
     acceptLetter('old@local.example', '8'),
+    // Свой адрес в ДРУГОМ РЕГИСТРЕ: прежнее сравнение строк после резолва
+    // пропускало его, и наш ключ возвращался в контакты.
+    acceptLetter('ME@Local.Example', '7'),
   ] });
   api.loadPeerKeyEmails = async () => new Set();
   api.getAcceptedContacts = async () => [];
-  api.getInvitedSenders = async () => ['peer@x.example', 'me@local.example', 'old@local.example'];
+  api.getInvitedSenders = async () => [
+    'peer@x.example', 'me@local.example', 'old@local.example', 'ME@Local.Example',
+  ];
   api.resolvePeerAlias = async (s) => (s === 'old@local.example' ? 'me@local.example' : s);
   api.saveProfile = async () => {};
   api.markAcceptedContact = () => {};
@@ -163,7 +176,79 @@ const acceptLetter = (sender, uid = '5') => ({
   ok('запись ушла со своей почтой (OWN-ADDRESS GUARD включён)', !!save && save[1].ownEmail === 'me@local.example', save && save[1]);
   ok('СВОИ accept-письма не записывают ключ (ни текущий адрес, ни старый alias)',
     writes.length === 1 && save[1].email === 'peer@x.example', writes.map(([c, a]) => [c, a.email]));
+  ok('регистр в адресе не делает своё письмо чужим',
+    !!save && writes.length === 1 && save[1].email === 'peer@x.example',
+    writes.map(([c, a]) => [c, a.email]));
+  ok('гейт «это мы» спрашивает ядро, а не сравнивает строки на месте',
+    globalThis.__ownCalls.includes('ME@Local.Example'), globalThis.__ownCalls);
   ok('принятый возвращён списком ({sender})', JSON.stringify(out) === JSON.stringify([{ sender: 'peer@x.example' }]), out);
+}
+
+// ── 5. Sweep старых handshake-писем: пометки только для чужих ─────────────
+// Тот же гейт живёт в `sweepStaleHandshake` (одноразовые пометки declined/
+// accepted). Своё письмо в другом регистре не должно оставить пометку под
+// своим адресом.
+{
+  const writes = [];
+  api.fetchAllHandshake = async () => ({
+    invites: [
+      { uid: '12', date: '2026-10-24T00:00:00Z', parsed: { sender: 'peer@x.example', group_id: 'g-f', group_name: 'F', created_by: 'peer@x.example' } },
+      { uid: '13', date: '2026-10-24T00:00:00Z', parsed: { sender: 'ME@Local.Example', group_id: 'g-f', group_name: 'F', created_by: 'ME@Local.Example' } },
+    ],
+    accepts: [
+      { uid: '21', date: '2026-10-24T00:00:00Z', parsed: { sender: 'peer@x.example' } },
+      { uid: '22', date: '2026-10-24T00:00:00Z', parsed: { sender: 'old@local.example' } },
+      { uid: '23', date: '2026-10-24T00:00:00Z', parsed: { sender: 'Me@LOCAL.example' } },
+    ],
+  });
+  api.getDeclinedContacts = async () => [];
+  api.getAcceptedContacts = async () => [];
+  globalThis.__invoke = async (cmd, args) => { writes.push([cmd, args]); return null; };
+  reset();
+  await api.sweepStaleHandshake();
+  const kv = key => {
+    const w = writes.find(([cmd, a]) => cmd === 'db_kv_set' && a.key === key);
+    return w ? JSON.parse(w[1].value) : null;
+  };
+  const declined = kv('declined-contacts') || [];
+  const accepted = kv('accepted-contacts') || [];
+  ok('sweep пометил чужой инвайт и только его',
+    JSON.stringify(declined) === JSON.stringify(['peer@x.example|12']), declined);
+  ok('sweep пометил чужой accept и только его',
+    JSON.stringify(accepted) === JSON.stringify(['peer@x.example|21']), accepted);
+  ok('sweep закрывает проход даже без единой своей пометки',
+    !!writes.find(([cmd, a]) => cmd === 'db_kv_set' && a.key === 'handshake-sweep-done'),
+    writes.map(([c, a]) => [c, a.key]));
+}
+
+// ── 6. Попап контактного инвайта: свой отправитель не показывается ────────
+// Четвёртая точка того же гейта: `fetchPendingContactInvites`. Свой адрес в
+// другом регистре и старый наш адрес (через alias) не должны рождать попап
+// «Добавить контакт».
+{
+  const contactInvite = (sender, uid) => ({
+    uid,
+    date: '2026-10-24T00:00:00Z',
+    parsed: { sender, public_key: 'INVK', sender_name: 'Peer' },
+  });
+  api.fetchAllHandshake = async () => ({ invites: [
+    contactInvite('peer@x.example', '31'),
+    contactInvite('ME@Local.Example', '32'),
+    contactInvite('old@local.example', '33'),
+  ] });
+  api.getDeclinedContacts = async () => [];
+  api.getAcceptedContacts = async () => [];
+  api.loadPeerKeyEmails = async () => new Set();
+  api.isKnownPeerKey = async () => false;
+  api.saveProfile = async () => {};
+  api.resolvePeerAlias = async (s) => (s === 'old@local.example' ? 'me@local.example' : s);
+  globalThis.__invoke = async () => null;
+  reset();
+  const list = await api.fetchPendingContactInvites();
+  ok('попап показывает только чужой инвайт (свои в любом регистре и через alias скрыты)',
+    list.length === 1 && list[0].sender === 'peer@x.example', list.map(i => i.sender));
+  ok('гейт попапа спрашивает ядро о смешанном регистре',
+    globalThis.__ownCalls.includes('ME@Local.Example'), globalThis.__ownCalls);
 }
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);

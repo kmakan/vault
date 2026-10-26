@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import cryptoClient from './crypto.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache,
-  resolveAlias as resolveAliasInCore, rememberAlias as rememberAliasInCore } from './identity.js';
+  resolveAlias as resolveAliasInCore, rememberAlias as rememberAliasInCore,
+  isOwnSender as isOwnSenderInCore } from './identity.js';
 import { isRecoveryPending as recoveryIsPending, clearRecoveryPending as recoveryClearPending } from './features/recovery-session.js';
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -748,6 +749,13 @@ export class ApiClient {
   async rememberAlias(oldEmail, newEmail) {
     await rememberAliasInCore(oldEmail, newEmail, this.email);
   }
+  // «Это письмо от нас?» — один предикат на все handshake-пути (sweep старых
+  // писем, попап инвайта, авто-принятие accept). Решает ядро: резолв цепочки
+  // old→new и нормальная форма адреса; сравнение строк после резолва в JS
+  // было регистрозависимым и пропускало своё письмо (ADR-005 §2).
+  async isOwnSender(address) {
+    return isOwnSenderInCore(address, this.email);
+  }
   // ── ANTI-PING-PONG: порог «новизны» письма для ренейма идентичности ──
   // Старые письма с прежним адресом пира навсегда остаются в ящике. При
   // перечитывании fingerprint-матч переименовывал туда-обратно без меры:
@@ -871,7 +879,7 @@ export class ApiClient {
         // пишется под старым адресом и дублирует запись нового (живые данные
         // 08.10: accepted-contacts с ОБОИМИ адресами у одного uid).
         const sender = await this.resolvePeerAlias(senderRaw);
-        if (sender === this.email) continue;
+        if (await this.isOwnSender(sender)) continue;
         const key = `${sender}|${m.uid}`;
         if (!declined.includes(key)) { declined.push(key); changed = true; }
       }
@@ -879,7 +887,7 @@ export class ApiClient {
         const senderRaw = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
         if (!senderRaw || senderRaw === this.email) continue;
         const sender = await this.resolvePeerAlias(senderRaw);
-        if (sender === this.email) continue;
+        if (await this.isOwnSender(sender)) continue;
         const key = `${sender}|${m.uid}`;
         if (!accepted.includes(key)) { accepted.push(key); changed = true; }
       }
@@ -1031,7 +1039,7 @@ export class ApiClient {
       // Смена почты: резолвим старый адрес письма → текущий. Пометки
       // declined/accepted хранятся под НОВЫМ адресом, письмо — под старым.
       const sender = await this.resolvePeerAlias(senderRaw);
-      if (sender === this.email) continue;
+      if (await this.isOwnSender(sender)) continue;
       if (declined.includes(`${sender}|${m.uid}`)) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
       // Примечание: фильтра «удалён МНОЙ/удалил меня» здесь НЕТ — новые
@@ -1123,7 +1131,7 @@ export class ApiClient {
       // Смена почты: accept-письмо старого адреса резолвится в текущий —
       // гейт invited/пометки/сохранение ключа идут по НОВОМУ адресу.
       const sender = await this.resolvePeerAlias(senderRaw);
-      if (sender === this.email) continue;
+      if (await this.isOwnSender(sender)) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;

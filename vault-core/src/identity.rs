@@ -207,6 +207,19 @@ pub fn resolve_alias(aliases: &[(String, String)], address: &str) -> String {
     alias_chain(aliases, &start).pop().unwrap_or(start)
 }
 
+/// Письмо пришло ОТ НАС? Отправитель сначала приводится к свежему адресу
+/// (цепочка `old→new`), затем сравнивается с нашим адресом нормальной формой.
+///
+/// ЗАЧЕМ В ЯДРЕ. Handshake-письма (инвайт, accept) живут в ящике вечно, и
+/// четыре места фронта отдельно решали «это мы?» сравнением строк ПОСЛЕ
+/// резолва. Сравнение было регистрозависимым, поэтому своё письмо с адресом
+/// в другом регистре проходило гейт и возвращало наш ключ в контакты; правка
+/// одной копии не ловилась остальными (ADR-005 §2). Пустой отправитель — не
+/// мы: `same_address` не считает пустое значение адресом.
+pub fn is_own_address(aliases: &[(String, String)], own_address: &str, address: &str) -> bool {
+    same_address(&resolve_alias(aliases, address), own_address)
+}
+
 /// Словарь смен, сведённый к свежим адресам: `(строка, которой адрес был,
 /// → адрес, которым он стал)`. Нужен кэшу фронта, чтобы резолв строки был
 /// одним поиском, а не обходом цепочки в JS. Цепочка `A→B→C` даёт две строки
@@ -1073,6 +1086,44 @@ mod tests {
             resolve_alias(&empty_new, "a@x"),
             "a@x",
             "пустой новый адрес не резолвит никуда"
+        );
+    }
+
+    #[test]
+    fn is_own_address_resolves_the_sender_and_compares_normal_forms() {
+        let d = dict(&[("old@me", "new@me")]);
+        assert!(
+            is_own_address(&[], "Me@Post.RU", " me@post.ru "),
+            "форма адреса одна: регистр и обрамление не делают письмо чужим"
+        );
+        assert!(
+            is_own_address(&d, "New@Me", "OLD@me"),
+            "письмо старого нашего адреса после смены — всё ещё наше"
+        );
+        assert!(!is_own_address(&[], "me@post.ru", "anna@post.ru"));
+        assert!(!is_own_address(&[], "me@post.ru", ""));
+        assert!(
+            !is_own_address(&[], "", ""),
+            "пустой отправитель не совпадает и с пустым нашим"
+        );
+        assert!(
+            is_own_address(&[], "Иван@Почта.РФ", "иван@почта.рф"),
+            "кириллица понижается по Юникоду, а не по ASCII"
+        );
+    }
+
+    #[test]
+    fn is_own_address_follows_a_two_hop_chain_and_stops_on_a_cycle() {
+        let two = dict(&[("a@x", "b@x"), ("b@x", "me@x")]);
+        assert!(
+            is_own_address(&two, "me@x", "a@x"),
+            "две смены подряд доводят старое письмо до нашего адреса"
+        );
+        let cycle = dict(&[("a@x", "b@x"), ("b@x", "a@x")]);
+        assert!(!is_own_address(&cycle, "me@x", "a@x"));
+        assert!(
+            is_own_address(&cycle, "b@x", "a@x"),
+            "цикл обрывается на соседе, как у resolve_alias"
         );
     }
 

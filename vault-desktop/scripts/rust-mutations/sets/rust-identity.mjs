@@ -199,6 +199,19 @@ export default {
     { name: 'вариант добавляется без проверки повтора (цикл A→B→A плодит дубль в списке форм)',
       pattern: '        if !v.is_empty() && !out.contains(&v) {',
       replacement: '        if !v.is_empty() {' },
+    // ── is_own_address: «письмо пришло от нас?» — резолв цепочки + нормальная
+    // форма, один вопрос для всех handshake-путей фронта. До переноса четыре
+    // копии в api.js сравнивали строки ПОСЛЕ резолва регистрозависимо, и своё
+    // письмо с адресом в другом регистре возвращало наш ключ в контакты.
+    { name: 'своё письмо сравнивается без резолва цепочки (письмо старого нашего адреса после смены считается чужим)',
+      pattern: '    same_address(&resolve_alias(aliases, address), own_address)',
+      replacement: '    same_address(address, own_address)' },
+    { name: 'своё письмо сравнивается сырыми строками (регистр или пробел делают письмо чужим)',
+      pattern: '    same_address(&resolve_alias(aliases, address), own_address)',
+      replacement: '    resolve_alias(aliases, address) == own_address' },
+    { name: 'пустой отправитель считается нашим письмом (письмо без From отсекается как своё)',
+      pattern: '    same_address(&resolve_alias(aliases, address), own_address)',
+      replacement: '    let resolved = resolve_alias(aliases, address);\n    resolved.is_empty() || resolved == normalize(own_address)' },
     // ── alias_resolutions: словарь для кэша фронта (строка → свежий адрес).
     // Обход — тот же `resolve_alias`; здесь меряется выборка строк и ключи.
     { name: 'ключ разрешённого словаря не нормализуется (кэш фронта ищет « Old@X » и промахивается)',

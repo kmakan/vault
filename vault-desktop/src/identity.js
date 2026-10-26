@@ -28,6 +28,8 @@ let _cachedFpKey = null;    // public_key, для которого закэши�
 let _nsMigrated = false;    // миграция namespace уже выполнялась в этой сессии
 let _aliasLookup = null;    // словарь смен почты, уже разрешённый ядром
 let _aliasLookupNs = null;  // namespace, для которого он вычислен
+let _selfGate = null;       // ответы «это наше письмо?» по отправителям
+let _selfGateNs = null;     // namespace, для которого они верны
 
 // Fingerprint нашего публичного ключа. Пустая строка = ключ ещё не загружен
 // (или ошибка) → вызывающий код работает на legacy-емейле, вход не блокируем.
@@ -83,6 +85,8 @@ export function resetAccountNamespaceCache() {
   _nsMigrated = false;
   _aliasLookup = null;
   _aliasLookupNs = null;
+  _selfGate = null;
+  _selfGateNs = null;
 }
 
 // ── «Это я?» и «какими формами адреса это один и тот же пир» ──────────
@@ -215,8 +219,44 @@ export async function rememberAlias(oldEmail, newEmail, email) {
     });
     _aliasLookup = aliasLookupFrom(pairs);
     _aliasLookupNs = ns;
+    _selfGate = null;
+    _selfGateNs = null;
     console.log('[identity] alias remembered:', o, '→', n);
   } catch (e) { /* словарь недоступен — ренейм основными путями работает */ }
+}
+
+// ── «Это письмо от нас?» ─────────────────────────────────────────────────
+// Handshake-письма (инвайт, accept) живут в ящике вечно, и четыре места фронта
+// отдельно решали «это мы?» сравнением строк ПОСЛЕ резолва. Сравнение было
+// регистрозависимым, поэтому своё письмо в другом регистре проходило гейт и
+// возвращало наш ключ в контакты; правка одной копии не ловилась остальными
+// (ADR-005 §2). Теперь ответ даёт ядро (`identity_is_own_address`): резолв
+// цепочки old→new и сравнение нормальной формы. Кэш — на namespace (номер
+// спрашивают по одному и тому же адресу на каждом письме); fail-open: мост
+// молчит → прежнее сравнение строк, чтобы письма не терялись.
+export async function isOwnSender(address, email) {
+  const raw = String(address || '').trim().toLowerCase();
+  const own = String(email || '').trim().toLowerCase();
+  if (!raw || !own) return false;
+  const ns = await accountNamespace(email);
+  if (!_selfGate || _selfGateNs !== ns) {
+    _selfGate = new Map();
+    _selfGateNs = ns;
+  }
+  if (_selfGate.has(raw)) return _selfGate.get(raw);
+  let answer;
+  try {
+    answer = await invoke('identity_is_own_address', {
+      account: ns,
+      ownEmail: own,
+      address: raw,
+    });
+  } catch (e) {
+    return raw === own;
+  }
+  if (typeof answer !== 'boolean') return raw === own;
+  _selfGate.set(raw, answer);
+  return answer;
 }
 
 // Резолв + одноразовый перенос legacy-строк (старый емейл → fp-namespace).
