@@ -155,7 +155,9 @@ check('chatCacheKey(email,chat) чистая строка', H.chatCacheKey('a@b.
   const chat = makeChatStore();
   chat.append({id:'x',content:'y'});
   await H.saveCurrentHistory('a@b.c','sh',chat);
-  check('saveCurrentHistory берёт messages У ВЛАДИТЕЛЯ (chat.state.messages)', histStore['sh']&&histStore['sh'][0].id==='x');
+  const savedSh = histStore['sh'] || [];
+  check('saveCurrentHistory берёт messages У ВЛАДИТЕЛЯ (chat.state.messages)',
+    savedSh[0] && savedSh[0].id === 'x', savedSh);
 }
 
 check('msgTs: ts приоритетнее, чем date', H.msgTs({ts:777})===777);

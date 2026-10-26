@@ -209,9 +209,11 @@ console.log('\nПоток автоочистки (runAutocleanFlow)');
   reset();
   state.failPurge = true;
   calls.length = 0;
-  await A.runAutocleanFlow(deps);
+  let purgeThrew = null;
+  try { await A.runAutocleanFlow(deps); } catch (e) { purgeThrew = e; }
   state.failPurge = false;
-  ok('поток: отказ purge → onError, а не исключение', calls.some((c) => c[0] === 'error'), calls);
+  ok('поток: отказ purge → onError, а не исключение',
+    purgeThrew === null && calls.some((c) => c[0] === 'error'), purgeThrew ? String(purgeThrew.message) : calls);
   ok('поток: при отказе зеркала НЕ применяются', !calls.some((c) => c[0] === 'applyMirrors'), calls);
 }
 

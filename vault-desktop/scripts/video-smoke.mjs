@@ -436,8 +436,11 @@ console.log('6. Нет VideoDecoder (старый WebView) — no remote video')
   const savedDecoder = globalThis.VideoDecoder;
   delete globalThis.VideoDecoder;
   const canvas = makeCanvas();
-  const ok = await V.startRemoteVideo('call-E', canvas);
-  check('startRemoteVideo вернул true (RGBA-путь без VideoDecoder, video.js:260 — desktop не гаснет)', ok === true, ok);
+  let ok = null;
+  let noDecoderThrew = null;
+  try { ok = await V.startRemoteVideo('call-E', canvas); } catch (e) { noDecoderThrew = e; }
+  check('startRemoteVideo вернул true (RGBA-путь без VideoDecoder, video.js:260 — desktop не гаснет)',
+    noDecoderThrew === null && ok === true, noDecoderThrew ? String(noDecoderThrew.message) : ok);
   check('декодер не создан', decoders.length === 0, decoders.length);
   // decodeFrame не падает и без декодера.
   let safe = true;

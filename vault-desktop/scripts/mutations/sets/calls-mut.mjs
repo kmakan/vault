@@ -13,8 +13,11 @@ export default {
     { name: "toggleCallMute НЕ пишет владельцу",
       pattern: "  deps.setMuted(muted);",
       replacement: "  void 0;" },
+    // Паттерн — ВЕСЬ вызов с .catch: поломка «звонка в мост нет» должна
+    // моделировать забытый вызов, а не оставлять `.catch` на `void 0`
+    // (такой мутант не парсится, и падение смоука ничего не доказывает).
     { name: "toggleCallMute НЕ зовёт mediaSetMuted",
-      pattern: "    api.mediaSetMuted(c.call_id, muted)",
+      pattern: "    api.mediaSetMuted(c.call_id, muted)\n      .catch((e) => console.error('[call] set muted failed:', e));",
       replacement: "    void 0;" },
     { name: "toggleSpeaker НЕ пишет владельцу",
       pattern: "  deps.setSpeaker(speaker);",

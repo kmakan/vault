@@ -145,8 +145,21 @@ console.log('9. setPresenceEnabled: запись в kv + запуск/остан
   try { await mod.setPresenceEnabled(deps, true); } catch (e) { threw = true; }
   globalThis.__pvKvFail = false;
   check('сбой записи не пробрасывается наружу', threw === false, threw);
-{
 }
+{
+  // Внешний catch защищает не только kv (его гасит setEnabled), но и запуск
+  // heartbeat: сбой внутри startHeartbeats не должен ронять переключатель —
+  // пользователь не получает ошибку за настройку, которую просто включил.
+  let threw = false;
+  const deps = {
+    email: 'u@x.org',
+    startHeartbeats: () => { throw new Error('heartbeat start failed'); },
+    stopHeartbeats: () => {},
+  };
+  try { await mod.setPresenceEnabled(deps, true); } catch (e) { threw = true; }
+  check('сбой запуска heartbeat не пробрасывается наружу', threw === false, threw);
+}
+{
   let started = 0;
   const deps2 = { email: 'u@x.org', startHeartbeats: () => { started++; }, stopHeartbeats: () => {} };
   await mod.onPresenceEnabled(deps2, true);

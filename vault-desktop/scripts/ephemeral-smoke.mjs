@@ -121,7 +121,9 @@ console.log('1. Мост expireAt: ответ Rust без своей арифм�
   reset();
   const e = await Rule.expireAt(1000, 60);
   check('expireAt: значение из Rust', e === 61000, e);
-  check('expireAt: команда Rust вызвана', globalThis.__coreMock.calls[0][0] === 'vault_ephemeral_expire_at', globalThis.__coreMock.calls);
+  const bridgeCall = globalThis.__coreMock.calls[0] || null;
+  check('expireAt: команда Rust вызвана',
+    bridgeCall !== null && bridgeCall[0] === 'vault_ephemeral_expire_at', globalThis.__coreMock.calls);
   check('expireAt: ttl<=0 — без похода в Rust', (await Rule.expireAt(1000, 0)) === 0 && globalThis.__coreMock.calls.length === 1);
 }
 
@@ -130,9 +132,14 @@ console.log('2. Мост: отказ моста → безопасный отк�
 {
   reset();
   globalThis.__coreMock.fail = true;
-  const e = await Rule.expireAt(1000, 60);
-  check('expireAt: отказ моста → 0 (не исчезает)', e === 0, e);
-  check('isExpired: отказ моста → false', (await Rule.isExpired(61000, 99999)) === false);
+  let e = null;
+  let bridgeThrew = null;
+  try { e = await Rule.expireAt(1000, 60); } catch (err) { bridgeThrew = err; }
+  check('expireAt: отказ моста → 0 (не исчезает)',
+    bridgeThrew === null && e === 0, bridgeThrew ? String(bridgeThrew.message) : e);
+  let expired = null;
+  try { expired = await Rule.isExpired(61000, 99999); } catch (err) { expired = 'исключение'; }
+  check('isExpired: отказ моста → false', expired === false, expired);
 }
 
 // 3. Мост: isExpired — решение Rust

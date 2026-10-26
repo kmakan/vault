@@ -98,9 +98,13 @@ ok('meta несёт аватар и зашифрован ключом групп
 // 5. Сбой рассылки НЕ роняет создание.
 reset();
 state.failMeta = true;
-r = await GC.createGroup({ name: 'Тест', avatar: 'AV', cryptoReady: true });
-ok('неудачная рассылка не отменяет создание группы', r.group && r.group.id === 'g1' && r.groupKey === 'GK1');
-ok('и аватар в kv остался', state.kv['group-avatar:g1'] === 'AV');
+let metaThrew = null;
+r = null;
+try { r = await GC.createGroup({ name: 'Тест', avatar: 'AV', cryptoReady: true }); } catch (err) { metaThrew = err; }
+ok('неудачная рассылка не отменяет создание группы',
+  metaThrew === null && r && r.group && r.group.id === 'g1' && r.groupKey === 'GK1',
+  metaThrew ? String(metaThrew.message) : r);
+ok('и аватар в kv остался', metaThrew === null && state.kv['group-avatar:g1'] === 'AV');
 
 // 6. Сбой создания — наружу.
 reset();
@@ -147,8 +151,12 @@ console.log('\n8. createGroupFlow (поток из UI)');
   reset();
   state.failCreate = true;
   calls.length = 0;
-  r = await GC.createGroupFlow(deps, { name: 'Работа', avatar: '' });
-  ok('поток: сбой → onError, а не исключение наружу', r === null && calls.some((c) => c[0] === 'onError'), calls);
+  let flowThrew = null;
+  r = null;
+  try { r = await GC.createGroupFlow(deps, { name: 'Работа', avatar: '' }); } catch (err) { flowThrew = err; }
+  ok('поток: сбой → onError, а не исключение наружу',
+    flowThrew === null && r === null && calls.some((c) => c[0] === 'onError'),
+    flowThrew ? String(flowThrew.message) : calls);
   ok('поток: при сбое диалог НЕ сбрасывается (пользователь может повторить)',
     !calls.some((c) => c[0] === 'resetDialog'), calls);
 

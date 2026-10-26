@@ -13,9 +13,11 @@ export default {
     { name: "обновление сообщений без пересканирования (новые письма не видны)",
       pattern: "  await deps.loadGroupMessages(group.id, true);",
       replacement: "  await deps.loadGroupMessages(group.id, false);" },
+    // Мутант «рассылки нет» должен быть ВАЛИДНЫМ кодом: раньше он оставлял
+    // незакрытую скобку, и смоук падал на SyntaxError, а не на утверждении.
     { name: "аватар группы не рассылается участникам (у них останется старый)",
-      pattern: "  const r = await deps.broadcastGroupMeta(groupId, { avatar },",
-      replacement: "  const r = { sent: true }; await Promise.resolve({" },
+      pattern: "  const r = await deps.broadcastGroupMeta(groupId, { avatar },\n    { groupKeys: deps.groupKeys(), cryptoReady: deps.cryptoReady() });",
+      replacement: "  const r = { sent: true };" },
     { name: "аватар группы не сохраняется в kv (после перезапуска пропадёт)",
       pattern: "  await deps.db.kvSet('anon', 'group-avatar:' + groupId, avatar || '');",
       replacement: "  void 0;" },

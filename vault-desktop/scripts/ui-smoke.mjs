@@ -89,12 +89,23 @@ function ok(name, cond, extra) {
 }
 function reset() { docRoot.children = []; }
 const root = () => docRoot.children[0];
+// Промес диалога обязан разрешиться. Если модалка «висит», утверждение
+// проваливается с внятной причиной, а не вешает смоук навсегда.
+async function settle(p, ms = 1000) {
+  let v = 'таймаут: диалог не разрешён';
+  await Promise.race([
+    p.then((x) => { v = x; }, (e) => { v = 'отказ:' + (e && e.message); }),
+    new Promise((r) => setTimeout(r, ms)),
+  ]);
+  return v;
+}
 
 // ── alert → тост ─────────────────────────────────────────────────────────
 {
   reset();
   win.alert('Удалено');
-  const toasts = root().all('vault-toast');
+  const toastRoot = root();
+  const toasts = toastRoot ? toastRoot.all('vault-toast') : [];
   ok('alert создаёт тост', toasts.length === 1, toasts.length);
   ok('в тосте текст сообщения', toasts[0] && toasts[0].textContent === 'Удалено', toasts[0] && toasts[0].textContent);
   ok('тост не блокирует (это не alert)', root().find('vault-dialog-overlay') === null);
@@ -111,7 +122,7 @@ const root = () => docRoot.children[0];
     overlay && !!overlay.find('vault-dialog-cancel') && !!overlay.find('vault-dialog-ok'));
   ok('в модалке confirm НЕТ поля ввода', overlay && overlay.find('vault-dialog-input') === null);
   overlay.find('vault-dialog-ok').click();
-  const v = await p;
+  const v = await settle(p);
   ok('«ОК» подтверждает (true)', v === true, v);
   ok('после закрытия модалки её нет в DOM', root().find('vault-dialog-overlay') === null);
 }
@@ -119,7 +130,7 @@ const root = () => docRoot.children[0];
   reset();
   const p = win.confirm('Удалить контакт?');
   root().find('vault-dialog-overlay').find('vault-dialog-cancel').click();
-  const v = await p;
+  const v = await settle(p);
   // Web-API: confirm обязан вернуть boolean — «Отмена» даёт false (не null).
   ok('«Отмена» отклоняет (false, как Web-API)', v === false, v);
 }
@@ -128,7 +139,7 @@ const root = () => docRoot.children[0];
   const p = win.confirm('Удалить контакт?');
   // Escape закрывает диалог подтверждения.
   for (const fn of (docListeners.keydown || [])) fn({ key: 'Escape' });
-  const v = await p;
+  const v = await settle(p);
   ok('Escape отклоняет (false)', v === false, v);
   ok('Escape убирает модалку из DOM', root().find('vault-dialog-overlay') === null);
   ok('Escape снимает слушатель клавиш', !(docListeners.keydown || []).length, (docListeners.keydown || []).length);
@@ -144,14 +155,14 @@ const root = () => docRoot.children[0];
   ok('в поле подставлено значение по умолчанию', input.value === 'Работа', input.value);
   input.value = 'Проект X';
   overlay.find('vault-dialog-ok').click();
-  const v = await p;
+  const v = await settle(p);
   ok('«ОК» возвращает введённое', v === 'Проект X', v);
 }
 {
   reset();
   const p = win.prompt('Имя новой группы', 'Работа');
   root().find('vault-dialog-overlay').find('vault-dialog-cancel').click();
-  const v = await p;
+  const v = await settle(p);
   ok('«Отмена» возвращает null (не пустую строку)', v === null, v);
 }
 {
@@ -162,7 +173,7 @@ const root = () => docRoot.children[0];
   ok('без значения по умолчанию поле пустое', input.value === '', input.value);
   input.value = 'X';
   overlay.find('vault-dialog-ok').click();
-  ok('введённое возвращается', (await p) === 'X');
+  ok('введённое возвращается', (await settle(p)) === 'X');
 }
 
 // ── Enter в prompt ──────────────────────────────────────────────────────
@@ -174,7 +185,7 @@ const root = () => docRoot.children[0];
   input.value = 'Через Enter';
   // Ключевое событие слушается на document — эмулируем его там.
   for (const fn of (docListeners.keydown || [])) fn({ key: 'Enter' });
-  ok('Enter отправляет введённое', (await p) === 'Через Enter');
+  ok('Enter отправляет введённое', (await settle(p)) === 'Через Enter');
   ok('после Enter модалки нет в DOM', root().find('vault-dialog-overlay') === null);
 }
 
@@ -184,7 +195,7 @@ const root = () => docRoot.children[0];
   const p = win.confirm('Удалить контакт?');
   const overlay = root().find('vault-dialog-overlay');
   overlay.mousedown(overlay); // клик по самой подложке
-  ok('клик по подложке закрывает диалог (отменяет)', (await p) === false);
+  ok('клик по подложке закрывает диалог (отменяет)', (await settle(p)) === false);
   ok('после клика по подложке модалки нет в DOM', root().find('vault-dialog-overlay') === null);
 }
 

@@ -61,8 +61,12 @@ function reset() { state.saved = []; state.loaded = null; state.fail = false; st
   ok('сохранено под NAMESPACE, а не под емейлом',
     state.saved[0].ns === 'fp:a@b.c', state.saved[0].ns);
   ok('резолвер namespace вызван', state.nsCalls.length === 1, state.nsCalls);
+  let savedJson = null;
+  let savedParse = null;
+  try { savedJson = JSON.parse(state.saved[0].json); } catch (e) { savedParse = e; }
   ok('сообщения сериализованы в JSON',
-    JSON.parse(state.saved[0].json)[0].text === 'привет', state.saved[0].json);
+    savedParse === null && Array.isArray(savedJson) && savedJson[0].text === 'привет',
+    savedParse ? String(savedParse.message) : state.saved[0].json);
 }
 {
   reset();
@@ -92,7 +96,11 @@ function reset() { state.saved = []; state.loaded = null; state.fail = false; st
   reset();
   ok('нет истории → null (не [])', (await H.loadHistory('a@b.c', 'peer@x')) === null);
   state.loaded = 'не json';
-  ok('битые данные → null (не исключение)', (await H.loadHistory('a@b.c', 'peer@x')) === null);
+  let broken = null;
+  let brokenThrew = null;
+  try { broken = await H.loadHistory('a@b.c', 'peer@x'); } catch (e) { brokenThrew = e; }
+  ok('битые данные → null (не исключение)',
+    brokenThrew === null && broken === null, brokenThrew ? String(brokenThrew.message) : broken);
   state.loaded = JSON.stringify({ не: 'массив' });
   ok('не-массив → null', (await H.loadHistory('a@b.c', 'peer@x')) === null);
 }

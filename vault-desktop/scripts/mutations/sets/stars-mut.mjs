@@ -13,8 +13,9 @@ export default {
     { name: "звезда не снимается",
       pattern: "  if (list.has(msg.id)) list.delete(msg.id);",
       replacement: "  if (false) list.delete(msg.id);" },
+    // if + else целиком: «голого else» быть не должно (SyntaxError вместо дефекта).
     { name: "звезда не пишется в kv",
-      pattern: "    if (list.size) await db.kvSet(ns, 'starred:' + key, JSON.stringify(Array.from(list)));",
+      pattern: "    if (list.size) await db.kvSet(ns, 'starred:' + key, JSON.stringify(Array.from(list)));\n    else await db.kvDelete(ns, 'starred:' + key);",
       replacement: "    void 0;" },
     { name: "снятая звезда остаётся в kv",
       pattern: "    else await db.kvDelete(ns, 'starred:' + key);",

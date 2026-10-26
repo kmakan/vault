@@ -96,10 +96,13 @@ globalThis.FileReader = class {
 };
 
 let settled = 'нет';
-await A.fileToAvatarDataUrl({ size: 10 }, A.GROUP_AVATAR)
-  .then((v) => { settled = 'resolve:' + v; })
-  .catch((e) => { settled = 'reject:' + e.message; });
-ok('файл не декодируется → ОТКАЗ, а не вечное ожидание', settled.startsWith('reject:image decode failed'));
+await Promise.race([
+  A.fileToAvatarDataUrl({ size: 10 }, A.GROUP_AVATAR)
+    .then((v) => { settled = 'resolve:' + v; })
+    .catch((e) => { settled = 'reject:' + e.message; }),
+  new Promise((r) => setTimeout(() => { settled = 'таймаут: промес не разрешён'; r(); }, 1500)),
+]);
+ok('файл не декодируется → ОТКАЗ, а не вечное ожидание', settled.startsWith('reject:image decode failed'), settled);
 
 // Ошибка чтения файла — другой отказ, и его тоже надо ловить.
 globalThis.FileReader = class {

@@ -133,15 +133,20 @@ console.log('\nПоток удаления контакта (deleteContactFlow)'
 
   // Ошибка удаления — состояние НЕ применяется, контакты НЕ перечитываются.
   calls.length = 0;
-  r = await D.deleteContactFlow('a@b.ru', {
-    ...deps,
-    removePeerKey: (e) => { calls.push(['removePeerKey', e]); throw new Error('сбой'); },
-  });
-  ok('поток: ошибка → onError', r === false && calls.some((c) => c[0] === 'onError'), calls);
+  let delThrew = null;
+  r = null;
+  try {
+    r = await D.deleteContactFlow('a@b.ru', {
+      ...deps,
+      removePeerKey: (e) => { calls.push(['removePeerKey', e]); throw new Error('сбой'); },
+    });
+  } catch (e) { delThrew = e; }
+  const delFailed = delThrew === null && r === false;
+  ok('поток: ошибка → onError', delFailed && calls.some((c) => c[0] === 'onError'), delThrew ? String(delThrew.message) : calls);
   ok('поток: при ошибке состояние чата НЕ применяется',
-    !calls.some((c) => c[0] === 'applyRemoval'), calls);
+    delFailed && !calls.some((c) => c[0] === 'applyRemoval'), calls);
   ok('поток: при ошибке контакты НЕ перечитываются',
-    !calls.some((c) => c[0] === 'loadContacts'), calls);
+    delFailed && !calls.some((c) => c[0] === 'loadContacts'), calls);
 }
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);

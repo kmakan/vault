@@ -123,9 +123,11 @@ console.log('7. draftRun: очередь не теряет операции');
   let ran = false;
   let threw = null;
   try { await D.draftRun(async () => { throw new Error('boom'); }); } catch (e) { threw = e; }
-  await D.draftRun(async () => { ran = true; });
+  let nextThrew = null;
+  try { await D.draftRun(async () => { ran = true; }); } catch (e) { nextThrew = e; }
   check('ошибка доходит до вызывающего', threw && /boom/.test(threw.message), threw && String(threw.message));
-  check('ошибка в очереди не рвёт цепочку', ran === true);
+  check('ошибка в очереди не рвёт цепочку', nextThrew === null && ran === true,
+    nextThrew ? String(nextThrew.message) : ran);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

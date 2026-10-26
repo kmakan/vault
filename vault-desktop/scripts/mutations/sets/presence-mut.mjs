@@ -40,8 +40,10 @@ export default {
     { name: "presence включается, но heartbeat не стартует (собеседник нас не видит)",
       pattern: "      startHeartbeats: () => deps.startHeartbeats(),",
       replacement: "      startHeartbeats: () => {}," },
+    // Мутант «ошибка наружу» должен оставлять try с catch: раньше catch
+    // удалялся целиком, и файл не парсился.
     { name: "сбой записи в kv роняет включение (ошибка уходит наружу)",
       pattern: "  } catch (e) {\n    console.warn('[presence] setEnabled failed:', e && e.message || e);\n  }",
-      replacement: "  }" },
+      replacement: "  } catch (e) {\n    throw e;\n  }" },
   ],
 };

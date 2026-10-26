@@ -10,7 +10,7 @@ import fs from 'node:fs';
 let pass = 0, fail = 0;
 function check(name, cond) {
   if (cond) { pass++; console.log('  OK  ' + name); }
-  else { fail++; console.log('  FAIL ' + name); }
+  else { fail++; console.log('  ✗ FAIL ' + name); }
 }
 
 const src = fs.readFileSync('/home/maksim/whisper/vault-desktop/src/features/mailbox-api.js','utf8');

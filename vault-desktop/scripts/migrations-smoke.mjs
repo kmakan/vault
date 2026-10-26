@@ -118,7 +118,7 @@ st.kv['anon'] = { profiles: JSON.stringify({ 'old@bk.ru': { nickname: 'Аня', 
 r = await M.migrateOwnProfile('old@bk.ru', 'new@bk.ru');
 ok('копия профиля целиком, если цели нет',
   r.key === 'new@bk.ru' && r.profile.nickname === 'Аня' && r.profile.avatar === 'OLD');
-ok('запись сохранена', prof()['new@bk.ru'].nickname === 'Аня');
+ok('запись сохранена', (prof()['new@bk.ru'] || {}).nickname === 'Аня', prof());
 
 reset();
 st.kv['anon'] = { profiles: JSON.stringify({

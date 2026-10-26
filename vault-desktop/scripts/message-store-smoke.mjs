@@ -54,10 +54,16 @@ function reset() { state.kv = {}; state.failGet = false; }
   const p2 = await M.readPinned('g2');
   ok('у другого чата — своё закреплённое', p2 && p2.id === 'm2', p2);
   state.failGet = true;
-  ok('сбой kv → null (fail-open, отрисовка не ломается)', (await M.readPinned('g1')) === null);
+  // try/catch: «исключение наружу» должно ловиться утверждением, а не
+  // падением смоука (гейт засчитывает падение, но оно ничего не доказывает).
+  let readThrew = null, readVal;
+  try { readVal = await M.readPinned('g1'); } catch (e) { readThrew = e; }
+  ok('сбой kv → null (fail-open, отрисовка не ломается)', readThrew === null && readVal === null, { readVal, threw: String(readThrew) });
   state.failGet = false;
   state.kv['anon|pinned:g3'] = '{битый json';
-  ok('битый JSON → null (не исключение)', (await M.readPinned('g3')) === null);
+  readThrew = null;
+  try { readVal = await M.readPinned('g3'); } catch (e) { readThrew = e; }
+  ok('битый JSON → null (не исключение)', readThrew === null && readVal === null, { readVal, threw: String(readThrew) });
 }
 
 // ── Качество медиа ───────────────────────────────────────────────────────
@@ -67,7 +73,9 @@ function reset() { state.kv = {}; state.failGet = false; }
   state.kv['anon|media-quality'] = 'original';
   ok('сохранённое значение читается', (await M.mediaQuality()) === 'original');
   state.failGet = true;
-  ok('сбой kv → high (fail-open)', (await M.mediaQuality()) === 'high');
+  let qThrew = null, qVal;
+  try { qVal = await M.mediaQuality(); } catch (e) { qThrew = e; }
+  ok('сбой kv → high (fail-open)', qThrew === null && qVal === 'high', { qVal, threw: String(qThrew) });
   state.failGet = false;
 }
 

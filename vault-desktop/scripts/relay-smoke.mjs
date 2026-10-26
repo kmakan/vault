@@ -492,8 +492,10 @@ console.log('5. relayTicker + relay-resilience');
   resetWorld();
   const ctx = makeCtx();
   R.startRelayTicker();
-  check('таймер тикера создан (владелец relayTicker, 5с)', relayTicker.timer !== null
-    && timers.get(relayTicker.timer).ms === 5000);
+  const tickerTimer = timers.get(relayTicker.timer);
+  check('таймер тикера создан (владелец relayTicker, 5с)',
+    relayTicker.timer !== null && !!tickerTimer && tickerTimer.ms === 5000,
+    { id: relayTicker.timer, timer: tickerTimer || null });
   // «мгновенный первый consume» — ровно ОДИН (H+ давал два: свой immediate-тик + этот вызов)
   await flush();
   check('мгновенный первый consume ровно один (регрессия H+)', relayMock.polls === 1, relayMock.polls);

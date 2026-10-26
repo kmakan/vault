@@ -234,7 +234,15 @@ async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, letter
   const deps = { ...makeDeps(ctxOver), ...DEPS };
   for (const k of Object.keys(deps.emailBodyCache)) delete deps.emailBodyCache[k];
   deps.emailBodyCache['INBOX:1'] = 'encrypted-body';
-  await processIncoming(deps, [letter(letterOver)], { notify: false });
+  // Контракт маршрутизатора: письмо НЕ роняет пакет — даже незнакомое
+  // (kind=null). Исключение здесь — дефект, а не «пойманная мутация».
+  let procThrew = null;
+  try { await processIncoming(deps, [letter(letterOver)], { notify: false }); }
+  catch (e) { procThrew = e; }
+  if (procThrew) {
+    checks++; failed++;
+    console.log('  ✗ письмо не должно ронять маршрутизатор: ' + (procThrew && procThrew.message));
+  }
   expect(deps);
 }
 

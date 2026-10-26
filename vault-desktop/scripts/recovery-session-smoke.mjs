@@ -272,12 +272,14 @@ console.log('\ncommitRecoveryLogin:');
   const unmute = mute();
   await api.login('a@b.invalid', 'pw', { remember: true, deferPersistence: true });
   localStorage.setItem('vault-recovery-pending', '1'); // маркер стоял
-  await api.commitRecoveryLogin({ remember: true });
+  let commitThrew = null;
+  try { await api.commitRecoveryLogin({ remember: true }); } catch (e) { commitThrew = e; }
   unmute();
   check('commit remember:true → save_credentials ровно 1',
-    (calls.counters.save_credentials || 0) === 1);
+    commitThrew === null && (calls.counters.save_credentials || 0) === 1,
+    commitThrew ? String(commitThrew.message) : calls.counters);
   check('commit снимает маркер ПОСЛЕДНИМ',
-    localStorage.getItem('vault-recovery-pending') === null);
+    commitThrew === null && localStorage.getItem('vault-recovery-pending') === null);
 }
 {
   // save_credentials падает → commit бросает, маркер НЕ снят.

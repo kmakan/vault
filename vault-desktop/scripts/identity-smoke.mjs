@@ -177,8 +177,12 @@ function reset() {
 {
   reset();
   state.nsFails = true;
-  const ns = await I.accountNamespace('me@bk.ru');
-  ok('команда недоступна → fallback на email (вход не блокируется)', ns === 'me@bk.ru', ns);
+  // try/catch: «не fail-open» должен ловиться УТВЕРЖДЕНИЕМ, а не падением
+  // смоука — падение засчитывается гейтом как пойманное, но ничего не
+  // доказывает (урок волны 23).
+  let threw = null, ns = null;
+  try { ns = await I.accountNamespace('me@bk.ru'); } catch (e) { threw = e; }
+  ok('команда недоступна → fallback на email (вход не блокируется)', threw === null && ns === 'me@bk.ru', { ns, threw: String(threw) });
 }
 {
   reset();
@@ -275,11 +279,14 @@ function reset() {
 {
   reset();
   state.dropFails = true;
-  const kept = await I.dropOwnEntries([
-    { email: 'me@bk.ru', public_key: 'K1' }, { email: 'anna@x.ru', public_key: 'K2' },
-  ], 'me@bk.ru');
+  let threw = null, kept = null;
+  try {
+    kept = await I.dropOwnEntries([
+      { email: 'me@bk.ru', public_key: 'K1' }, { email: 'anna@x.ru', public_key: 'K2' },
+    ], 'me@bk.ru');
+  } catch (e) { threw = e; }
   ok('мост молчит — fail-open: список не потерян, себя отсекаем строкой',
-    kept.length === 1 && kept[0].email === 'anna@x.ru', kept);
+    threw === null && kept.length === 1 && kept[0].email === 'anna@x.ru', { kept, threw: String(threw) });
 }
 
 // ── peerContactFor: ключ пира по любой форме адреса ──────────────────────

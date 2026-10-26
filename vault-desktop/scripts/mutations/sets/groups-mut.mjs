@@ -22,8 +22,9 @@ export default {
     { name: "не админ может закреплять",
       pattern: "  if (!deps.isGroupAdmin() || !deps.currentGroup() || !msg || !msg.id) return;",
       replacement: "  if (!deps.currentGroup() || !msg || !msg.id) return;" },
+    // Целый вызов (две строки): половинка оставляла битые аргументы.
     { name: "закрепление не применяется локально",
-      pattern: "  await setPinnedState(deps, gid,",
+      pattern: "  await setPinnedState(deps, gid,\n    decision.action === PinWire.PIN_ACTION.PIN ? decision : null);",
       replacement: "  void 0;" },
     { name: "pin-письмо не уходит",
       pattern: "    await api.sendGroupMeta(gid, content);",

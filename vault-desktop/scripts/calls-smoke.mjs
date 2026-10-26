@@ -616,11 +616,15 @@ console.log('7. mute/speaker/resend/watchdog/часы');
     currentCall: () => ctx.session.currentCall,
     setSpeaker: (v) => ctx.session.setSpeaker(v),
   });
-  // mute
-  C.toggleCallMute(muteDeps());
-  check('toggleCallMute → mediaSetMuted(true)', ctx.session.callMuted === true && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === true));
-  C.toggleCallMute(muteDeps());
-  check('повторный mute → false', ctx.session.callMuted === false && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === false));
+  // mute. Вызов обёрнут: без mediaSetMuted (мутант «звонка в мост нет»)
+  // фича бросает TypeError на `.catch` — без try/catch смоук падал бы с
+  // исключением, и мутация считалась бы пойманной падением, а не утверждением.
+  let muteErr = null;
+  try { C.toggleCallMute(muteDeps()); } catch (e) { muteErr = e; }
+  check('toggleCallMute → mediaSetMuted(true)', muteErr === null && ctx.session.callMuted === true && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === true));
+  muteErr = null;
+  try { C.toggleCallMute(muteDeps()); } catch (e) { muteErr = e; }
+  check('повторный mute → false', muteErr === null && ctx.session.callMuted === false && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === false));
   // speaker
   C.toggleSpeaker(spkDeps());
   check('toggleSpeaker → mediaSetSpeaker(true)', ctx.session.callSpeaker === true && apiMock.calls.some(c => c[0] === 'setSpeaker' && c[2] === true));

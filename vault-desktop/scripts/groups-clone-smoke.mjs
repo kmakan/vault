@@ -183,8 +183,14 @@ console.log('\n10. cloneGroupFlow (поток из UI)');
   // ответа клон не делаем — «неизвестно» не равно «можно».
   reset();
   calls.length = 0;
-  r = await GC.cloneGroupFlow({ ...deps, refreshGroupAccess: async () => null }, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
-  ok('поток: без ответа моста о правах клона нет', r === null && calls.length === 0, calls);
+  let accessThrew = null;
+  r = null;
+  try {
+    r = await GC.cloneGroupFlow({ ...deps, refreshGroupAccess: async () => null }, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
+  } catch (err) { accessThrew = err; }
+  ok('поток: без ответа моста о правах клона нет',
+    accessThrew === null && r === null && calls.length === 0,
+    accessThrew ? String(accessThrew.message) : calls);
 
   // И наоборот: адрес записан в другом написании, но мост говорит «создатель» —
   // клон разрешён. Это и есть поведение, которого не было при сравнении в JS.
@@ -203,8 +209,14 @@ console.log('\n10. cloneGroupFlow (поток из UI)');
   reset();
   state.failCreate = true;
   calls.length = 0;
-  r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
-  ok('поток: сбой → onError, не исключение', r === null && calls.some((c) => c[0] === 'onError'), calls);
+  let createThrew = null;
+  r = null;
+  try {
+    r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
+  } catch (err) { createThrew = err; }
+  ok('поток: сбой → onError, не исключение',
+    createThrew === null && r === null && calls.some((c) => c[0] === 'onError'),
+    createThrew ? String(createThrew.message) : calls);
 }
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);

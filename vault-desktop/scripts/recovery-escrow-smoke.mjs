@@ -160,15 +160,24 @@ console.log('\nПоток поиска эскроу-письма (locateEscrowFl
     calls.some((c) => c[0] === 'toast' && c[1] === 'T:recovery_moved_toast'), calls);
 
   // 3. Не найдено → поиск ПОВТОРЯЕТСЯ (письмо могло прийти позже).
+  // Сторож в sleep: если лимит попыток снят, рекурсия не должна съесть
+  // процесс — смоук падает утверждением, а не зависанием.
   calls.length = 0;
   let attemptsSeen = 0;
-  found = await R.locateEscrowFlow(deps({
-    fetchBodies: async () => [],
-    fetchEmails: async () => { attemptsSeen++; return []; },
-  }), LOCAL);
-  ok('поток: не найдено → поиск повторён', attemptsSeen > 1, attemptsSeen);
-  ok('поток: попыток не больше лимита', attemptsSeen <= 4, attemptsSeen);
-  ok('поток: не найдено — false', found === false);
+  let sleepCalls = 0;
+  let limitThrew = null;
+  found = null;
+  try {
+    found = await R.locateEscrowFlow(deps({
+      fetchBodies: async () => [],
+      fetchEmails: async () => { attemptsSeen++; return []; },
+      sleep: async () => { if (++sleepCalls > 8) throw new Error('лимит попыток поиска снят'); },
+    }), LOCAL);
+  } catch (e) { limitThrew = e; }
+  ok('поток: не найдено → поиск повторён',
+    limitThrew === null && attemptsSeen > 1, limitThrew ? String(limitThrew.message) : attemptsSeen);
+  ok('поток: попыток не больше лимита', limitThrew === null && attemptsSeen <= 4, attemptsSeen);
+  ok('поток: не найдено — false', limitThrew === null && found === false);
 
   // 4. Битый wrappedJson → тихо, без повторов.
   calls.length = 0;

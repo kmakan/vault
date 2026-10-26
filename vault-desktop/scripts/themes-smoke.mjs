@@ -64,17 +64,22 @@ function reset() { applied.clear(); mem.clear(); }
 }
 {
   reset();
-  T.applyTheme('такой-темы-нет');
-  ok('неизвестная тема не применяется (переменные не пишутся)', applied.size === 0, applied.size);
-  ok('неизвестная тема не сохраняется', localStorage.getItem('vault-theme') === null);
+  let unknownThrew = null;
+  try { T.applyTheme('такой-темы-нет'); } catch (e) { unknownThrew = e; }
+  ok('неизвестная тема не применяется (переменные не пишутся)',
+    unknownThrew === null && applied.size === 0, unknownThrew ? String(unknownThrew.message) : applied.size);
+  ok('неизвестная тема не сохраняется',
+    unknownThrew === null && localStorage.getItem('vault-theme') === null);
 }
 {
   reset();
   const themeId = Object.keys(T.themes).find((k) => k !== 'dark') || Object.keys(T.themes)[0];
   T.applyTheme(themeId);
   const first = applied.size;
-  T.applyTheme('такой-темы-нет');
-  ok('неизвестная тема не стирает применённую', applied.size === first, applied.size);
+  let unknownThrew = null;
+  try { T.applyTheme('такой-темы-нет'); } catch (e) { unknownThrew = e; }
+  ok('неизвестная тема не стирает применённую',
+    unknownThrew === null && applied.size === first, unknownThrew ? String(unknownThrew.message) : applied.size);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

@@ -158,10 +158,12 @@ if (broken.length) {
 if (survived.length) {
   console.log('\n✗ ВЫЖИВШИЕ МУТАЦИИ (смоук зелёный на сломанном коде — тест ничего не проверяет):');
   for (const s of survived) console.log('  • ' + s);
-  for (const c of crashed) console.log('  • ' + c);
 }
 if (crashed.length) {
-  console.log('\n  (пойманы падением с исключением, а не утверждением — ' + crashed.length + ')');
+  // Имена нужны ВСЕГДА, а не только рядом с выжившими: «поймано падением»
+  // — это долг смоука (утверждения нет), и без списка его нельзя закрыть.
+  console.log('\n  (пойманы падением с исключением, а не утверждением — ' + crashed.length + '):');
+  for (const c of crashed) console.log('  • ' + c);
 }
 if (survived.length || broken.length) {
   console.log('\n  Мутационное тестирование — не «для галочки»: каждая выжившая');

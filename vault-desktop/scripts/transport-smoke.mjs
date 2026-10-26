@@ -81,7 +81,8 @@ function makeDeps(over = {}) {
   // Неизвестное значение показывается как «авто»: ядро для него и план
   // считает авто, подпись не должна расходиться с поведением.
   check('вид: постороннее значение → авто',
-    T.transportView('что-то').icon === 'send' && T.transportView(undefined).titleKey === 'transport_auto',
+    (T.transportView('что-то') || {}).icon === 'send'
+      && (T.transportView(undefined) || {}).titleKey === 'transport_auto',
     T.transportView('что-то'));
 }
 

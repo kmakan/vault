@@ -7,9 +7,11 @@ export default {
   file: 'src/features/folders-store.js',
   smoke: 'folders-store-smoke.mjs',
   mutations: [
+    // Паттерн — if + else: раньше мутант оставлял «голый else» (SyntaxError),
+    // и падение смоука ничего не доказывало.
     { name: "пустой флаг не удаляется",
-      pattern: "      if (!f || (!f.archived && !f.muted && !f.folder)) delete this.state.chatFlags[key];",
-      replacement: "      void 0;" },
+      pattern: "      if (!f || (!f.archived && !f.muted && !f.folder)) delete this.state.chatFlags[key];\n      else this.state.chatFlags[key] = f;",
+      replacement: "      this.state.chatFlags[key] = f;" },
     { name: "переименование папки не применяется",
       pattern: "      const i = names.indexOf(oldName);",
       replacement: "      const i = -1;" },

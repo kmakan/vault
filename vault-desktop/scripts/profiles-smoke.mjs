@@ -433,9 +433,12 @@ console.log('Свой профиль: аватар, имя, био');
   check('onNameUpdate: пустое имя → email', st.displayName === 'me@x.ru', st.displayName);
 
   // 5. onAvatarFileSelect: большой файл — отказ
+  // try/catch: без проверки размера фича идёт в FileReader и бросает TypeError.
+  // Мутант «большого файла нет» должен ловиться утверждением, а не падением.
   const big = { size: 3 * 1024 * 1024 };
-  P.onAvatarFileSelect(deps, { target: { files: [big] } });
-  check('onAvatarFileSelect: большой файл → отказ', st.alerts.length === 1, st.alerts);
+  let bigThrew = null;
+  try { P.onAvatarFileSelect(deps, { target: { files: [big] } }); } catch (e) { bigThrew = e; }
+  check('onAvatarFileSelect: большой файл → отказ', bigThrew === null && st.alerts.length === 1, { alerts: st.alerts, threw: String(bigThrew) });
 
   // 6. onAvatarFileSelect: нормальный файл → dataURL → профиль + закрытие
   const uploaded = [];

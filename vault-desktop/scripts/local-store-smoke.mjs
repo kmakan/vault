@@ -74,7 +74,8 @@ globalThis.__cursorsSaved = null;
 {
   const deps = makeDeps();
   L.saveCursors(deps, 'acc', { inbox: 'uid-1' });
-  check('курсоры сохранены в кэш', deps.getCursors().inbox === 'uid-1', deps.getCursors());
+  const cursors = deps.getCursors() || {};
+  check('курсоры сохранены в кэш', cursors.inbox === 'uid-1', deps.getCursors());
   check('курсоры записаны в sqlite',
     globalThis.__cursorsSaved && globalThis.__cursorsSaved[0] === 'acc' && globalThis.__cursorsSaved[1] === '{"inbox":"uid-1"}',
     globalThis.__cursorsSaved);
@@ -110,8 +111,12 @@ globalThis.__cursorsSaved = null;
 {
   const deps = makeDeps();
   deps.storage.setItem('vault-reads-sent-me@x.ru', '{бито');
+  let brokenReads = null;
+  let brokenThrew = null;
+  try { brokenReads = L.loadSentReads(deps); } catch (e) { brokenThrew = e; }
   check('битые отметки → пустой объект, без исключения',
-    JSON.stringify(L.loadSentReads(deps)) === '{}', L.loadSentReads(deps));
+    brokenThrew === null && JSON.stringify(brokenReads) === '{}',
+    brokenThrew ? String(brokenThrew.message) : brokenReads);
 }
 {
   const deps = makeDeps();

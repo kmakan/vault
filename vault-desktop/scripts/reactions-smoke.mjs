@@ -86,7 +86,13 @@ const rdeps = (o = {}) => ({
     setReactionPickerMsgId:v=>{picked=v}}), 'm1','❤');
   await new Promise(r=>setTimeout(r,0));
   check('addReaction chat.patch добавил эмодзи', msgs[0].reactions.includes('❤'));
-  check('addReaction storage (key=email)', ls['vault-reactions-a@b.c']&&JSON.parse(ls['vault-reactions-a@b.c'])['b@y.z'].m1.some(r=>r.emoji==='❤'));
+  let storedReactions = null;
+  let storedThrew = null;
+  try { storedReactions = JSON.parse(ls['vault-reactions-a@b.c']); } catch (e) { storedThrew = e; }
+  const storedForChat = (storedReactions && storedReactions['b@y.z']) || {};
+  check('addReaction storage (key=email)',
+    storedThrew === null && Array.isArray(storedForChat.m1) && storedForChat.m1.some(r => r.emoji === '❤'),
+    storedThrew ? String(storedThrew.message) : ls['vault-reactions-a@b.c']);
   check('addReaction sendReactionEmail add', apiCalls.some(c=>c[0]==='send'&&c[2]==='add'));
   check('addReaction setReactionPickerMsgId(null)', picked===null);
 }

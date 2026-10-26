@@ -108,7 +108,14 @@ _kv.clear(); apiMock.receiptCalls.length = 0;
 ctx = makeWorld();
 await sendDeliveredReceipts(ctx.deps, [{ from: 'a@x.ru', uid: 10, folder: 'INBOX' }]);
 check('vault-письмо → sendReadReceipt вызван', apiMock.receiptCalls.length === 1);
-check('квитанция содержит msg_ids', JSON.parse(apiMock.receiptCalls[0][1].replace('ENC:', '')).msg_ids.length === 1);
+let receiptBody = null;
+let receiptParse = null;
+try {
+  receiptBody = JSON.parse(String((apiMock.receiptCalls[0] || [])[1] || '').replace('ENC:', ''));
+} catch (e) { receiptParse = e; }
+check('квитанция содержит msg_ids',
+  receiptParse === null && Array.isArray(receiptBody.msg_ids) && receiptBody.msg_ids.length === 1,
+  receiptParse ? String(receiptParse.message) : receiptBody);
 check('delivered-sent записан в kv', _kv.has('delivered-sent'));
 
 // 4. Дедуп: уже отправленная квитанция не повторяется
