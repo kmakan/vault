@@ -42,7 +42,7 @@ export default {
 
 .language-selector select {
   padding: 0.5rem 1rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
   border-radius: 8px;
   background: var(--bg-secondary);
   color: var(--text-primary);

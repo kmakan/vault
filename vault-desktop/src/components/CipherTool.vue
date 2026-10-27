@@ -626,7 +626,7 @@ export default {
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-secondary, #818cf8);
 }
 
 .btn-primary:disabled {

@@ -41,9 +41,15 @@ function makeFakeFrame(w, h) {
     close() { this.closed = true; globalThis.__closedFrames = (globalThis.__closedFrames || 0) + 1; },
   };
 }
-function makeTrack(count, w, h) {
+function makeTrack(count, w, h, sizes) {
   const frames = [];
-  for (let i = 0; i < count; i++) frames.push(makeFakeFrame(w, h));
+  for (let i = 0; i < count; i++) {
+    // sizes — размеры кадров по одному на кадр: поток может сменить ориентацию
+    // в середине (поворот телефона), и это ровно та ветка, которую проверяет
+    // секция 2c.
+    const [fw, fh] = (sizes && sizes[i]) || [w, h];
+    frames.push(makeFakeFrame(fw, fh));
+  }
   return {
     kind: 'video',
     stop() { this._stopped = true; },
@@ -51,8 +57,8 @@ function makeTrack(count, w, h) {
     _frames: frames,
   };
 }
-function makeMediaStream(count, w, h) {
-  const track = makeTrack(count, w, h);
+function makeMediaStream(count, w, h, sizes) {
+  const track = makeTrack(count, w, h, sizes);
   return {
     _track: track,
     getVideoTracks: () => [track],
@@ -98,12 +104,25 @@ class VideoEncoder {
     // в skip-логике (encoder.encodeQueueSize >= 2 → дропать кадр).
     this.encodeQueueSize = encoderQueueSize;
     this._outputs = 0;
+    // История перестроек конфигa: «размер кадра изменился → configure ещё
+    // раз» — отдельная ветка (секция 2c), и мерить её по одному
+    // «последнему» конфигу нельзя: ре-конфиг каждый кадр выглядел бы как
+    // один правильный.
+    this.configs = [];
+    // Каждый encode с флагом ключевой рамки и размером актуального конфига.
+    this.encodes = [];
     encoders.push(this);
   }
-  configure(cfg) { this.config = cfg; }
+  configure(cfg) { this.config = cfg; this.configs.push(cfg); }
   encode(frame, opts) {
     // Глубина очереди растёт при перегрузке энкодера (имитация отставания).
     this.encodeQueueSize = encoderQueueSize;
+    this.encodes.push({
+      key: !!(opts && opts.keyFrame),
+      w: this.config && this.config.width,
+      h: this.config && this.config.height,
+      frame: { w: frame.displayWidth, h: frame.displayHeight },
+    });
     const chunk = {
       byteLength: 12,
       copyTo: (buf) => { buf.fill(9); return 12; },
@@ -341,6 +360,47 @@ console.log('2b. Портретный кадр (480x640) — энкодер не
     enc && enc.config && enc.config.width === 480 && enc.config.height === 640,
     enc && enc.config && { w: enc.config.width, h: enc.config.height });
   check('кадры портретного потока ушли в Rust', apiMock.frames.length > 0, apiMock.frames.length);
+  V.stopCamera();
+  await tick(3);
+}
+
+// ── 2c. Размер кадра изменился в середине потока ───────────────
+console.log('2c. Поворот телефона в середине потока: энкодер перестраивается и даёт ключевую рамку');
+{
+  reset();
+  // Кадры 0–1 в 640x480, дальше 480x640. keyEvery = KEYFRAME_INTERVAL *
+  // VIDEO_FPS = 150, так что по интервальному правилу ключевой здесь только
+  // кадр 0 — всё, что ключевое после перестройки, добавлено правилом размера.
+  const sizes = [[640, 480], [640, 480], [480, 640], [480, 640], [480, 640], [480, 640]];
+  streamFactory = () => makeMediaStream(6, 640, 480, sizes);
+  await V.startCamera('call-turn');
+  await tick(10);
+  const enc = encoders[0];
+  check('все шесть кадров дошли до энкодера', enc && enc.encodes.length === 6, enc && enc.encodes.length);
+  check('размер изменился — энкодер перестроен ровно один раз (не каждый кадр)',
+    enc && enc.configs.length === 2, enc && enc.configs.map((c) => `${c.width}x${c.height}`));
+  check('новый конфиг следует кадру: 480x640',
+    enc && !!enc.configs[1] && enc.configs[1].width === 480 && enc.configs[1].height === 640,
+    enc && enc.configs[1] && { w: enc.configs[1].width, h: enc.configs[1].height });
+  check('кадры до поворота кодируются со старым размером',
+    enc && enc.encodes[0].w === 640 && enc.encodes[1].w === 640,
+    enc && enc.encodes.slice(0, 2).map((e) => `${e.w}x${e.h}`));
+  check('первый кадр после поворота — ключевой (собеседник начинает с нового размера)',
+    enc && enc.encodes[2].key === true && enc.encodes[2].w === 480 && enc.encodes[2].h === 640,
+    enc && enc.encodes[2]);
+  check('следующий кадр — обычный (ключевой ставится один раз, а не force-ится)',
+    enc && enc.encodes[3].key === false, enc && enc.encodes[3]);
+  check('пока размер не меняется, ре-конфига нет (поток не перестраивается каждый кадр)',
+    enc && enc.encodes[4].w === 480 && enc.configs.length === 2,
+    enc && { configs: enc.configs.length, e4: enc.encodes[4].w });
+  // Перестройка меняет РАЗМЕР, а не договорённость о кодеке: битрейт, fps и
+  // интервал ключевых рамок обязаны пережить поворот.
+  check('перестройка сохраняет остальные параметры кодека',
+    enc && !!enc.configs[1] && enc.configs[1].codec === enc.configs[0].codec
+    && enc.configs[1].bitrate === enc.configs[0].bitrate
+    && enc.configs[1].framerate === enc.configs[0].framerate
+    && enc.configs[1].keyInterval === enc.configs[0].keyInterval,
+    enc && { was: enc.configs[0], now: enc.configs[1] });
   V.stopCamera();
   await tick(3);
 }
