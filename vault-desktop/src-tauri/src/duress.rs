@@ -204,39 +204,52 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
     }));
 }
 
-/// Текст SOS-письма: правило подстановки координат. Отделено от JNI-обёртки,
-/// чтобы жить НЕ под `cfg(target_os = "android")`: внутри обёртки правило
-/// недостижимо для проверок с хоста (ни одна правка строки там не измеряется
-/// никогда), а ошибка в нём — это письмо без текста или без места, где человек
-/// есть.
+/// Текст SOS-письма для headless-канала: правило живёт в ядре
+/// (`vault_client::vault::duress::compose_sos_text`, меряется мутациями
+/// `rust-duress`), здесь — только данные этого канала (ADR-005 W4, #38).
 ///
-/// Текущий смысл правила (без изменений против того, что было в обёртке):
-///   * координат нет — плейсхолдер снимается;
-///   * плейсхолдер есть — подставляется на его месте;
-///   * плейсхолдера нет, но гео включено и координаты есть — они дописываются
-///     в конец через ` | `.
+/// До 27.10 правило имело вторую копию во фронте (`features/duress.js`), и
+/// копии разошлись: фронт подставлял дефолт из локали, ядро — нет; фронт менял
+/// первый плейсхолдер, ядро — все; разделитель хвоста тоже был разный.
 ///
-/// У ПРАВИЛА ЕСТЬ ВТОРАЯ КОПИЯ — `features/duress.js:166-169` (настольная
-/// ветка), и копии РАЗОШЛИСЬ: JS берёт дефолтный текст из локали, когда
-/// `sos_text` пуст (здесь остаётся пустой строка), JS меняет только ПЕРВЫЙ
-/// `{coords}` (здесь — все), и разделитель хвоста у них разный. Сведение копий
-/// — отдельный шаг (канбан), потому что дефолтный текст — решение о том, ЧТО
-/// пишет человек под принуждением.
+/// Данные headless-канала зафиксированы буквами в тесте ядра
+/// (`headless_letter_is_the_live_shape`): `default_text` — пустая строка
+/// сознательно (сменить байты живого письма беды — это приёмка на устройстве,
+/// а не «сведение копий по дороге»), `separator` — « | », потому что Kotlin
+/// приносит голые числа без своей связки.
 pub fn compose_sos_text(cfg: &DuressConfig, geo: &str) -> String {
-    if geo.is_empty() {
-        return cfg.sos_text.replace("{coords}", "");
-    }
-    if cfg.sos_text.contains("{coords}") {
-        return cfg.sos_text.replace("{coords}", geo);
-    }
-    if cfg.sos_geo {
-        return format!("{} | {}", cfg.sos_text, geo);
-    }
-    // Сюда доходят только тексты БЕЗ плейсхолдера (ветка выше его уже сняла),
-    // поэтому подстановка здесь была бы проверена на входе, который её никогда
-    // не увидит: 25.10 мутант «убрать replace» выжил ровно потому, что на
-    // достижимом входе он тождествен. Текст возвращается как есть.
-    cfg.sos_text.clone()
+    vault_client::vault::duress::compose_sos_text(&vault_client::vault::duress::SosText {
+        text: &cfg.sos_text,
+        default_text: "",
+        geo_on: cfg.sos_geo,
+        geo,
+        separator: " | ",
+    })
+}
+
+/// Текст SOS для WebView: то же правило ядра, но с дефолтом из локали фронта.
+/// Разделитель пуст — фраза координат начинается с «, » и вклеивается прямо в
+/// предложение.
+#[tauri::command]
+pub fn duress_sos_text(
+    sos_text: String,
+    default_text: String,
+    geo_on: bool,
+    geo: String,
+) -> String {
+    vault_client::vault::duress::compose_sos_text(&vault_client::vault::duress::SosText {
+        text: &sos_text,
+        default_text: &default_text,
+        geo_on,
+        geo: &geo,
+        separator: "",
+    })
+}
+
+/// Фраза координат: числа формует ядро, подпись приходит из локали фронта.
+#[tauri::command]
+pub fn duress_geo_phrase(label: String, lat: f64, lon: f64) -> String {
+    vault_client::vault::duress::geo_phrase(&label, lat, lon)
 }
 
 /// Тихий SOS при duress-коде: headless-отправка письма выбранным контактам
@@ -501,5 +514,61 @@ mod tests {
     fn sos_text_without_placeholder_and_without_coordinates_stays_untouched() {
         let c = cfg("11:22", "Просто текст");
         assert_eq!(compose_sos_text(&c, ""), "Просто текст");
+    }
+
+    /// Headless НЕ подставляет своего дефолта: письмо с пустой настройкой
+    /// выглядит именно так, а не иначе, и это данные канала, а не правило.
+    /// Мутация «дефолт вместо пустой строки» обязана падать здесь.
+    #[test]
+    fn headless_channel_passes_no_default_text() {
+        let c = cfg("11:22", "");
+        assert_eq!(compose_sos_text(&c, ""), "");
+        let mut g = cfg("11:22", "");
+        g.sos_geo = true;
+        assert_eq!(compose_sos_text(&g, "55.75, 37.61"), " | 55.75, 37.61");
+    }
+
+    /// Настольная ветка отдаёт ядру свои данные: дефолт из локали и пустой
+    /// разделитель (фраза координат уже начинается с «, »).
+    #[test]
+    fn webview_command_uses_the_locale_default_and_no_separator() {
+        assert_eq!(
+            duress_sos_text(
+                String::new(),
+                "Телефон не у меня{coords}".into(),
+                true,
+                ", мои координаты: 55.75150, 37.61550".into(),
+            ),
+            "Телефон не у меня, мои координаты: 55.75150, 37.61550"
+        );
+        assert_eq!(
+            duress_sos_text("Свой текст".into(), "дефолт".into(), false, String::new()),
+            "Свой текст",
+            "настроенный текст не заменяется дефолтом"
+        );
+        // Гео включено, плейсхолдера нет → хвост БЕЗ разделителя (фраза сама
+        // начинается с «, »).
+        assert_eq!(
+            duress_sos_text(
+                "Помоги".into(),
+                "дефолт".into(),
+                true,
+                ", мои координаты: 1.00000, 2.00000".into(),
+            ),
+            "Помоги, мои координаты: 1.00000, 2.00000"
+        );
+    }
+
+    #[test]
+    fn webview_geo_phrase_comes_from_the_core() {
+        assert_eq!(
+            duress_geo_phrase("мои координаты".into(), 55.7515099, 37.6155),
+            ", мои координаты: 55.75151, 37.61550"
+        );
+        // Другая локаль — другая подпись, числа те же.
+        assert_eq!(
+            duress_geo_phrase("my coordinates".into(), 55.7515099, 37.6155),
+            ", my coordinates: 55.75151, 37.61550"
+        );
     }
 }

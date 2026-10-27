@@ -57,5 +57,63 @@ export default {
     { name: 'текст беды не попадает в конверт (получатель видит пустое письмо)',
       pattern: '        text,',
       replacement: '        text: "",' },
+
+    // ── Правило текста SOS (27.10, #38): сюда переехало из моста, вторую копию
+    // которого держал фронт. Ошибка в нём — письмо беды без слов, без места
+    // или с местом не того человека.
+    { name: 'дефолт не подставляется, когда настройка пуста (письмо без слов)',
+      pattern: `    let base = if rule.text.trim().is_empty() {
+        rule.default_text`,
+      replacement: `    let base = if rule.text.trim().is_empty() {
+        ""`,
+    },
+    { name: 'пустая настройка не считается пустой (дефолт не нужен никогда)',
+      pattern: '    let base = if rule.text.trim().is_empty() {',
+      replacement: '    let base = if false {' },
+    { name: 'пробелы в настройке считаются текстом (письмо из одного пробела)',
+      pattern: '    let base = if rule.text.trim().is_empty() {',
+      replacement: '    let base = if rule.text.is_empty() {' },
+    { name: 'без координат плейсхолдер остаётся в письме (служебная метка на глазах)',
+      pattern: `    if rule.geo.is_empty() {
+        return base.replace("{coords}", "");`,
+      replacement: `    if rule.geo.is_empty() {
+        return base.to_string();`,
+    },
+    { name: 'координаты никогда не встают вместо плейсхолдера',
+      pattern: '    if rule.geo.is_empty() {',
+      replacement: '    if true {' },
+    { name: 'подстановка наоборот: координаты затираются плейсхолдером',
+      pattern: '        return base.replace("{coords}", rule.geo);',
+      replacement: '        return base.replace(rule.geo, "{coords}");' },
+    { name: 'хвост теряет координаты (место человека не уезжает)',
+      pattern: '        return format!("{base}{}{}", rule.separator, rule.geo);',
+      replacement: '        return format!("{}", base);' },
+    { name: 'в хвосте текст и координаты меняются местами',
+      pattern: '        return format!("{base}{}{}", rule.separator, rule.geo);',
+      replacement: '        return format!("{}{}{}", rule.geo, rule.separator, base);' },
+    { name: 'разделитель хвоста теряется (читается как одно слово)',
+      pattern: '        return format!("{base}{}{}", rule.separator, rule.geo);',
+      replacement: '        return format!("{base}{}", rule.geo);' },
+    { name: 'флаг гео не читается — координаты дописываются всегда',
+      pattern: '    if rule.geo_on {',
+      replacement: '    if true {' },
+    { name: 'гео включено, но хвост не дописывается (флаг всегда выключен)',
+      pattern: '    if rule.geo_on {',
+      replacement: '    if false {' },
+    { name: 'хвост без гео теряет текст письма',
+      pattern: `    base.to_string()
+}`,
+      replacement: `    String::new()
+}`,
+    },
+    { name: 'разряды координат теряются (место с точностью до километра)',
+      pattern: '    format!(", {label}: {lat:.5}, {lon:.5}")',
+      replacement: '    format!(", {label}: {lat:.3}, {lon:.3}")' },
+    { name: 'без подписи координат всё равно печатается двоеточие',
+      pattern: '    if label.is_empty() {',
+      replacement: '    if false {' },
+    { name: 'фраза координат теряет ведущую запятую (слипается с текстом)',
+      pattern: '        return format!(", {lat:.5}, {lon:.5}");',
+      replacement: '        return format!("{lat:.5}, {lon:.5}");' },
   ],
 };

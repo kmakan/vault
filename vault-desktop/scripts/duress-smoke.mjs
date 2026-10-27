@@ -32,9 +32,36 @@ const cryptoMock = {
   encryptVault: async (p) => { cryptoMock.encVault.push(p); return 'ENC:' + p; },
   loadPeerKeys: async () => cryptoMock.loadedKeys || [],
 };
+// Аргументы, с которыми фронт зовёт ядро по тексту SOS: контракт «какие данные
+// и под какими именами» проверяется именно здесь (gate:tauri-args следит за
+// camelCase, но не за тем, что доехало).
+const sosTextCalls = [];
+const geoPhraseCalls = [];
 const invokeMock = async (cmd, args) => {
   if (cmd === 'duress_get_config') return globalThis.__duressCfg;
   if (cmd === 'duress_get_recipients') return globalThis.__duressCfg;
+  // Текст SOS и фраза координат — правило ЯДРА (ADR-005 партия 5k,
+  // vault-client/src/vault/duress.rs::compose_sos_text и geo_phrase). Здесь —
+  // тестовый ДВОЙНИК той же функции с теми же данными канала (webview:
+  // дефолт из локали, разделителя нет). При правке правила в Rust правится и
+  // здесь: расхождение = смоук проверяет не то, что в проде.
+  if (cmd === 'duress_sos_text') {
+    sosTextCalls.push(args);
+    if (globalThis.__sosTextFails) throw new Error('bridge down');
+    const configured = String(args.sosText ?? '');
+    const base = configured.trim() ? configured : String(args.defaultText ?? '');
+    const geo = String(args.geo ?? '');
+    if (!geo) return base.replaceAll('{coords}', '');
+    if (base.includes('{coords}')) return base.replaceAll('{coords}', geo);
+    return args.geoOn ? base + geo : base;
+  }
+  if (cmd === 'duress_geo_phrase') {
+    geoPhraseCalls.push(args);
+    if (globalThis.__geoPhraseFails) throw new Error('bridge down');
+    const label = String(args.label ?? '').trim();
+    const nums = `${Number(args.lat).toFixed(5)}, ${Number(args.lon).toFixed(5)}`;
+    return label ? `, ${label}: ${nums}` : `, ${nums}`;
+  }
   // Формат конверта — в Rust (ADR-005 W4). Здесь — ТЕСТОВЫЙ ДВОЙНИК: та же
   // таблица правил, что и в vault-client/src/vault/envelope.rs. При правке
   // формата в Rust правится и здесь (расхождение = смоук проверяет не то, что
@@ -154,6 +181,10 @@ function resetWorld(cfg = {}) {
   state.pending = false;
   state.loggedOut = 0;
   globalThis.__duressCfg = cfg;
+  sosTextCalls.length = 0;
+  geoPhraseCalls.length = 0;
+  globalThis.__sosTextFails = false;
+  globalThis.__geoPhraseFails = false;
   apiMock.sends = [];
   apiMock.loggedOut = 0;
   cryptoMock.encVault = [];
@@ -283,6 +314,75 @@ console.log('5c. sendDuressSos: один получатель без ключа,
     apiMock.sends.length === 1 && apiMock.sends[0].payload.to === 'other@x.ru', apiMock.sends);
   check('частичная записана как частичная, а не как полный успех',
     duressLogged(/^warn: \[duress\] SOS ушёл 1 из 2, не ушёл: peer@x\.ru/), logs.slice(-3));
+}
+
+// ── 5d. Текст SOS: правило в ядре, фронт — только данные (ADR-005 5k) ───
+console.log('5d. sendDuressSos: текст письма собирает ядро');
+{
+  // geolocation stub: позиция всегда одна и та же, ответ немедленный.
+  Object.defineProperty(globalThis, 'navigator', {
+    value: {
+      userAgent: 'smoke',
+      geolocation: {
+        getCurrentPosition: (ok) => ok({ coords: { latitude: 55.7515099, longitude: 37.6155 } }),
+      },
+    },
+    configurable: true, writable: true,
+  });
+  resetWorld({ sos_recipients: ['peer@x.ru'], sos_text: 'Телефон не у меня{coords}', sos_geo: true });
+  identityStore.state.peerKeys = { 'peer@x.ru': 'PUB' };
+  await sendDuressSos(makeDeps());
+  const body = apiMock.sends.length ? JSON.parse(cryptoMock.encVault[0]) : {};
+  check('письмо ушло', apiMock.sends.length === 1, apiMock.sends);
+  check('текст собран ядром: плейсхолдер занят фразой координат',
+    body.text === 'Телефон не у меня, sos_coords_label: 55.75151, 37.61550', body);
+  check('фронт передаёт ядру данные канала, а не решает сам',
+    sosTextCalls.length === 1
+    && sosTextCalls[0].sosText === 'Телефон не у меня{coords}'
+    && sosTextCalls[0].defaultText === 'sos_default'
+    && sosTextCalls[0].geoOn === true
+    && typeof sosTextCalls[0].geo === 'string', sosTextCalls);
+  check('подпись координат берётся из локали (не литерал во фронте)',
+    geoPhraseCalls.length === 1 && geoPhraseCalls[0].label === 'sos_coords_label'
+    && geoPhraseCalls[0].lat === 55.7515099 && geoPhraseCalls[0].lon === 37.6155, geoPhraseCalls);
+
+  // Настраиваемого текста нет → дефолт подставляет ядро, фронт его не ищет.
+  resetWorld({ sos_recipients: ['peer@x.ru'], sos_text: '', sos_geo: false });
+  identityStore.state.peerKeys = { 'peer@x.ru': 'PUB' };
+  await sendDuressSos(makeDeps());
+  check('пустая настройка получает дефолт из локали, а не заглушку из JS',
+    JSON.parse(cryptoMock.encVault[0]).text === 'sos_default', JSON.parse(cryptoMock.encVault[0]));
+
+  // Гео включено, плейсхолдера в тексте нет → хвост дописывает ядро, флаг
+  // доехал до него как данные, а не как решение фронта.
+  resetWorld({ sos_recipients: ['peer@x.ru'], sos_text: 'Помоги', sos_geo: true });
+  identityStore.state.peerKeys = { 'peer@x.ru': 'PUB' };
+  await sendDuressSos(makeDeps());
+  check('без плейсхолдера координаты дописаны ядром (флаг geoOn доехал)',
+    JSON.parse(cryptoMock.encVault[0]).text === 'Помоги, sos_coords_label: 55.75151, 37.61550'
+    && sosTextCalls[0].geoOn === true, JSON.parse(cryptoMock.encVault[0]));
+
+  // Отказ ядра: текст НЕ собирается на месте — письмо уходит без него, но  // уходит (метку type:"sos" получатель читает и так), и отказ записан.
+  resetWorld({ sos_recipients: ['peer@x.ru'], sos_text: 'Свой текст', sos_geo: false });
+  globalThis.__sosTextFails = true;
+  identityStore.state.peerKeys = { 'peer@x.ru': 'PUB' };
+  const before = logs.length;
+  await sendDuressSos(makeDeps());
+  check('при отказе ядра письмо всё равно отправлено', apiMock.sends.length === 1, apiMock.sends);
+  check('при отказе ядра текст пустой — локальной копии правила нет',
+    JSON.parse(cryptoMock.encVault[0]).text === '', JSON.parse(cryptoMock.encVault[0]));
+  check('отказ ядра записан громко',
+    logs.slice(before).some((l) => /^error: \[duress\] SOS: ядро не собрало текст/.test(l)),
+    logs.slice(before));
+
+  // Отказ фразы координат: письмо уходит с текстом, но без места.
+  resetWorld({ sos_recipients: ['peer@x.ru'], sos_text: 'Помоги{coords}', sos_geo: true });
+  globalThis.__geoPhraseFails = true;
+  identityStore.state.peerKeys = { 'peer@x.ru': 'PUB' };
+  await sendDuressSos(makeDeps());
+  check('без фразы координат письмо уходит с текстом и без плейсхолдера',
+    apiMock.sends.length === 1 && JSON.parse(cryptoMock.encVault[0]).text === 'Помоги',
+    JSON.parse(cryptoMock.encVault[0]));
 }
 
 // ── 6. Panic-PIN: данные стёрты, выход на login ─────────────────────────

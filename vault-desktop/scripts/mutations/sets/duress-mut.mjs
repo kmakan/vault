@@ -40,9 +40,48 @@ export default {
     { name: "SOS отправляется без ключа получателя (не шифруется)",
       pattern: "        if (!pk) {",
       replacement: "        if (false) {" },
-    { name: "SOS уходит с плейсхолдером {coords} вместо координат",
-      pattern: "    let text = rawText.replace('{coords}', coords);",
-      replacement: "    let text = rawText;" },
+    // Текст SOS — правило ЯДРА (ADR-005 партия 5k, 27.10): до этого здесь
+    // жила вторая копия правила, разошедшаяся с мостовой. Мутации бьют по
+    // ОБВЯЗКЕ: какие данные доезжают до ядра и что делает фронт, когда ядро
+    // не ответило.
+    { name: "текст письма собирает фронт, а не ядро (вторая копия правила вернулась)",
+      pattern: "      text = await invoke('duress_sos_text', {",
+      replacement: "      text = String(cfg.sos_text || 'Телефон не у меня'); void invoke('duress_sos_text', {" },
+    { name: "имя команды сборки текста SOS перепутано (текст не соберётся никогда)",
+      pattern: "      text = await invoke('duress_sos_text', {",
+      replacement: "      text = await invoke('duress_sos_text_v2', {" },
+    { name: "настроенный текст не передаётся в ядро (всегда дефолт локали)",
+      pattern: "        sosText: cfg.sos_text || '',",
+      replacement: "        sosText: ''," },
+    { name: "дефолт из локали не передаётся (пустая настройка = письмо без слов)",
+      pattern: "        defaultText: uiStore.tr('sos_default'),",
+      replacement: "        defaultText: ''," },
+    { name: "флаг гео не доезжает ядра (координаты не дописываются)",
+      pattern: "        geoOn: !!cfg.sos_geo,",
+      replacement: "        geoOn: false," },
+    { name: "фраза координат не доезжает ядра (место теряется)",
+      pattern: "        geoOn: !!cfg.sos_geo,\n        geo,",
+      replacement: "        geoOn: !!cfg.sos_geo,\n        geo: ''," },
+    { name: "отказ ядра текст подменяется литералом во фронте",
+      pattern: "      console.error('[duress] SOS: ядро не собрало текст, письмо уходит без него:', e);",
+      replacement: "      text = cfg.sos_text || 'Телефон не у меня';" },
+    { name: "подпись координат — литерал вместо локали (письмо не на языке отправителя)",
+      pattern: "              label: uiStore.tr('sos_coords_label'),",
+      replacement: "              label: 'мои координаты'," },
+    { name: "имя команды фразы координат перепутано",
+      pattern: "            finish(await invoke('duress_geo_phrase', {",
+      replacement: "            finish(await invoke('duress_geo_phrase_v2', {" },
+    { name: "координаты не передаются в ядро (всегда ноль)",
+      pattern: "              lat: pos.coords.latitude,",
+      replacement: "              lat: 0," },
+    { name: "при отказе ядра фронт сам сочиняет фразу координат",
+      pattern: `            console.error('[duress] SOS: ядро не собрало фразу координат:', e);
+            finish('');`,
+      replacement: `            console.error('[duress] SOS: ядро не собрало фразу координат:', e);
+            finish(', мои координаты: 0.00000, 0.00000');` },
+    { name: "геолокация не опрашивается, даже когда гео включено",
+      pattern: "    if (cfg.sos_geo) {\n      geo = await new Promise(",
+      replacement: "    if (false) {\n      geo = await new Promise(" },
     // Учёт доставки (25.10, диагностика на устройстве): строка «sent to N»
     // печаталась ВСЕГДА, включая проход, где не ушло ни одного письма. Пока
     // журнал врал, тихий отказ SOS был неотличим от работающего сигнала —

@@ -2519,6 +2519,9 @@ pub fn run() {
             duress_verify,
             duress_save_config,
             duress_wipe_all,
+            // W4: текст SOS собирает ядро — фронт передаёт только данные канала.
+            duress::duress_sos_text,
+            duress::duress_geo_phrase,
             groups_remove_member,
             groups_set_member_role,
             groups_leave,

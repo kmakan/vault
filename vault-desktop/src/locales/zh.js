@@ -110,6 +110,7 @@ export default {
   lock_bio: "使用指纹解锁",
   panic_done: "数据已抹除",
   sos_default: "我的手机不在我身边{coords}",
+  sos_coords_label: "我的坐标",
     settings_delete: '删除',
   settings_delete_account_confirm: '删除此邮箱账户？',
   settings_email_provider: '邮箱服务商',

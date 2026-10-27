@@ -110,6 +110,7 @@ export default {
   lock_bio: "Войти по отпечатку",
   panic_done: "Данные стёрты",
   sos_default: "Телефон не у меня{coords}",
+  sos_coords_label: "мои координаты",
     settings_delete: 'Удалить',
   settings_delete_account_confirm: 'Удалить этот почтовый аккаунт?',
   settings_email_provider: 'Почтовый провайдер',

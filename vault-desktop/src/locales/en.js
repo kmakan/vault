@@ -110,6 +110,7 @@ export default {
   lock_bio: "Unlock with fingerprint",
   panic_done: "Data wiped",
   sos_default: "My phone is not with me{coords}",
+  sos_coords_label: "my coordinates",
     settings_delete: 'Delete',
   settings_delete_account_confirm: 'Delete this email account?',
   settings_email_provider: 'Email Provider',

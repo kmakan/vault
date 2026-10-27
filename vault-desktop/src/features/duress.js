@@ -157,25 +157,53 @@ export async function sendDuressSos(deps) {
     }
     // Гео: если включено — координаты через WebView geolocation
     // (на Android нативный запрос разрешения идёт при включении флага).
-    let coords = '';
+    // Фразу координат и весь текст письма собирает ЯДРО (`vault::duress`,
+    // ADR-005 партия 5k): здесь остаются только замер позиции и подпись из
+    // локали. Раньше правило жило и здесь, и в мосте, и копии разошлись:
+    // фронт подставлял дефолт и менял один плейсхолдер, headless — ни того,
+    // ни другого.
+    let geo = '';
     if (cfg.sos_geo) {
-      coords = await new Promise((resolve) => {
+      geo = await new Promise((resolve) => {
         let done = false;
         const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
         const timer = setTimeout(() => finish(''), 5000);
+        const phrase = async (pos) => {
+          try {
+            finish(await invoke('duress_geo_phrase', {
+              label: uiStore.tr('sos_coords_label'),
+              lat: pos.coords.latitude,
+              lon: pos.coords.longitude,
+            }));
+          } catch (e) {
+            console.error('[duress] SOS: ядро не собрало фразу координат:', e);
+            finish('');
+          }
+        };
         try {
           navigator.geolocation.getCurrentPosition(
-            (pos) => finish(`, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
+            phrase,
             () => finish(''),
             { timeout: 4500, maximumAge: 600000 },
           );
         } catch (e) { finish(''); }
       });
     }
-    const rawText = cfg.sos_text || uiStore.tr('sos_default') || 'Телефон не у меня{coords}';
-    let text = rawText.replace('{coords}', coords);
-    // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
-    if (coords && !rawText.includes('{coords}')) text += coords;
+    let text = '';
+    try {
+      text = await invoke('duress_sos_text', {
+        sosText: cfg.sos_text || '',
+        defaultText: uiStore.tr('sos_default'),
+        geoOn: !!cfg.sos_geo,
+        geo,
+      });
+    } catch (e) {
+      // Отказ ядра — текст НЕ подбирается на месте: локальная сборка вернула бы
+      // ровно ту вторую копию правила, которую убрали. Письмо уходит без
+      // текста: метку type:"sos" получатель читает и так, а выдуманное здесь
+      // предложение человек под принуждением не просил отправлять.
+      console.error('[duress] SOS: ядро не собрало текст, письмо уходит без него:', e);
+    }
     // Сохранённые peer-ключи: encryptVault требует установленного ключа
     // получателя — иначе шифрование падает и SOS молча теряется.
     // При холодном старте (duress сразу после открытия) peerKeys могли

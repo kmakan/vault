@@ -5,20 +5,18 @@
 // замка шли через `Storage::open(None)` — живую БД разработчика.
 //
 // Что теперь измеримо:
-//   * `compose_sos_text` — вынесено из обёртки (25.10). Ошибка в нём — это
-//     письмо без текста или без места, где человек находится;
+//   * `compose_sos_text` (headless) и команды `duress_sos_text` /
+//     `duress_geo_phrase` (WebView) — сами правила уехали в ядро (27.10, #38:
+//     у правила была вторая копия во фронте, и копии разошлись), здесь
+//     меряется ОБВЯЗКА — какие данные канала передаются ядру. Ошибка в обвязке
+//     это письмо беды без текста, без места или не на том языке;
 //   * `load_config`/`save_config` — после тестового редиректа
 //     `VAULT_TEST_DB_FILE` (`storage/sqlite.rs::default_db_path`). Адрес строки
 //     ('anon','duress-config') — общий контракт с Kotlin-замком и JS-фронтом:
 //     перепутать аккаунт или ключ значит «замок настроен, но не читается».
 //
 // СОЗНАТЕЛЬНО НЕ МУТИРУЕТСЯ (не измеримо, а не «забыто»):
-//   * ЭКВИВАЛЕНТНЫЙ мутант, найденный прогоном: хвост правила делал
-//     `replace("{coords}", "")` на ветке, куда текст с плейсхолдером прийти уже
-//     не может (её закрыла ветка выше). «Убрать replace» выжил 13/14 — не
-//     потому, что проверка плохая, а потому, что на достижимом входе мутант
-//     тождествен оригиналу. Правка сама в коде: хвост возвращает текст как
-//     есть, а вместо мёртвой мутации стоит «хвост теряет текст письма».
+//   * само правило подстановки — оно в ядре, меряется набором `rust-duress`;
 //   * JNI-обёртки (`nativeSendDuressSos`, `nativeVerifyPin`, `sync_prefs_android`,
 //     `nativePanicWipe`) — под `cfg(target_os = "android")`, с хоста не
 //     вызываются; их проверяет приёмка на устройстве;
@@ -28,9 +26,8 @@
 //     ключей/кредов, проверяется только на тестовом устройстве;
 //   * `hash_secret`/`verify_secret` — протокол замка, измерен в ядре.
 //
-// ИМЕНА ПРОБ (смоук `duress` обязан собрать все десять; живость фильтра с 25.10
-// меряет `npm run gate:rust-smokes`, но вердикт по-прежнему даёт весь
-// либ-прогон):
+// ИМЕНА ПРОБ (живость фильтра с 25.10 меряет `npm run gate:rust-smokes`,
+// вердикт по-прежнему даёт весь либ-прогон):
 //   duress_config_round_trips_through_the_anon_row
 //   second_save_replaces_the_first_config_whole
 //   absent_config_row_reads_as_disabled_lock
@@ -41,6 +38,9 @@
 //   sos_text_appends_coordinates_when_flag_is_on_and_placeholder_is_absent
 //   sos_text_keeps_the_text_alone_when_geo_flag_is_off
 //   sos_text_without_placeholder_and_without_coordinates_stays_untouched
+//   headless_channel_passes_no_default_text
+//   webview_command_uses_the_locale_default_and_no_separator
+//   webview_geo_phrase_comes_from_the_core
 
 export default {
   id: 'rust-bridge-duress',
@@ -51,43 +51,41 @@ export default {
   smoke: 'cargo test -p vault-desktop --lib duress',
   timeoutMs: 900_000,
   mutations: [
-    // ── compose_sos_text: правило подстановки координат ──
-    { name: 'координаты считаются отсутствующими, когда они есть (SOS без места)',
-      pattern: `    if geo.is_empty() {
-        return cfg.sos_text.replace("{coords}", "");`,
-      replacement: `    if !geo.is_empty() {
-        return cfg.sos_text.replace("{coords}", "");` },
-    { name: 'плейсхолдер остаётся в письме ({coords} читается глазами)',
-      pattern: `    if geo.is_empty() {
-        return cfg.sos_text.replace("{coords}", "");`,
-      replacement: `    if geo.is_empty() {
-        return cfg.sos_text.clone();` },
-    { name: 'место для координат не ищется — они никогда не встают по плейсхолдеру',
-      pattern: '    if cfg.sos_text.contains("{coords}") {',
-      replacement: '    if false {' },
-    { name: 'подстановка наоборот: плейсхолдер затирает координаты',
-      pattern: '        return cfg.sos_text.replace("{coords}", geo);',
-      replacement: '        return cfg.sos_text.replace(geo, "{coords}");' },
-    { name: 'гео выключено, а координаты дописываются (флаг не читается)',
-      pattern: '    if cfg.sos_geo {',
-      replacement: '    if !cfg.sos_geo {' },
-    { name: 'гео включено, но хвост не дописывается (флаг всегда выключен)',
-      pattern: '    if cfg.sos_geo {',
-      replacement: '    if false {' },
-    { name: 'в хвост вместо текста письма встают координаты',
-      pattern: '        return format!("{} | {}", cfg.sos_text, geo);',
-      replacement: '        return format!("{} | {}", geo, cfg.sos_text);' },
-    { name: 'координаты теряются при дописывании',
-      pattern: '        return format!("{} | {}", cfg.sos_text, geo);',
-      replacement: '        return format!("{}", cfg.sos_text);' },
-    { name: 'разделитель текста и координат теряется (читается как одно слово)',
-      pattern: '        return format!("{} | {}", cfg.sos_text, geo);',
-      replacement: '        return format!("{}{}", cfg.sos_text, geo);' },
-    { name: 'хвост без гео теряет текст письма',
-      pattern: `    cfg.sos_text.clone()
-}`,
-      replacement: `    String::new()
-}` },
+    // ── headless-обвязка: данные канала, которые передаются правилу ──
+    { name: 'headless изобретает свой дефолтный текст (письмо не то, что настроено)',
+      pattern: '        default_text: "",\n        geo_on: cfg.sos_geo,',
+      replacement: '        default_text: "дефолт",\n        geo_on: cfg.sos_geo,' },
+    { name: 'headless теряет свой разделитель хвоста (текст склеивается с местом)',
+      pattern: '        separator: " | ",',
+      replacement: '        separator: "",' },
+    { name: 'настроенный текст не доезжает правила (всегда пустой вход)',
+      pattern: '        text: &cfg.sos_text,',
+      replacement: '        text: "",' },
+    { name: 'координат не передаётся никогда (место человека теряется)',
+      pattern: '        geo,\n        separator: " | ",',
+      replacement: '        geo: "",\n        separator: " | ",' },
+    { name: 'флаг гео подменяется включённым (координаты против настройки)',
+      pattern: '        geo_on: cfg.sos_geo,',
+      replacement: '        geo_on: true,' },
+    { name: 'флаг гео подменяется выключенным (настроенное место не дописывается)',
+      pattern: '        geo_on: cfg.sos_geo,',
+      replacement: '        geo_on: false,' },
+    // ── WebView-обвязка: дефолт из локали и пустой разделитель ──
+    { name: 'дефолт из локали не доезжает (письмо без слов при пустой настройке)',
+      pattern: '        default_text: &default_text,',
+      replacement: '        default_text: "",' },
+    { name: 'настроенный текст WebView теряется (всегда дефолт локали)',
+      pattern: '        text: &sos_text,',
+      replacement: '        text: "",' },
+    { name: 'WebView дописывает чужой разделитель (в письме « | , мои координаты»)',
+      pattern: '        separator: "",',
+      replacement: '        separator: " | ",' },
+    { name: 'WebView забывает флаг гео (хвост не дописывается никогда)',
+      pattern: '        geo_on,\n        geo: &geo,',
+      replacement: '        geo_on: false,\n        geo: &geo,' },
+    { name: 'подпись координат теряется (письмо не на языке отправителя)',
+      pattern: '    vault_client::vault::duress::geo_phrase(&label, lat, lon)',
+      replacement: '    vault_client::vault::duress::geo_phrase("", lat, lon)' },
     // ── адрес строки конфига: общий контракт с Kotlin-замком и JS-фронтом ──
     { name: "конфиг читается не из строки 'anon' (замок «сбрасывается»)",
       pattern: '            .kv_get("anon", "duress-config")',
