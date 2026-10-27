@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Приёмка release-APK на устройстве: подпись → install -r → запуск →
-# крэш-маркеры → рестарты ×3.
+# крэш-маркеры → вердикт входа → рестарты → CDP-пробы → (опцией) канал звука.
+#
+# Два переключателя для приёмки ПОД ЖИВОЙ СЕССИЕЙ (правило #8 в AGENTS.md):
+#   VAULT_ACCEPT_RESTARTS=0  — не гнать волну повторных входов IMAP;
+#   VAULT_ACCEPT_CALL=1      — снять доказательство канала звонка (#71).
 #
 # Порядок релиза целиком — docs/RELEASE-RUNBOOK.md.
 #
@@ -38,6 +42,15 @@ APKSIGNER="$BUILD_TOOLS/apksigner"
 export VAULT_KEYSTORE="$HOME/.local/share/vault/vault-release.keystore"
 export VAULT_KEYSTORE_PASS="$(tr -d '\n' < "$HOME/.local/share/vault/keystore-pass.txt")"
 
+# Сколько рестартов делать ПОСЛЕ первого запуска. Каждый рестарт — это ещё один
+# вход IMAP на сервере почты, а Яндекс отвечает AUTHENTICATIONFAILED на всплеск
+# повторов даже с валидным паролем (правило #8 в AGENTS.md). Для приёмки поверх
+# БОЕВОГО аккаунта подают 0: проверка входа и UI снимается первым запуском и
+# CDP-пробами, а лишние логины ничего не измеряют.
+#   VAULT_ACCEPT_RESTARTS=0 scripts/device-accept-apk.sh
+RESTARTS="${VAULT_ACCEPT_RESTARTS:-3}"
+echo "цикл рестартов: $RESTARTS (0 = один запуск, меньше всего входов)"
+
 echo "=== 1. артефакт ==="
 ls -la "$APK" || { echo "НЕТ APK — собери: scripts/build-android-apk.sh"; exit 1; }
 "$AAPT" dump badging "$APK" | grep -E "^package:|versionCode|native-code" | head -5
@@ -72,8 +85,26 @@ echo "--- крэш-маркеры:"
 adb -s "$SER" logcat -d 2>/dev/null | grep -iE "FATAL EXCEPTION|ANR in com.vault|has died|UnsatisfiedLinkError" | head -10
 echo "(пусто = крэшей нет)"
 
-echo "=== 5. цикл рестартов ×3 ==="
-for i in 1 2 3; do
+# Вердикт входа после ПЕРВОГО запуска — до цикла рестартов. Смысл: если почта
+# ответила отказом, приложение гасится сразу, потому что каждый следующий
+# запуск — это ещё одна попытка входа, а на живом аккаунте всплеск повторов и
+# есть способ его потерять. На сборках старее 0.1.284 неудачный авто-вход ещё и
+# стирал сохранённый пароль; с #75 вердикт даёт ядро (vault::login_failure), и
+# креды трогает только явное действие человека — но останавливаться всё равно
+# нужно здесь, а не «попробовать ещё раз».
+echo "--- отказ входа:"
+AUTH=$(adb -s "$SER" logcat -d 2>/dev/null | grep -icE "AUTHENTICATIONFAILED|IMAP login failed|login failed|credentials kept|temporarily blocked|too many failed|invalid credentials")
+echo "  маркеров отказа: $AUTH"
+if [ "$AUTH" -gt 0 ]; then
+  adb -s "$SER" shell am force-stop com.vault.vault
+  adb -s "$SER" logcat -d 2>/dev/null | grep -iE "AUTHENTICATIONFAILED|IMAP login failed|login failed|credentials kept|temporarily blocked|too many failed|invalid credentials" | head -5
+  echo "!! отказ входа: приложение остановлено, приёмка ОСТАНОВЛЕНА (рестарты не гоним)"
+  echo "   Это инцидент, а не деталь приёмки — сообщить владельцу, не повторять."
+  exit 1
+fi
+
+echo "=== 5. цикл рестартов ×$RESTARTS ==="
+for i in $(seq 1 "$RESTARTS" 2>/dev/null); do
   adb -s "$SER" shell am force-stop com.vault.vault
   sleep 2
   adb -s "$SER" logcat -c
@@ -141,3 +172,28 @@ if [ "$PROBE_RC" -ne 0 ]; then
 fi
 
 echo "✓ CDP-приёмка принята"
+
+# Живая приёмка канала звука (#71). Хостовые меры (гейт ассетов, мутации,
+# cargo check --target aarch64) подтверждают только «имя → класс → признак в
+# вызове». Что гудок звучит именно в канале рингтона, а не в меди, знает только
+# динамик телефона. Шаг включается явно: звонить должен человек, а скрипт —
+# снять доказательство, а не «мне кажется, что было слышно».
+#   VAULT_ACCEPT_CALL=1 [VAULT_ACCEPT_CALL_WAIT=60] scripts/device-accept-apk.sh
+if [ "${VAULT_ACCEPT_CALL:-0}" = 1 ]; then
+  WAIT="${VAULT_ACCEPT_CALL_WAIT:-60}"
+  adb -s "$SER" logcat -c
+  echo "=== 7. канал звука: позвони сейчас (набор или принятие)"
+  echo "    условия: меди-громкость 0, громкость рингтона 15; жду ${WAIT}с"
+  sleep "$WAIT"
+  echo "--- что решил мост (таг VaultRust):"
+  adb -s "$SER" logcat -d 2>/dev/null | grep -E "call sound:|playCallSound" | tail -8
+  CS=$(adb -s "$SER" logcat -d 2>/dev/null | grep -c "call sound: .*ringtoneChannel=true")
+  if [ "${CS:-0}" -eq 0 ]; then
+    echo "✗ ни одной строки «call sound: … ringtoneChannel=true» — канал НЕ подтверждён"
+    echo "  (звонка не было, или звук пошёл мимо моста). Версию не публиковать."
+    exit 1
+  fi
+  echo "✓ гудок запрошен в канале рингтона — строк: $CS"
+  echo "--- уровни громкости (для журнала):"
+  adb -s "$SER" shell dumpsys audio 2>/dev/null | grep -iE "STREAM_RING|STREAM_MUSIC|ringtone" | head -8
+fi
