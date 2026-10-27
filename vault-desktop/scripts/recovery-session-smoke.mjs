@@ -114,7 +114,17 @@ function makeInvoke(cfg) {
   const impl = async (cmd, args) => {
     calls.log.push({ cmd, args });
     switch (cmd) {
-      case 'email_connect': bump('email_connect'); return true;
+      case 'email_connect':
+        bump('email_connect');
+        // Текст отказа, который сервер отдаёт живому ящику: мок умеет бросать
+        // его ровно как Tauri (строкой/Error), чтобы проверить, ЧТО уходит в
+        // ядро для классификации.
+        if (cfg.connectThrow) throw new Error(cfg.connectThrow);
+        return true;
+      case 'vault_classify_login_failure':
+        bump('vault_classify_login_failure');
+        if (cfg.classifyThrows) throw new Error('no such command');
+        return cfg.classifyResult || 'unknown';
       case 'load_credentials':
         bump('load_credentials');
         if (cfg.loadCreds === 'THROW') throw new Error('creds down');
@@ -346,6 +356,85 @@ console.log('\nмаркер блокирует авто-вход (новый Api
     (calls.counters.load_credentials || 0) === 0 && restored === false);
   check('restoreSession при маркере НЕ удаляет credentials',
     (calls.counters.delete_credentials || 0) === 0);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// 4b) Отказ авто-входа: вердикт берём у ядра, креды НЕ трогаем (#75)
+// ══════════════════════════════════════════════════════════════════
+// 27.10 на X50: двусмысленный ответ Яндекса прошёл по JS-ветке
+// «msg.includes('login failed') → delete_credentials», сохранённый app-пароль
+// стёрся, восстановление стоило недель. Проверки ниже не дают этой ветке
+// вернуться НИ ПО ОДНОМУ вердикту, включая «auth» — тот самый, что раньше и
+// удалял.
+console.log('\nотказ авто-входа (#75): классификация у ядра, удаления кредов нет:');
+{
+  const YANDEX_AMBIGUOUS =
+    'IMAP login failed: No Response: [AUTHENTICATIONFAILED] LOGIN invalid credentials or IMAP is disabled';
+  const creds = {
+    email: 'old@b.invalid', password: 'pw', imap_server: 'imap.b.invalid',
+    imap_port: 993, smtp_server: 'smtp.b.invalid', smtp_port: 587,
+  };
+  const cases = [
+    ['auth', 'вердикт «пароль не подходит»'],
+    ['disabled', 'вердикт «IMAP выключен»'],
+    ['throttled', 'вердикт «много попыток»'],
+    ['network', 'вердикт «нет связи»'],
+  ];
+  for (const [code, label] of cases) {
+    freshStore();
+    const cfg = { creds, connectThrow: YANDEX_AMBIGUOUS, classifyResult: code };
+    const { mod, calls } = await loadApi(cfg);
+    const api = new mod.ApiClient();
+    const unmute = mute();
+    const restored = await api.restoreSession();
+    unmute();
+    check(label + ': авто-вход → false', restored === false);
+    check(label + ': вердикт ядра лёг в lastRestoreError', api.lastRestoreError === code);
+    check(label + ': НЕ удаляет credentials',
+      (calls.counters.delete_credentials || 0) === 0);
+    check(label + ': сохранённые креды прочитаны (вход возможен снова)',
+      (calls.counters.load_credentials || 0) === 1);
+  }
+  // Контракт адаптера: в ядро уходит СЫРОЙ текст ошибки, а не вывод JS.
+  freshStore();
+  {
+    const cfg = { creds, connectThrow: YANDEX_AMBIGUOUS, classifyResult: 'disabled' };
+    const { mod, calls } = await loadApi(cfg);
+    const api = new mod.ApiClient();
+    const unmute = mute();
+    await api.restoreSession();
+    unmute();
+    const sent = calls.log.find((c) => c.cmd === 'vault_classify_login_failure');
+    check('текст ошибки передаётся в ядро без обработки фронтом',
+      !!sent && sent.args.message === YANDEX_AMBIGUOUS, sent && sent.args);
+  }
+  // Команды нет (старый мост, тестовая среда) → «не знаю», и всё равно не стираем.
+  freshStore();
+  {
+    const cfg = { creds, connectThrow: YANDEX_AMBIGUOUS, classifyThrows: true };
+    const { mod, calls } = await loadApi(cfg);
+    const api = new mod.ApiClient();
+    const unmute = mute();
+    const restored = await api.restoreSession();
+    unmute();
+    check('нет команды классификации → lastRestoreError = unknown',
+      restored === false && api.lastRestoreError === 'unknown');
+    check('нет команды классификации → НЕ удаляет credentials',
+      (calls.counters.delete_credentials || 0) === 0);
+  }
+  // Явное действие человека удаление кредов оставило: logout по-прежнему зовёт
+  // delete_credentials — иначе «забыть меня» на чужом устройстве стало бы
+  // невозможным.
+  freshStore();
+  {
+    const { mod, calls } = await loadApi({});
+    const api = new mod.ApiClient();
+    const unmute = mute();
+    await api.logout();
+    unmute();
+    check('logout человека по-прежнему стирает credentials',
+      (calls.counters.delete_credentials || 0) === 1);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════

@@ -101,6 +101,24 @@ pub fn vault_timings_snapshot() -> vault_client::vault::timings::TimingsSnapshot
     vault_client::vault::timings::snapshot()
 }
 
+/// Вердикт по отказу входа — из ядра, а не из `msg.includes(...)` во фронте.
+///
+/// ЗАЧЕМ. `src/api.js` сам решал по тексту ответа, что «пароль отвергнут», и
+/// в этой ветке стирал сохранённые креды. Двусмысленный ответ Яндекса
+/// («invalid credentials or IMAP is disabled») попадал в ту же ветку, и одна
+/// неудачная минута на живом X50 стоила недель восстановления входа (27.10).
+/// Теперь классификация в `vault::login_failure` (меряется мутациями
+/// `rust-login-failure`), а фронт по этому вердикту креды НЕ трогает.
+///
+/// Возвращает стабильный код (`auth`/`disabled`/`throttled`/`network`/
+/// `unknown`) — ключ для локали и для `api.lastRestoreError`.
+#[tauri::command]
+pub fn vault_classify_login_failure(message: String) -> String {
+    vault_client::vault::login_failure::classify(&message)
+        .code()
+        .to_string()
+}
+
 /// ADR-005 R1 / W4: правило времени жизни сообщения — в Rust.
 /// JS не считает «когда истечёт» сам: он получает готовые значения отсюда.
 ///

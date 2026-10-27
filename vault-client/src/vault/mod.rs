@@ -22,6 +22,7 @@ pub mod group_rules;
 pub use vault_core::identity;
 pub mod invite;
 pub mod imap_dialect;
+pub mod login_failure;
 pub mod key_escrow;
 pub mod kitty;
 pub mod attachments;

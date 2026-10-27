@@ -10,6 +10,8 @@ export default {
   restoring_session: '正在连接邮箱…',
   restore_failed_auth: '邮箱/密码组合无效：密码已被更改或撤销。请重新输入密码。',
   restore_failed_network: '无法连接到邮箱：服务器不可达或 IMAP/SMTP 设置已更改。请检查网络或打开“服务器设置”。',
+  restore_failed_throttled: '连续登录尝试过多——服务器要求稍候。已保存的密码未被删除：请等待几分钟后重新登录。',
+  restore_failed_imap_disabled: '邮件服务器拒绝了 IMAP 访问：服务商可能关闭了“邮件客户端”访问权限。我们未删除已保存的密码——请开启该权限后稍后重新登录。',
   restore_failed_generic: '自动登录失败，请重新登录。',
   server_settings: '服务器设置',
   server_hint: '留空则使用默认值（Gmail）。',

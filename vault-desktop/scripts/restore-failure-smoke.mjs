@@ -31,6 +31,36 @@ ok('ключ локали и запасной текст лежат в одно�
   && R.RESTORE_ERRORS.auth.fallback !== R.RESTORE_ERRORS.generic.fallback);
 ok('network → ключ network', R.restoreErrorMessage('network', t) === 'NET');
 
+// Два новых вердикта ядра (#75): «IMAP выключен» и «много попыток». Смысл в
+// том, что человек НЕ обязан вводить пароль заново — сохранённый не удалён, и
+// вход вернётся сам. Общий текст этого не говорит, поэтому каждый обязан иметь
+// СВОЁ объяснение и СВОЙ ключ.
+for (const reason of ['disabled', 'throttled']) {
+  ok(reason + ' → собственный ключ, не generic',
+    R.RESTORE_ERRORS[reason]
+    && R.RESTORE_ERRORS[reason].key !== R.RESTORE_ERRORS.generic.key
+    && R.RESTORE_ERRORS[reason].fallback !== R.RESTORE_ERRORS.generic.fallback);
+  ok(reason + ' → объяснение из своего ключа, не пустота',
+    R.restoreErrorMessage(reason, (k) => R.RESTORE_ERRORS[reason].key === k ? 'OK-' + reason : undefined)
+      === 'OK-' + reason);
+}
+
+// Ключ, которого нет ни в одной локали, — тот же дефект, что рассинхрон
+// ключа и запасного текста: t() вернёт undefined, и человек увидит запасной
+// русский текст даже в английской/китайской сборке. Порог — «не пусто и не
+// одна буква», а не фиксированные 20 символов: китайская формулировка короче
+// при том же смысле, и проверка на длину > 20 падала на валидном переводе.
+const locales = {};
+for (const l of ['ru', 'en', 'zh']) {
+  locales[l] = (await import(path.join(ROOT, 'src', 'locales', l + '.js'))).default;
+}
+for (const [reason, e] of Object.entries(R.RESTORE_ERRORS)) {
+  for (const l of ['ru', 'en', 'zh']) {
+    ok(`${reason}: ключ ${e.key} есть в локали ${l}`,
+      typeof locales[l][e.key] === 'string' && locales[l][e.key].trim().length >= 5);
+  }
+}
+
 // Всё остальное — «не знаю», и обязано давать объяснение, а не пустоту.
 for (const reason of [undefined, null, '', 'unknown-reason', 0, 'AUTH']) {
   const m = R.restoreErrorMessage(reason, t);

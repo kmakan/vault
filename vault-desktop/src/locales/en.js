@@ -10,6 +10,8 @@ export default {
   restoring_session: 'Connecting to your mailbox…',
   restore_failed_auth: 'The email/password pair did not work: the password was changed or revoked. Please enter your password again.',
   restore_failed_network: 'Could not connect to your mailbox: the server is unreachable or the IMAP/SMTP settings have changed. Check your internet or open “Server settings”.',
+  restore_failed_throttled: 'Too many sign-in attempts in a row — the server asks you to wait. Your saved password was not deleted: wait a few minutes and sign in again.',
+  restore_failed_imap_disabled: 'The mail server refused IMAP access: your provider may have disabled “Mail clients” access. We did not delete your saved password — enable access and try signing in later.',
   restore_failed_generic: 'Automatic sign-in failed. Please sign in again.',
   server_settings: 'Server settings',
   server_hint: 'Leave empty to use the defaults (Gmail).',

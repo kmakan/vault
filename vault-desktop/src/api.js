@@ -301,18 +301,25 @@ export class ApiClient {
         smtp_port: creds.smtp_port,
       });
     } catch (e) {
-      const msg = String((e && e.message) || e).toLowerCase();
-      // Стирать сохранённые учётные данные можно ТОЛЬКО при отказе
-      // аутентификации (пароль сменён/отозван). Сетевая ошибка при старте
-      // (нет интернета) не должна терять пароль — иначе авто-вход сломается.
-      if (msg.includes('login failed') || msg.includes('authentication')) {
-        console.error('Auto-login: saved password rejected, clearing it:', e);
-        try { await invoke('delete_credentials'); } catch (_) { /* ignore */ }
-        this.lastRestoreError = 'auth';
-      } else {
-        console.error('Auto-login: connection failed (credentials kept):', e);
-        this.lastRestoreError = 'network';
+      const raw = String((e && e.message) || e);
+      // Классификация отказа — в ядре (`vault::login_failure`, мутации
+      // `rust-login-failure`), потому что это решение по строке провайдера.
+      // Раньше здесь было `msg.includes('login failed') → delete_credentials`,
+      // и на живом X50 (27.10) двусмысленный ответ Яндекса «invalid credentials
+      // or IMAP is disabled» проходил по этой ветке: сохранённый app-пароль
+      // стирался, а восстановление его — дни. Правило теперь такое: НИКАКОЙ
+      // отказ входа не удаляет креды. Удаляет их только явное действие
+      // человека (`logout`, удаление ящика).
+      let reason = 'unknown';
+      try {
+        reason = await invoke('vault_classify_login_failure', { message: raw });
+      } catch (classifyErr) {
+        // Нет команды/не ответила — не гадаем по тексту: «не знаю» даёт общий
+        // текст ошибки и тоже ничего не стирает.
+        console.error('login-failure classification unavailable:', classifyErr);
       }
+      this.lastRestoreError = reason;
+      console.error('Auto-login: connection failed (credentials kept):', e);
       return false;
     }
     this.email = creds.email;
