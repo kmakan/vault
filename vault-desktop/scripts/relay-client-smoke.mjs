@@ -83,8 +83,21 @@ let pubStatus = 0;
 let pubBody = '';
 const setPub = (status, body) => { pubStatus = status; pubBody = body; };
 const clearPub = () => { pubStatus = 0; pubBody = ''; };
+// Ответ GET /turn (временные TURN-креды) задаётся отдельно: свой статус и
+// своё тело, остальные роуты живут на respStatus/respToken.
+let turnStatus = 0;
+let turnBody = null;
 globalThis.fetch = async (url, opts) => {
   fetchCalls.push({ url, opts });
+  const isTurn = /\/turn$/.test(String(url));
+  if (isTurn && turnStatus) {
+    return {
+      ok: turnStatus >= 200 && turnStatus < 300,
+      status: turnStatus,
+      text: async () => '',
+      json: async () => turnBody,
+    };
+  }
   const isPub = /\/pub$/.test(String(url));
   const status = isPub && pubStatus ? pubStatus : respStatus;
   return {
@@ -315,7 +328,111 @@ console.log('9. relayPublish — 429 «daily relay limit» гасит pub до �
   clearPub();
 }
 
+// ── 12. fetchTurnCredentials: временные TURN-креды ─────────────
+// Без relay-кандидата звонок возможен только внутри одной Wi-Fi, а телефоном
+// пользуются в сети оператора. Креды выдаёт релей и живут час, поэтому
+// важны четыре правила: не жечь квоту на каждый звонок (кэш), обновить до
+// истечения (запас 120 с), при отказе релея НЕ срывать звонок (null = STUN),
+// и не принимать битый ответ (пустые поля = null, иначе webrtc-rs падает на
+// «turn server credentials required»).
+console.log('12. fetchTurnCredentials — TURN-креды и их кэш');
+{
+  // monoNow() читает performance — подменяем часы, чтобы ловить границу
+  // обновления (иначе тест ждал бы реальный час). timeOrigin НЕ нулевой:
+  // monoNow трактует 0 как «нет performance» и уходит на Date.now().
+  let fakeSec = 1_700_000_000;
+  const realPerf = globalThis.performance;
+  globalThis.performance = { timeOrigin: 1, now: () => fakeSec * 1000 };
+
+  kv.clear();
+  setRelays([{ url: RELAY_URL, myToken: 'TOK', label: 'Vault' }]);
+  fetchCalls.length = 0;
+  turnStatus = 200;
+  turnBody = { username: (fakeSec + 3600) + ':tag', credential: 'CRED-1',
+    uris: ['turn:h:3478', 'turn:h:3478?transport=tcp'], ttl: 3600 };
+
+  const first = await RC.fetchTurnCredentials('me@x.ru');
+  const turnCalls = () => fetchCalls.filter(c => /\/turn$/.test(String(c.url)));
+  check('креды получены', !!first && first.credential === 'CRED-1');
+  check('запрос на /relay/turn', turnCalls().length === 1 && turnCalls()[0].url === RELAY_URL + '/turn');
+  check('токен в Authorization', /VaultRelay TOK/.test(JSON.stringify(Object.values(turnCalls()[0].opts.headers))));
+  check('uris и username переданы как есть',
+    first.uris.length === 2 && first.username === ((fakeSec + 3600) + ':tag'));
+
+  // Повторный звонок через минуту: из кеша, без нового запроса (квота издателя).
+  fakeSec += 60;
+  const second = await RC.fetchTurnCredentials('me@x.ru');
+  check('второй вызов взят из кеша (без запроса)',
+    second.credential === 'CRED-1' && turnCalls().length === 1);
+
+  // До истечения осталось 100 с (< запас 120) → обновляем.
+  fakeSec += 3600 - 100;
+  turnBody = { username: (fakeSec + 3600) + ':tag', credential: 'CRED-2',
+    uris: ['turn:h:3478'], ttl: 3600 };
+  const third = await RC.fetchTurnCredentials('me@x.ru');
+  check('у границ запаса креды обновлены',
+    third.credential === 'CRED-2' && turnCalls().length === 2);
+
+  // Релей отказал (нет конфигурации / 401 / 429), а полученные креды ещё в
+  // силе: запрос всё равно нужен (до обновления осталось меньше запаса), и
+  // звонок идёт на прежней паре, а не срывается.
+  fakeSec += 3540; // осталось 60 с — меньше запаса 120 с, кэш уже не отвечает сам
+  turnStatus = 429;
+  const stale = await RC.fetchTurnCredentials('me@x.ru');
+  check('отказ релея при живых кэшированных кредах = прежние креды',
+    stale && stale.credential === 'CRED-2', stale && 'null');
+  check('отказ действительно был запросом', turnCalls().length === 3, turnCalls().length);
+
+  // Креды протухли и релей отказал — null: мост останется на STUN.
+  fakeSec += 3600;
+  const none = await RC.fetchTurnCredentials('me@x.ru');
+  check('протухшие креды + отказ = null (STUN-only)', none === null);
+
+  // Срок читаем из ответа, а не из головы: релей вправе выдать меньше часа.
+  // «Вечный» кэш отдавал бы протухшую пару, coturn её отвергает — и
+  // relay-кандидата как не бывало.
+  turnStatus = 200;
+  turnBody = { username: (fakeSec + 60) + ':tag', credential: 'CRED-3',
+    uris: ['turn:h:3478'], ttl: 60 };
+  const short = await RC.fetchTurnCredentials('me@x.ru');
+  check('короткий ttl из ответа принят',
+    !!short && short.credential === 'CRED-3' && turnCalls().length === 5, turnCalls().length);
+  fakeSec += 70;
+  turnBody = { username: (fakeSec + 60) + ':tag', credential: 'CRED-4',
+    uris: ['turn:h:3478'], ttl: 60 };
+  const after = await RC.fetchTurnCredentials('me@x.ru');
+  check('по истечении ttl креды обновлены (срок берём из ответа)',
+    !!after && after.credential === 'CRED-4' && turnCalls().length === 6, turnCalls().length);
+
+  // Без токена спрашивать нечего: запрос к /turn с пустым Authorization —
+  // гарантированный 401 и зря потраченный сетевой раунд на старте звонка.
+  turnStatus = 0;
+  const callsBefore = turnCalls().length;
+  kv.clear();
+  setRelays([{ url: RELAY_URL, myToken: '', label: 'Vault' }]);
+  check('без myToken запрос не уходит',
+    (await RC.fetchTurnCredentials('me@x.ru')) === null && turnCalls().length === callsBefore,
+    turnCalls().length - callsBefore);
+
+  // Битый ответ (пустые поля) не уходит в мост: webrtc-rs отвергает TURN без
+  // username/credential и звонок падал бы на сборке PeerConnection.
+  kv.clear();
+  setRelays([{ url: RELAY_URL, myToken: 'TOK', label: 'Vault' }]);
+  turnStatus = 200;
+  turnBody = { username: '', credential: '', uris: [] };
+  check('пустые поля ответа = null', (await RC.fetchTurnCredentials('me@x.ru')) === null);
+
+  turnStatus = 503; turnBody = null;
+  fakeSec += 120; // прежняя пара к этому моменту уже истекла
+  kv.clear();
+  setRelays([{ url: RELAY_URL, myToken: 'TOK', label: 'Vault' }]);
+  check('503 (релей без TURN) = null', (await RC.fetchTurnCredentials('me@x.ru')) === null);
+
+  globalThis.performance = realPerf;
+  turnStatus = 0;
+  turnBody = null;
+}
+
 console.log('');
 console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
-process.exit(fail ? 1 : 0);
 process.exit(fail ? 1 : 0);

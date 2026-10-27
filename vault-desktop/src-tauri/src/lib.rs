@@ -2583,6 +2583,7 @@ pub fn run() {
             // и таймаут при смахнутом приложении). Android — JNI, desktop no-op.
             media::sync_call_prefs,
             media::media_set_ice_servers,
+            media::media_set_turn,
             // Рингтон входящего звонка (cpal, не webview — работает и со
             // свёрнутым окном; autoplay-политика WebKitGTK не мешает).
             media::media_ringtone_start,

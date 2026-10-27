@@ -50,5 +50,30 @@ export default {
     { name: "fail-open без команды моста = «лимит дня» (ускорение гаснет на сутки)",
       pattern: "  return { kind: 'rate', retryAfter: null };",
       replacement: "  return { kind: 'daily', retryAfter: null };" },
+    // ── Временные TURN-креды (т_18b4d871, смоук 12). Вне одной Wi-Fi без
+    // relay-кандидата звонка нет, поэтому проверяются четыре правила: кэш
+    // (не жжём суточную квоту), запас на обновление, срок из ответа релея и
+    // тихий отказ вместо сорванного звонка.
+    { name: "кэш кредов не используется (каждый звонок тратит квоту издателя)",
+      pattern: "    if (stale && stale.expiresAt - now > 120) return stale.creds;",
+      replacement: "    void 0;" },
+    { name: "запас на обновление съеден (пара доезжает до coturn уже протухшей)",
+      pattern: "    if (stale && stale.expiresAt - now > 120) return stale.creds;",
+      replacement: "    if (stale && stale.expiresAt > now) return stale.creds;" },
+    { name: "срок берётся из головы, а не из ответа (короткий ttl не обновляется)",
+      pattern: "      expiresAt: now + (Number(body.ttl) || 3600),",
+      replacement: "      expiresAt: now + 3600," },
+    { name: "отказ релея роняет креды вместо прежней живой пары (звонок с STUN)",
+      pattern: "      return stale && stale.expiresAt > now ? stale.creds : null;",
+      replacement: "      return null;" },
+    { name: "битый ответ принимается как валидные креды (webrtc-rs отвергает TURN без полей)",
+      pattern: "    if (!creds.uris.length || !creds.username || !creds.credential) return null;",
+      replacement: "    if (false) return null;" },
+    { name: "пустой токен всё равно уходит в релей (401 на каждом звонке)",
+      pattern: "    if (!url || !token) return null;",
+      replacement: "    if (!url) return null;" },
+    { name: "токен в заголовке не передаётся (релей не знает, кому выдавать)",
+      pattern: "    const token = (relay && relay.myToken) || '';",
+      replacement: "    const token = '';" },
   ],
 };

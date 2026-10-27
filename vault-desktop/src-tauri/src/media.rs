@@ -420,6 +420,37 @@ impl CallMediaManager {
             .collect();
     }
 
+    /// Временные TURN-креды от релея (схема coturn `use-auth-secret`, см.
+    /// `vault-relay/src/turn.rs`): заменяют в списке ТОЛЬКО relay-запись,
+    /// STUN-основа остаётся.
+    ///
+    /// Отдельно от `set_ice_servers` по двум причинам: тот затирает весь
+    /// список (вместе со STUN) и не умеет нести пароль, а пустые username/
+    /// credential с `turn:`-URL webrtc-rs отвергает при создании PC
+    /// («turn server credentials required») — то есть «кредов нет» обязано
+    /// означать «relay убран, звонок на host/srflx», а не упавший звонок.
+    /// Применяется к звонкам, начатым ПОСЛЕ вызова (конфиг читается в
+    /// `build_pc`).
+    pub fn set_turn(&mut self, uris: Vec<String>, username: String, credential: String) {
+        self.ice_servers
+            .retain(|s| !s.urls.iter().any(|u| u.starts_with("turn")));
+        if username.is_empty() || credential.is_empty() || uris.is_empty() {
+            eprintln!("[media] TURN creds cleared — STUN only");
+            return;
+        }
+        // Метку (хэш очереди) в лог не пишем: достаточно срока и числа URL.
+        eprintln!(
+            "[media] TURN creds applied ({} uri, до {}) — relay-кандидат ждём в SDP",
+            uris.len(),
+            username.split(':').next().unwrap_or("?")
+        );
+        self.ice_servers.push(RTCIceServer {
+            urls: uris,
+            username,
+            credential,
+        });
+    }
+
     /// Build a PeerConnection with an Opus audio track — and, when `with_video`
     /// is set, a SECOND VP8 video track on the same PC (audio untouched).
     ///
@@ -1478,6 +1509,21 @@ pub async fn media_set_ice_servers(
     Ok(())
 }
 
+/// Временные TURN-креды от релея → ICE-конфиг звонков. Фронт получает пару
+/// из `GET /relay/turn` и передаёт сюда; пустой username = «кредов нет»
+/// (релей недоступен/квота) — relay убирается, звонок остаётся STUN-only.
+#[tauri::command]
+pub async fn media_set_turn(
+    uris: Vec<String>,
+    username: String,
+    credential: String,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.set_turn(uris, username, credential);
+    Ok(())
+}
+
 /// Рингтон входящего звонка: включает гудки
 /// 440 Гц через cpal (независимо от webview/autoplay). Вызывается из фронта
 /// при call_request, отключается при accept/reject/timeout/hangup.
@@ -1733,5 +1779,62 @@ mod tests {
         let senders = pc.get_senders().await;
         assert_eq!(senders.len(), 1, "audio call must have exactly one sender");
         pc.close().await.expect("close");
+    }
+
+    /// TURN-креды от релея: список ICE обязан пережить любую очередь
+    /// «выдача → отзыв» и не терять STUN. Молчаливая потеря STUN стоила бы
+    /// звонков в одной LAN (relay-кандидат есть, srflx — нет), молчаливый
+    /// возврат TURN после отзыва — падение PC на пустом пароле.
+    #[test]
+    fn turn_creds_zamenyayut_relay_i_ne_trogayut_stun() {
+        let mut mgr = CallMediaManager::new();
+        let stun_before = mgr
+            .ice_servers
+            .iter()
+            .filter(|s| s.urls.iter().any(|u| u.starts_with("stun")))
+            .count();
+        assert!(stun_before > 0, "STUN-основа обязана быть в конфиге");
+
+        mgr.set_turn(
+            vec!["turn:h:3478".into(), "turn:h:3478?transport=tcp".into()],
+            "1700000000:tag".into(),
+            "secret".into(),
+        );
+        let turn: Vec<_> = mgr
+            .ice_servers
+            .iter()
+            .filter(|s| s.urls.iter().any(|u| u.starts_with("turn")))
+            .collect();
+        assert_eq!(turn.len(), 1, "одна relay-запись, обе схемы URL в ней");
+        assert_eq!(turn[0].urls.len(), 2);
+        assert_eq!(turn[0].username, "1700000000:tag");
+        assert_eq!(
+            mgr.ice_servers
+                .iter()
+                .filter(|s| s.urls.iter().any(|u| u.starts_with("stun")))
+                .count(),
+            stun_before,
+            "STUN не затирается"
+        );
+
+        // Вторая выдача (пара продлена) — по-прежнему ОДНА relay-запись.
+        mgr.set_turn(vec!["turn:h:3478".into()], "1800000000:tag".into(), "s2".into());
+        assert_eq!(
+            mgr.ice_servers
+                .iter()
+                .filter(|s| s.urls.iter().any(|u| u.starts_with("turn")))
+                .count(),
+            1,
+            "перевыдача не копит relay-записи"
+        );
+
+        // Отзыв (кредов нет / квота / релей недоступен) — снова STUN-only.
+        mgr.set_turn(vec!["turn:h:3478".into()], String::new(), String::new());
+        assert!(
+            !mgr.ice_servers
+                .iter()
+                .any(|s| s.urls.iter().any(|u| u.starts_with("turn"))),
+            "пустой username обязан убрать relay: webrtc-rs падает на turn: без пароля"
+        );
     }
 }

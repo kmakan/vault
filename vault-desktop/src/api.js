@@ -1499,6 +1499,14 @@ export class ApiClient {
   async mediaSetIceServers(urls) {
     return await invoke('media_set_ice_servers', { urls });
   }
+  // Временные TURN-креды от релея (media_set_turn) — вызываются ДО создания
+  // PeerConnection. Пустые/нет kredov — мост чистит relay и остаётся STUN.
+  async mediaApplyTurn(creds) {
+    if (!creds) return;
+    return await invoke('media_set_turn', {
+      uris: creds.uris || [], username: creds.username || '', credential: creds.credential || '',
+    });
+  }
   // Рингтон входящего звонка (cpal-поток в Rust; см. media_ringtone_start).
   async mediaRingtoneStart() {
     return await invoke('media_ringtone_start');

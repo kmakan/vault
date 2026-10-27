@@ -453,6 +453,9 @@ export async function handleCallSignal(deps, sig, from) {
         kemct: sig.kemct || null, senderEk: sig.sender_ek || null,
       });
       useSession().setLastCallId(call_id);
+      // Креды TURN греются, пока человек свайпает «Ответить»: GET релея
+      // занимает ~100 мс, в acceptCall они уже в кеше.
+      armTurn();
       await applyCallState('request_received');
       useSession().setMuted(false);
       useSession().state.callStartedAt = Date.now();
@@ -525,6 +528,7 @@ export async function handleCallSignal(deps, sig, from) {
             }
           } else {
             try {
+              await armTurn();
               const r = await api.mediaAcceptIncoming(call_id, sig.sdp, identityStore.state.peerKeys[from] || '', sig.kemct || null, true);
               console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
               const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
@@ -599,6 +603,18 @@ export async function handleCallSignal(deps, sig, from) {
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────
+
+// TURN до создания PeerConnection: мост берёт ice_servers в момент сборки PC,
+// поэтому часы релея-кредов должны быть записаны заранее. Неудача тихая —
+// звонок идёт по STUN (как до этой правки), а не срывается.
+async function armTurn() {
+  try {
+    await api.mediaApplyTurn(await relay.fetchTurnCredentials(sessionStore.getCurrentEmail()));
+  } catch (e) {
+    console.log('[call] TURN not applied:', e && e.message || e);
+  }
+}
+
 // Кнопка «Позвонить» в шапке чата (1:1, есть ключ собеседника).
 export async function startCall(deps) {
   const peer = chatStore.state.activeChat;
@@ -633,6 +649,7 @@ export async function startCall(deps) {
   // старую схему (offer принимающего внутри call_accept).
   let offerSdp = null;
   try {
+    await armTurn();
     const r = await api.mediaStartOutgoing(call_id, identityStore.state.peerKeys[peer] || '', (identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[peer]) || null, true);
     offerSdp = r.sdp;
     // PQ: kemct из SdpResult — поедет в call_request-конверте
@@ -724,6 +741,7 @@ export async function acceptCall(deps) {
   // accept+offer → answer). Fallback (старая версия звонящего без
   // offer): создаём offer сами внутри call_accept.
   try {
+    await armTurn();
     let acceptPayload;
     if (c.offerSdp) {
       const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, identityStore.state.peerKeys[c.peer] || '', c.kemct || null, true);

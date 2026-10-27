@@ -1012,6 +1012,61 @@ export async function fetchTokenInfo(account, relayUrl) {
   }
 }
 
+// ───────────────────────── TURN (временные креды) ─────────────────────────
+// Без relay-кандидата WebRTC соединяет только пару устройств внутри одной
+// Wi-Fi, а телефоном пользуются в сети оператора. Креды выдаёт релей
+// (GET /relay/turn) и живут час — в APK постоянный TURN-пароль лежать не
+// может, его достаточно вытащить из сборки.
+//
+// Кэш по URL релея: повторный звонок через минуту не тратит суточную квоту
+// издателя. Обновляем за 2 минуты до истечения, чтобы PeerConnection не
+// осталась с протухшей парой. Ошибка (503/401/429) = null: звонок идёт как
+// раньше, на STUN, а не срывается.
+let turnCache = null; // { relayUrl, expiresAt, creds }
+
+export async function fetchTurnCredentials(account) {
+  try {
+    account = await accountNamespace(account);
+    const { relays, active } = await getSettings(account);
+    // Флаг relay-enabled не проверяем сознательно: звонок живёт и в классическом
+    // режиме, а relay-кандидат нужен именно там, где релей для доставки не
+    // используется — в другой сети.
+    const relay = relays[active] || relays[0];
+    const url = relay && normalizeRelayUrl(relay.url);
+    const token = (relay && relay.myToken) || '';
+    if (!url || !token) return null;
+    const now = monoNow();
+    const stale = turnCache && turnCache.relayUrl === url ? turnCache : null;
+    if (stale && stale.expiresAt - now > 120) return stale.creds;
+    const res = await rfetch(url + '/turn', {
+      method: 'GET',
+      headers: authHeader(token),
+      connectTimeout: 8000,
+    });
+    if (!res.ok) {
+      console.log('[turn] credentials refused:', res.status);
+      return stale && stale.expiresAt > now ? stale.creds : null;
+    }
+    const body = await res.json();
+    const creds = {
+      uris: Array.isArray(body.uris) ? body.uris : [],
+      username: body.username || '',
+      credential: body.credential || '',
+    };
+    if (!creds.uris.length || !creds.username || !creds.credential) return null;
+    turnCache = {
+      relayUrl: url,
+      expiresAt: now + (Number(body.ttl) || 3600),
+      creds,
+    };
+    console.log('[turn] credentials issued for', creds.uris.length, 'uri, до', creds.username.split(':')[0]);
+    return creds;
+  } catch (e) {
+    console.log('[turn] fetch failed:', e && e.message || e);
+    return null;
+  }
+}
+
 // POST /relay/purchase/checkout — создать платёжную сессию.
 export async function purchaseCheckout(account, plan, months) {
   try {
