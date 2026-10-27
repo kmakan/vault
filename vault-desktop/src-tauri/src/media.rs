@@ -733,6 +733,27 @@ impl CallMediaManager {
         Ok((pc, track, video_ssrc, gather_rx))
     }
 
+    /// Сколько кандидатов какого типа прислал пир. Без этой меры звонок вне
+    /// одной сети неотличим от «пир не собрал relay»: на LTE прямой путь
+    /// обычно режется CGNAT, и соединиться можно только через TURN — если
+    /// креды не успели до создания offer, у пира relay-кандидатов нет и ICE
+    /// развалится молча, а в логе останется только «не соединились за 90с».
+    fn log_remote_sdp(desc: &RTCSessionDescription, tag: &str) {
+        let count = |kind: &str| {
+            desc.sdp
+                .lines()
+                .filter(|l| l.starts_with("a=candidate:") && l.contains(&format!(" typ {kind}")))
+                .count()
+        };
+        eprintln!(
+            "[media] remote SDP ({tag}): candidates={} (host={}, srflx={}, relay={})",
+            desc.sdp.matches("a=candidate:").count(),
+            count("host"),
+            count("srflx"),
+            count("relay"),
+        );
+    }
+
     /// Wait for non-trickle ICE gathering; return the local SDP as a JSON
     /// string (RTCSessionDescription), or Err on timeout.
     async fn wait_for_local_sdp(
@@ -825,6 +846,7 @@ impl CallMediaManager {
 
         let offer: RTCSessionDescription =
             serde_json::from_str(offer_sdp).map_err(|e| e.to_string())?;
+        Self::log_remote_sdp(&offer, "caller offer");
         pc.set_remote_description(offer)
             .await
             .map_err(|e| e.to_string())?;
@@ -853,6 +875,7 @@ impl CallMediaManager {
             .ok_or_else(|| "call not found".to_string())?;
         let desc: RTCSessionDescription =
             serde_json::from_str(sdp_json).map_err(|e| e.to_string())?;
+        Self::log_remote_sdp(&desc, "peer answer");
         session
             .pc
             .set_remote_description(desc)
