@@ -114,6 +114,16 @@ Long-poll fallback (корпоративные прокси, desktop-эконо�
 ```
 GET /relay/poll?wait=25   → 200 [конверты] | 204 таймаут цикла
 ```
+Временные TURN-креды для звонков (схема coturn `use-auth-secret`):
+```
+GET /relay/turn
+Authorization: VaultRelay <read-token>
+→ 200 {"username":"<истечение>:<hash>","credential":"base64(HMAC-SHA1)","ttl":3600,
+       "uris":["turn:host:3478","turn:host:3478?transport=tcp"]}
+→ 403 канальный токен | 402 просроченная подписка | 429 бюджет релея исчерпан
+```
+Креды берутся ДО сборки PeerConnection; любой отказ = «звоним по STUN», а не
+сорванный звонок. Подробности — `docs/deployment/turn-coturn.md`.
 
 ### 5.3 Дедупликация и порядок
 - `id` конверта — глобальный (уже генерируется как envelope id); приёмник

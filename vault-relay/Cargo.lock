@@ -1721,6 +1721,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tokio",
  "tower-http 0.5.2",

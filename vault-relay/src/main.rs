@@ -44,6 +44,11 @@ pub struct AppState {
     pub require_sig: bool,
     /// Промо-ключ безлимита (VAULT_RELAY_UNLIMITED_KEY): тестерам/владельцу.
     pub unlimited_key: Option<String>,
+    /// TURN REST (звонки вне одной подсети): секрет coturn `use-auth-secret`
+    /// и хост. None = `VAULT_TURN_SECRET` не задан → /relay/turn отвечает 503,
+    /// а клиент остаётся на STUN (поведение прежних сборок, а не фиктивный
+    /// «успех» с пустыми кредами — их webrtc-rs отвергает при создании PC).
+    pub turn: Option<vault_relay::turn::TurnConfig>,
     /// §0 company.md: суточный лимит конвертов на издателя. Ключ — hash
     /// токена издателя (или IP при анонимном pub без tok), значение —
     /// (день UTC = now/86400, счётчик). ПЕРСИСТ: рестарт релея иначе
@@ -101,8 +106,7 @@ pub struct AppState {
     /// FCM Part B: отправитель пушей Firebase Cloud Messaging v1. None =
     /// FCM выключен (нет VAULT_FCM_KEY/файла/валидного ключа) — доставка
     /// «будильника» идёт через ntfy-мост, поведение как до FCM.
-    pub fcm: Option<Arc<FcmSender>>,
-    /// FCM-регистрация получателя: hash(read-токен) → FCM reg_token.
+    pub fcm: Option<Arc<FcmSender>>,    /// FCM-регистрация получателя: hash(read-токен) → FCM reg_token.
     /// Заполняется POST /relay/fcm/register. ПЕРСИСТИТСЯ в state.json
     /// (VAULT_RELAY_STATE): без этого рестарт релея обнулял карту, клиент
     /// не перерегистрировался (кэш в prefs переживал рестарт), и при
@@ -204,6 +208,7 @@ impl AppState {
                     .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
                     .unwrap_or(true),
             ),
+            turn: vault_relay::turn::TurnConfig::from_env(),
         }
     }
 
@@ -2008,6 +2013,77 @@ async fn relay_tokens_info(
         .into_response()
 }
 
+/// GET /relay/turn — ВРЕМЕННЫЕ TURN-креды (звонки вне одной подсети).
+///
+/// Без relay-кандидата ICE собирается только на host/srflx, и звонок живёт
+/// ровно внутри одной Wi-Fi: телефон на LTE/CGNAT оператора к десктопу не
+/// подключается вообще. Поэтому выдаём пару по схеме coturn
+/// `use-auth-secret` (см. vault_relay::turn): статический секрет наружу не
+/// уезжает никогда, а выданная пара протухает через CRED_TTL сама — coturn
+/// читает срок из username.
+///
+/// Квота — на сервере (наше правило: клиент лимит не поднимает) и ОБЩАЯ с
+/// конвертами: выдача кредитов тратит один из суточных лимита релея токена —
+/// тот же порог (`daily_limit_for_token`) и тот же ключ счётчика (`t:<hash>`),
+/// что у publish. Мера одна: «сколько раз за сутки ты воспользовался рлеем». Её
+/// и продаём в тарифе, и объясняем в магазине, вместо второго непонятного
+/// числа. Рестарт релея лимит не обнуляет — счётчик персистентный.
+async fn relay_turn(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(cfg) = app.turn.as_ref() else {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "turn not configured");
+    };
+    let Some(token) = auth_header(&headers) else {
+        return err(StatusCode::UNAUTHORIZED, "missing token");
+    };
+    let Some(t) = vault_relay::parse(&app.keys, &token) else {
+        return err(StatusCode::UNAUTHORIZED, "bad token");
+    };
+    if t.is_expired() {
+        return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
+    }
+    // Канальный токен — не аккаунт звонящего: права на relay-трафик нет.
+    // Отдельно от квоты: у канала свой общий бюджет, и отказывать надо до
+    // его расхода, а не после 429.
+    if t.scope.is_channel() {
+        return err(StatusCode::FORBIDDEN, "channel token");
+    }
+    let limit = daily_limit_for_token(&t, app.free_daily_limit);
+    if let Some(limit) = limit.filter(|l| *l > 0) {
+        let day = now() / 86400;
+        let retry_after = {
+            let mut map = app.daily_pub.lock().unwrap();
+            tally_daily(&mut map, &format!("t:{}", t.hash), day, limit, now())
+        };
+        if let Some(retry_after) = retry_after {
+            app.metrics.limit_hit.fetch_add(1, Ordering::Relaxed);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("retry-after", retry_after.to_string())],
+                AxumJson(serde_json::json!({
+                    "error": "daily relay limit reached",
+                    "limit": limit,
+                    "retry_after": retry_after,
+                })),
+            )
+                .into_response();
+        }
+        app.persist_daily_quota();
+    }
+    let username = vault_relay::turn::username(now(), vault_relay::turn::CRED_TTL, &t.hash);
+    let credential = vault_relay::turn::credential(&cfg.secret, &username);
+    tracing::info!(plan = ?t.plan, "turn credentials issued");
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({
+            "username": username,
+            "credential": credential,
+            "ttl": vault_relay::turn::CRED_TTL,
+            "uris": vault_relay::turn::uris(&cfg.host),
+        })),
+    )
+        .into_response()
+}
+
 /// POST /relay/purchase/checkout — создать платёжную сессию.
 async fn relay_purchase_checkout(
     State(app): State<Arc<AppState>>,
@@ -2363,6 +2439,8 @@ async fn main() {
         .route("/pay-return/:id", get(pay_return))
         .route("/relay/tokens/activate", post(relay_tokens_activate))
         .route("/relay/tokens/info", get(relay_tokens_info))
+        // TURN REST: временные креды для звонков вне одной подсети.
+        .route("/relay/turn", get(relay_turn))
         .route("/relay/poll", get(relay_poll))
         .route("/relay/ws", get(relay_ws))
         .route("/metrics", get(metrics))
@@ -4369,5 +4447,228 @@ mod tests {
         assert_eq!(map.get("t:a"), Some(&(day + 1, 1)), "день не обновлён");
         // retry_after — до ближайшей полуночи UTC, а не «24 часа от запроса».
         assert_eq!(tally_daily(&mut map, "t:a", day + 1, 1, start + 86_401), Some(86_400 - 1));
+    }
+
+    // ── GET /relay/turn: временные TURN-креды (т_18b4d871) ──
+    // Проверяем контракт с coturn и с клиентом: пара считается на сервере,
+    // срок живёт в username, квота TURN — ОБЩИЙ бюджет релея с конвертами (один
+    // счётчик `t:<hash>`, один порог), решает её сервер (клиент лимит не
+    // поднимает), а без конфигурации эндпоинт отвечает честный 503, а не пустые
+    // креды.
+
+    /// Порог бесплатного бюджета релея задаём явно: на нём держатся и тесты
+    /// квоты TURN, потому что TURN больше не имеет собственной лестницы.
+    fn turn_app_state_with_limit(k: ServerKeys, free_daily_limit: u32) -> Arc<AppState> {
+        let mut app = AppState::new(
+            Store::new(),
+            k,
+            true,
+            String::new(),
+            None,
+            free_daily_limit,
+            None,
+            None,
+            None,
+        );
+        app.turn = Some(vault_relay::turn::TurnConfig {
+            secret: "test-secret".into(),
+            host: "203.0.113.7".into(),
+        });
+        Arc::new(app)
+    }
+
+    /// По умолчанию — живой бесплатный бюджет (100), чтобы тесты квоты
+    /// случайно не проверяли «выключатель».
+    fn turn_app_state(k: ServerKeys) -> Arc<AppState> {
+        turn_app_state_with_limit(k, DEFAULT_FREE_DAILY_LIMIT)
+    }
+
+    /// Секрета (ни promo-ключа, ни TURN-секрета) в ответе быть не должно —
+    /// проверяем это в каждом тесте выдачи одним хелпером.
+    async fn turn_issue(app: &Arc<AppState>, token: &str) -> axum::response::Response {
+        relay_turn(State(app.clone()), auth_headers(token)).await
+    }
+
+    #[tokio::test]
+    async fn turn_bez_konfiguracii_otvechaet_503_a_ne_pustymi_kredami() {
+        // Важен сам ответ: пустая пара (200 с "") стоила бы клиенту
+        // «turn server credentials required» на сборке PeerConnection.
+        let app = app_state(keys());
+        let tok = issue_install(&app.keys, now() as u32);
+        assert_eq!(
+            turn_issue(&app, &tok).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_bez_tokena_i_bityj_token_401() {
+        let app = turn_app_state(keys());
+        assert_eq!(
+            relay_turn(State(app.clone()), HeaderMap::new()).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            turn_issue(&app, "мусор-а-не-токен").await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_prosrochennyj_token_402() {
+        let app = turn_app_state(keys());
+        let dead = issue_install(&app.keys, 0); // заведомо в прошлом
+        assert_eq!(
+            turn_issue(&app, &dead).await.status(),
+            StatusCode::PAYMENT_REQUIRED
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_kanalnomu_tokenu_otkaz_403() {
+        // Канальный токен — не аккаунт звонящего: relay-трафик за наш счёт.
+        let app = turn_app_state(keys());
+        // Capability-токен канала живёт без срока (u32::MAX) — иначе parse
+        // его отвергает как битый, а это 401, а не 403.
+        let ch = issue(&app.keys, Scope::ChannelRead, u32::MAX);
+        assert_eq!(
+            turn_issue(&app, &ch).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_vydaet_paru_po_sheme_coturn() {
+        let app = turn_app_state(keys());
+        let tok = issue_install(&app.keys, now() as u32);
+        let t = parse(&app.keys, &tok).expect("token parses");
+        let resp = turn_issue(&app, &tok).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        let username = j["username"].as_str().expect("username").to_string();
+        // `<истечение>:<метка>` — метка есть hash очереди, срок = now + TTL.
+        let (exp, tag) = username.split_once(':').expect("формат username");
+        assert_eq!(tag, t.hash, "меткой идёт hash очереди, а не токен");
+        let left: u64 = exp.parse().expect("expiry числом");
+        let ttl = j["ttl"].as_u64().expect("ttl");
+        assert_eq!(ttl, vault_relay::turn::CRED_TTL);
+        let now_now = now();
+        assert!(
+            left >= now_now + ttl && left <= now_now + ttl + 5,
+            "истечение = выдача + ttl, а не произвольная дата: {left} vs {now_now}"
+        );
+        // Пару сверяем пересчётом: тот же секрет + тот же username ⇒ тот же
+        // credential. Иначе coturn отвергает Allocate, а symptom — «нет звука».
+        assert_eq!(
+            j["credential"].as_str().expect("credential"),
+            vault_relay::turn::credential("test-secret", &username)
+        );
+        let uris = j["uris"].as_array().expect("uris");
+        assert_eq!(uris.len(), 2, "UDP + TCP страховка");
+        assert_eq!(uris[0], "turn:203.0.113.7:3478");
+        // Секрет наружу не уезжает никогда.
+        assert!(!j.to_string().contains("test-secret"), "секрет в ответе");
+    }
+
+    #[tokio::test]
+    async fn turn_tratit_obshchiy_byudzhet_releya_vmeste_s_konvertami() {
+        // Мера ОДНА: суточный бюджет релея на токен. Здесь 4 unit, и они
+        // кончаются на смеси писем и выдач — отказывают оба пути. Смысл
+        // именно такой: «100 сообщений в сутки» в тарифе не должно врать, а
+        // лимит не должен обходиться одним звонком.
+        let k = keys();
+        let (to, _) = fresh_topic(&k, 4_102_444_930);
+        let app = turn_app_state_with_limit(k, 4);
+        let tok = issue_install(&app.keys, now() as u32);
+        let t = parse(&app.keys, &tok).expect("token parses");
+        // Бюджет тратят оба пути по очереди — так видно, что счётчик один.
+        assert_eq!(pub_resp(&app, pub_req(&to, Some(&tok))).await.status(), StatusCode::OK, "конверт 1");
+        assert_eq!(turn_issue(&app, &tok).await.status(), StatusCode::OK, "выдача TURN 1");
+        assert_eq!(pub_resp(&app, pub_req(&to, Some(&tok))).await.status(), StatusCode::OK, "конверт 2");
+        assert_eq!(turn_issue(&app, &tok).await.status(), StatusCode::OK, "выдача TURN 2");
+        let over_turn = turn_issue(&app, &tok).await;
+        assert_eq!(
+            over_turn.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "бюджет израсходован — TURN обязан отказать"
+        );
+        assert!(
+            over_turn.headers().contains_key("retry-after"),
+            "429 обязан говорить, когда повторить"
+        );
+        let j = body_json(over_turn).await;
+        assert_eq!(j["limit"].as_u64(), Some(4), "в ответе — общий бюджет, не свой");
+        assert_eq!(
+            pub_resp(&app, pub_req(&to, Some(&tok))).await.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "звонки не должны оставлять письма за пределами лимита"
+        );
+        let map = app.daily_pub.lock().unwrap();
+        assert_eq!(
+            map.get(&format!("t:{}", t.hash)).map(|v| v.1),
+            Some(4),
+            "TURN и конверты считают в одном ключе"
+        );
+        assert!(
+            !map.contains_key(&format!("turn:{}", t.hash)),
+            "отдельного счётчика TURN быть не должно"
+        );
+        drop(map);
+        assert_eq!(app.metrics.limit_hit.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn turn_testovomu_tokenu_limit_ne_ponyaetsya() {
+        // Тестовый вид (промо) — без лимита, как и с конвертами: иначе
+        // приёмка на X50 упёрлась бы в 429 посреди проверки звонка.
+        let app = turn_app_state(keys());
+        let tok = issue_test(&app.keys, now() as u32);
+        for i in 0..DEFAULT_FREE_DAILY_LIMIT + 5 {
+            assert_eq!(
+                turn_issue(&app, &tok).await.status(),
+                StatusCode::OK,
+                "тестовому токену поставили лимит (выдача №{})",
+                i + 1
+            );
+        }
+        assert!(
+            app.daily_pub.lock().unwrap().is_empty(),
+            "безлимитный вид не должен тратить счётчик"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_platnyj_token_zhivet_po_kvote_tarifa() {
+        // Купленный Pro даёт 1000 unit вместо 100 — деньги взяты, и звонок
+        // обязан подорожать вместе с письмами: отдельной лестницы выдач
+        // больше нет, поэтому рост берётся из daily_limit_for_token.
+        let app = turn_app_state(keys());
+        let tok = issue_install(&app.keys, now() as u32);
+        let mut t = parse(&app.keys, &tok).expect("token parses");
+        t.plan = Plan::Pro;
+        t.paid_until = u32::MAX;
+        assert_eq!(
+            daily_limit_for_token(&t, app.free_daily_limit),
+            Some(PRO_DAILY_LIMIT),
+            "TURN тратит тот же порог, что и конверты"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_bez_limita_konvertov_ne_gasitsya_vypuskatellyom() {
+        // free_daily_limit=0 — выключатель стенда: он снимает счётчик и с
+        // выдач (тот же путь, что у publish), иначе на dev-стенде звонки
+        // молча умрут после первой же проверки.
+        let app = turn_app_state_with_limit(keys(), 0);
+        let tok = issue_install(&app.keys, now() as u32);
+        for i in 0..3 {
+            assert_eq!(
+                turn_issue(&app, &tok).await.status(),
+                StatusCode::OK,
+                "выдача №{} при выключенном лимите",
+                i + 1
+            );
+        }
+        assert!(app.daily_pub.lock().unwrap().is_empty());
     }
 }

@@ -7,5 +7,6 @@ pub mod persist;
 pub mod rate;
 pub mod store;
 pub mod tokens;
+pub mod turn;
 
 pub use tokens::{channel_tokens, issue, parse, Scope, ServerKeys, Token};
