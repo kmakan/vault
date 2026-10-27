@@ -33,7 +33,11 @@
 // ЗАПУСК: node scripts/hygiene-gate.mjs [--notes]
 //   --notes — дополнительно проверить рабочий журнал (~/Notes/Projects/
 //   mailcipher). Каталога может не быть (CI, другой машина) — тогда шаг
-//   пропускается молча.
+//   пропускается молча. Есть и отдельная команда: npm run gate:hygiene:notes.
+//   Журнал проверять С СОБОЙ: иероглифы в нём были пойманы уже после коммита
+//   (27.10 — строка вчерашнего дня, которую обычный прогон quality не видел,
+//   потому что в quality журнал не входит). Сам гейт иероглифов не содержит —
+//   иначе запрещал бы себя.
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -42,7 +46,7 @@ const REPO = path.resolve(import.meta.dirname, '..', '..');   // корень р
 
 const SKIP_DIRS = new Set([
   '.git', 'node_modules', 'target', 'dist', '.opencode', 'graphify-out',
-  'build', '.vite', 'coverage', 'gen',
+  'build', '.vite', 'coverage', '.gradle', '.cxx', 'intermediates',
 ]);
 const SKIP_EXT = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.pdf', '.zip',

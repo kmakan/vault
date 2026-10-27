@@ -26,7 +26,6 @@ export function createCallSession(initial = {}) {
     callRingTimer: null,
     callRingtoneIncoming: 'incoming',
     callRingtoneOutgoing: 'outgoing',
-    callSoundEl: null,
     callMuted: false,
     callSpeaker: false,
     lastCallId: null,
@@ -58,7 +57,6 @@ export function createCallSession(initial = {}) {
     get callRingTimer() { return this.state.callRingTimer; },
     get callRingtoneIncoming() { return this.state.callRingtoneIncoming; },
     get callRingtoneOutgoing() { return this.state.callRingtoneOutgoing; },
-    get callSoundEl() { return this.state.callSoundEl; },
     get callMuted() { return this.state.callMuted; },
     get callSpeaker() { return this.state.callSpeaker; },
     get lastCallId() { return this.state.lastCallId; },
@@ -86,7 +84,6 @@ export function createCallSession(initial = {}) {
       else this.state.callRingtoneOutgoing = v;
       _notify();
     },
-    setSoundEl(v) { this.state.callSoundEl = v; _notify(); },
     setMuted(v) { this.state.callMuted = !!v; _notify(); },
     setSpeaker(v) { this.state.callSpeaker = !!v; _notify(); },
     setLastCallId(v) { this.state.lastCallId = v; _notify(); },
@@ -129,7 +126,7 @@ export function createCallSession(initial = {}) {
       Object.assign(this.state, {
         currentCall: null, callState: 'idle', callClockSec: 0, callClockTimer: null,
         callRingTimer: null, callRingtoneIncoming: null, callRingtoneOutgoing: null,
-        callSoundEl: null, callMuted: false, callSpeaker: false, lastCallId: null,
+        callMuted: false, callSpeaker: false, lastCallId: null,
         pendingKemct: null, pendingSenderEk: null, callMediaConnected: false,
         mediaFallbackTimer: null, connLostTimer: null, sendSeen: false,
         localOffer: null, remoteOffer: null,

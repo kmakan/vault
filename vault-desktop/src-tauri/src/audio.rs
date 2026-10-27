@@ -643,8 +643,8 @@ async fn read_remote_loop(
 // Desktop: проигрываются через cpal (напрямую из Rust, не webview) — не зависят
 // от autoplay-политики WebKitGTK, слышны при свёрнутом окне. WAV вшиты в бинарь
 // (include_bytes!), ресемплятся под устройство линейной интерполяцией.
-// Android: cpal НЕ используется (AAudio через JNI паникует) — звуки
-// играет фронт через HTML5 Audio (public/sounds/*.wav), здесь no-op.
+// Android: cpal НЕ используется (AAudio через JNI паникует) — звук играет
+// нативный MediaPlayer сервиса через JNI (#71), те же ассеты в res/raw.
 //
 // ring_incoming / ring_outgoing — зацикленные (loop=true), останавливаются
 // ringtone_stop / sound_stop. connect / end / missed — одноразовые.
@@ -680,6 +680,62 @@ const SND_OUTGOING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_outgoing_clas
 // реального соединения медиа (событие call-media-connected) — играет у ОБОИХ.
 #[cfg(not(target_os = "android"))]
 const SND_CONNECTED: &[u8] = include_bytes!("../sounds/ring_connected.wav");
+
+/// Класс звука звонка: гудок ИДУЩЕГО вызова или короткий сигнал.
+///
+/// Решение, а не стиль (#71): на Android класс определяет АУДИОКАНАЛ — гудки
+/// играют в канале рингтона, сигналы — в канале уведомлений. Оба не зависят
+/// от медиа-громкости, и в этом смысл: фронт играл звуки через HTML5 Audio,
+/// WebView относит их к USAGE_MEDIA, а человек с нулевой медиа-громкостью не
+/// слышал ни набора, ни соединения, ни входящего (#70 на X50: streamVolume
+/// MUSIC=0 при RING=15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SoundClass {
+    Ring,
+    Signal,
+}
+
+/// Имя звука → класс. ОДИН список на оба канала: десктоп ищет по нему WAV,
+/// Android — канал воспроизведения. До этого список имён жил только в
+/// cpal-ветке, а фронт на Android подставлял имя в URL `/sounds/ring_<name>`
+/// — «ассет есть на десктопе, на телефоне молчит» не проверялось ничем.
+pub const SOUNDS: &[(&str, SoundClass)] = &[
+    ("incoming", SoundClass::Ring),
+    ("incoming_classic", SoundClass::Ring),
+    ("incoming_pulse", SoundClass::Ring),
+    ("outgoing", SoundClass::Ring),
+    ("outgoing_classic", SoundClass::Ring),
+    ("connect", SoundClass::Signal),
+    ("connected", SoundClass::Signal),
+    ("end", SoundClass::Signal),
+    ("missed", SoundClass::Signal),
+];
+
+pub fn sound_class(name: &str) -> Option<SoundClass> {
+    SOUNDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c)
+}
+
+/// Имя звука → WAV, вшитый в бинарь. Отдельная функция, а не match внутри
+/// sound_play, потому что её можно проверить на хосте: список имён и список
+/// ассетов обязаны совпадать, иначе имя проходит проверку класса, но звука
+/// нет (на Android это выглядело бы как «молчит», на десктопе — как Err).
+#[cfg(not(target_os = "android"))]
+fn sound_asset(name: &str) -> Option<&'static [u8]> {
+    Some(match name {
+        "incoming" => SND_INCOMING,
+        "outgoing" => SND_OUTGOING,
+        "connect" => SND_CONNECT,
+        "end" => SND_END,
+        "missed" => SND_MISSED,
+        // Варианты рингтонов.
+        "incoming_classic" => SND_INCOMING_CLASSIC,
+        "incoming_pulse" => SND_INCOMING_PULSE,
+        "outgoing_classic" => SND_OUTGOING_CLASSIC,
+        // «Можно говорить» — реальное соединение медиа.
+        "connected" => SND_CONNECTED,
+        _ => return None,
+    })
+}
 
 /// Линейный ресемпл моно f32 из src_rate в dst_rate.
 #[cfg(not(target_os = "android"))]
@@ -788,20 +844,10 @@ macro_rules! build_sound_stream {
 /// Общий запуск звука по имени ассета. looped=true — крутить до stop.
 #[cfg(not(target_os = "android"))]
 pub fn sound_play(name: &str, looped: bool) -> Result<(), String> {
-    let bytes: &[u8] = match name {
-        "incoming" => SND_INCOMING,
-        "outgoing" => SND_OUTGOING,
-        "connect" => SND_CONNECT,
-        "end" => SND_END,
-        "missed" => SND_MISSED,
-        // Варианты рингтонов.
-        "incoming_classic" => SND_INCOMING_CLASSIC,
-        "incoming_pulse" => SND_INCOMING_PULSE,
-        "outgoing_classic" => SND_OUTGOING_CLASSIC,
-        // «Можно говорить» — реальное соединение медиа.
-        "connected" => SND_CONNECTED,
-        other => return Err(format!("unknown sound: {other}")),
-    };
+    // Имя проверяется по общему списку (SOUNDS), а не по cpal-му match:
+    // иначе звук, неизвестный одному каналу, проходил бы на другом.
+    sound_class(name).ok_or_else(|| format!("unknown sound: {name}"))?;
+    let bytes: &[u8] = sound_asset(name).ok_or_else(|| format!("no asset for sound: {name}"))?;
     // panic=abort + cpal может паниковать — ловим и возвращаем Err вместо
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         _sound_play_inner(bytes, looped)
@@ -864,13 +910,19 @@ pub fn ringtone_stop() {
     sound_stop();
 }
 
-// Android: звуки играет фронт через HTML5 Audio (не cpal) — no-op заглушки.
+// Android: нативный MediaPlayer сервиса (#71). Фронт больше не выбирает
+// канал — он не может: HTML5 Audio в WebView всегда USAGE_MEDIA. Здесь
+// класс из общего списка SOUNDS превращается в AudioAttributes.Usage, а
+// res/raw несёт те же ассеты, что и десктопный include_bytes.
 #[cfg(target_os = "android")]
-pub fn sound_play(_name: &str, _looped: bool) -> Result<(), String> {
-    Ok(())
+pub fn sound_play(name: &str, looped: bool) -> Result<(), String> {
+    let class = sound_class(name).ok_or_else(|| format!("unknown sound: {name}"))?;
+    audio_android::play_call_sound(name, looped, class == SoundClass::Ring)
 }
 #[cfg(target_os = "android")]
-pub fn sound_stop() {}
+pub fn sound_stop() {
+    audio_android::stop_call_sound();
+}
 #[cfg(target_os = "android")]
 pub fn ringtone_start() -> Result<(), String> {
     Ok(())
@@ -914,6 +966,98 @@ mod tests {
         );
         // Фрейм APM — ровно половина Opus-фрейма (20мс = два куска по 10мс).
         assert_eq!(FRAME_SAMPLES, 2 * opus_samples_in(APM_FRAME_MS));
+    }
+
+    // #71: класс звука — решение, а не стиль: он выбирает АУДИОКАНАЛ на
+    // Android. Пока список имён жил только в cpal-ветке, phone-канал
+    // проверялся исключительно приёмкой. Эти пробы меряют саму таблицу.
+    #[test]
+    fn sound_table_has_no_duplicated_names() {
+        let mut names: Vec<&str> = SOUNDS.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before, "двойное имя: звук получает первый класс");
+    }
+
+    #[test]
+    fn ringtone_names_play_in_the_ringtone_channel() {
+        // Гудки ИДУЩЕГО вызова: RING. Смена любой строки на Signal —
+        // тишина при нулевой медиа-громкости, то есть исходный дефект #70.
+        for name in [
+            "incoming",
+            "incoming_classic",
+            "incoming_pulse",
+            "outgoing",
+            "outgoing_classic",
+        ] {
+            assert_eq!(sound_class(name), Some(SoundClass::Ring), "{name}");
+        }
+    }
+
+    #[test]
+    fn signal_names_play_in_the_notification_channel() {
+        for name in ["connect", "connected", "end", "missed"] {
+            assert_eq!(sound_class(name), Some(SoundClass::Signal), "{name}");
+        }
+    }
+
+    #[test]
+    fn unknown_sound_has_neither_class_nor_asset() {
+        // Фронт подставляет имя из выбора пользователя; пустой/битый kv
+        // обязан быть отказом, а не молчаливым пуском в чужом канале.
+        for name in ["", "rincomin", "incoming classic", "ring_incoming"] {
+            assert_eq!(sound_class(name), None, "{name}");
+        }
+        assert_eq!(sound_class("missed_call"), None);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn every_listed_sound_has_an_included_asset() {
+        // Класс ищется по SOUNDS, а WAV — по отдельному match. Расхождение
+        // молчаливо стало бы «на телефоне/десктопе тихо».
+        for (name, _) in SOUNDS {
+            let bytes = sound_asset(name).unwrap_or_else(|| panic!("нет ассета: {name}"));
+            assert!(bytes.len() > 44, "{name}: ассет короче WAV-заголовка");
+            assert_eq!(&bytes[..4], b"RIFF", "{name}: не WAV");
+        }
+        assert_eq!(sound_asset("nope"), None);
+        // Таблица имён и список вшитых WAV — один и тот же набор. Счёт по
+        // СОБСТВЕННОМУ исходнику, а не по девятому литералу: добавленный в
+        // include_bytes звук без строки в SOUNDS лежал бы в бинаре мёртвым
+        // грузом, а удалённая строка — молча пропала бы из звонка.
+        let src = include_str!("audio.rs");
+        let marker = "include_bytes!(\"../sounds/ring_";
+        let mut declared = std::collections::BTreeSet::new();
+        let mut rest = src;
+        while let Some(i) = rest.find(marker) {
+            let after = &rest[i + marker.len()..];
+            let end = after.find(".wav\"").expect("обрезанный include_bytes");
+            declared.insert(&after[..end]);
+            rest = &after[end..];
+        }
+        let listed: std::collections::BTreeSet<&str> = SOUNDS.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            declared, listed,
+            "WAV в sounds/ и список SOUNDS разошлись"
+        );
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn sound_asset_wires_the_named_wav_not_a_neighbour() {
+        // Проводка имя→WAV: compare c файлом на диске, а не с вторым
+        // литералом. Переставить плечо match (incoming_pulse → SND_INCOMING_
+        // CLASSIC) раньше было невидимо: звук есть, RIFF на месте, а играет
+        // не тот рингтон, который человек выбрал в настройках.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sounds");
+        for (name, _) in SOUNDS {
+            let on_disk = std::fs::read(dir.join(format!("ring_{name}.wav")))
+                .unwrap_or_else(|e| panic!("ассет ring_{name}.wav: {e}"));
+            let embedded = sound_asset(name).expect("имя из SOUNDS обязано иметь ассет");
+            assert_eq!(on_disk.as_slice(), embedded, "{name}: в бинарь вшит другой WAV");
+        }
     }
 }
 

@@ -1943,10 +1943,6 @@ export default {
       get() { return this.callSession.callRingTimer; },
       set(v) { this.callSession.setCallRingTimer(v); },
     },
-    callSoundEl: {
-      get() { return this.callSession.callSoundEl; },
-      set(v) { this.callSession.setSoundEl(v); },
-    },
     callRingtoneIncoming: {
       get() { return this.callSession.callRingtoneIncoming; },
       set(v) { this.callSession.setRingtone('incoming', v); },

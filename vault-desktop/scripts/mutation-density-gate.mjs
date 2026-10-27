@@ -106,10 +106,11 @@ async function collectMutations() {
       }
       for (const m of set.mutations) {
         let target = (m && m.file) || set.file;
-        // JS-наборы адресуют модули от корня vault-desktop ('src/features/…'),
-        // Rust-наборы — от корня репозитория ('vault-client/src/…'). Приводим к
-        // одному виду, иначе JS-модули выглядят непокрытыми.
-        if (target.startsWith('src/')) target = 'vault-desktop/' + target;
+        // JS-наборы адресуют модули от корня vault-desktop ('src/features/…' и
+        // 'src-tauri/src/…' — мост тоже мутируется из JS-наборов), Rust-наборы —
+        // от корня репозитория ('vault-client/src/…'). Приводим к одному виду,
+        // иначе покрытые модули выглядят непокрытыми, а их мутации — несчитанными.
+        if (target.startsWith('src/') || target.startsWith('src-tauri/')) target = 'vault-desktop/' + target;
         counts.set(target, (counts.get(target) || 0) + 1);
       }
     }

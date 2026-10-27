@@ -551,3 +551,94 @@ pub(crate) fn voicenote_stop() -> Result<(), String> {
         Err(_) => Err("voicenote stop panicked (JNI)".into()),
     }
 }
+
+/// Звук звонка через нативный MediaPlayer сервиса (#71).
+///
+/// Фронт обязан оставаться адаптером: он передаёт ИМЯ и зацикленность, а
+/// канал выбирает ядро (ringtone_usage — из audio::SoundClass). Другой
+/// вариант, HTML5 Audio в WebView, всегда USAGE_MEDIA: при нулевой
+/// медиа-громкости человек не слышал ни гудка, ни соединения (#70 на X50 —
+/// streamVolume MUSIC=0 при RING=15).
+///
+/// AudioFocus НЕ запрашивается: во время соединения захват фокуса сбрасывает
+/// голосовой вызов на динамик/останавливает его, а звук здесь — короткое
+/// уведомление поверх живого звонка.
+pub(crate) fn play_call_sound(name: &str, looped: bool, ringtone_usage: bool) -> Result<(), String> {
+    let result = std::panic::catch_unwind(|| {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let jname = env
+            .new_string(name)
+            .map_err(|e| format!("new_string name: {e}"))?;
+        let cls = find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        env.call_static_method(
+            &cls,
+            "playCallSound",
+            "(Landroid/content/Context;Ljava/lang/String;ZZ)V",
+            &[
+                (&activity).into(),
+                (&jname).into(),
+                jni::objects::JValue::Bool(looped.into()),
+                jni::objects::JValue::Bool(ringtone_usage.into()),
+            ],
+        )
+        .map_err(|e| {
+            let _ = env.exception_clear();
+            format!("playCallSound: {e}")
+        })?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => {
+            eprintln!(
+                "[sound] play_call_sound {name} (looped={looped}, ringtone_channel={ringtone_usage})"
+            );
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            eprintln!("[sound] play_call_sound failed: {e}");
+            Err(e)
+        }
+        Err(_) => Err("sound play panicked (JNI)".into()),
+    }
+}
+
+/// Остановить звук звонка (тот же слот проигрывателя, что и play_call_sound).
+pub(crate) fn stop_call_sound() {
+    let result = std::panic::catch_unwind(|| {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")?;
+        env.call_static_method(
+            &cls,
+            "stopCallSound",
+            "(Landroid/content/Context;)V",
+            &[(&activity).into()],
+        )
+        .map_err(|e| {
+            let _ = env.exception_clear();
+            format!("stopCallSound: {e}")
+        })?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => eprintln!("[sound] call sound stopped"),
+        Ok(Err(e)) => eprintln!("[sound] stop_call_sound failed: {e}"),
+        Err(_) => eprintln!("[sound] stop_call_sound panicked (JNI)"),
+    }
+}

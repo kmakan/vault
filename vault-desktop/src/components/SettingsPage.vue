@@ -550,7 +550,6 @@ export default {
       // хранит то же значение в МИЛЛИСЕКУНДАХ (prefs call_ring_duration).
       callDuration: 180,
       previewPlaying: false,
-      _previewEl: null,
       backupBusy: false,
       backupResult: '',
       // Импорт копии: своё подтверждение (нативный confirm() на Android
@@ -1044,31 +1043,23 @@ export default {
       try { await db.kvSet('anon', 'call-ring-duration', String(this.callDuration)); } catch (e) { /* ignore */ }
       await this.syncCallPrefsAndroid();
     },
-    // Превью: desktop — cpal в Rust (media_sound_play), Android — HTML5
-    // Audio. Зацикленный звук — стоп кнопкой.
+    // Превью: тот же путь, что у самого звонка (#71) — имя в мост
+    // media_sound_play, WAV и аудиоканал выбирает Rust (audio::SOUNDS).
+    // Своя HTML5-ветка на Android играла превью в USAGE_MEDIA: человек
+    // выбирал рингтон и слышал его на другой громкости, чем услышит при
+    // звонке (ровно тот канал, из-за которого гудок молчал — #70).
+    // Зацикленный звук — стоп кнопкой.
     previewSound(name, looped) {
       this.stopPreview();
       try {
-        if (/android/i.test(navigator.userAgent || '')) {
-          const el = new Audio('/sounds/ring_' + name + '.wav');
-          el.loop = !!looped;
-          el.volume = 0.85;
-          el.play().catch(e => console.warn('[calls] preview failed:', e));
-          this._previewEl = el;
-          if (!looped) el.onended = () => { if (this._previewEl === el) { this._previewEl = null; this.previewPlaying = false; } };
-        } else {
-          api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[calls] preview failed:', e));
-        }
+        api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[calls] preview failed:', e));
         this.previewPlaying = !!looped;
       } catch (e) {
         console.warn('[calls] preview failed:', e && e.message || e);
       }
     },
     stopPreview() {
-      try {
-        if (this._previewEl) { try { this._previewEl.pause(); } catch (_) {} this._previewEl = null; }
-        if (!/android/i.test(navigator.userAgent || '')) api.mediaSoundStop().catch(() => {});
-      } catch (_) {}
+      try { api.mediaSoundStop().catch(() => {}); } catch (_) {}
       this.previewPlaying = false;
     },
     // Имя + статус «О себе» одной кнопкой; bio уходит контактам broadcast-письмом.

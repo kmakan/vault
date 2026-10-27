@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-template.cjs && node scripts/options-dup-gate.mjs && node scripts/feature-coverage-gate.mjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/owner-contract-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && node scripts/js-logic-ratchet-gate.mjs && node scripts/audit-arch.mjs && node scripts/locale-keys-gate.mjs && node scripts/test-isolation-gate.mjs && node scripts/android-locale-keys-gate.mjs && npm run smoke:all && vite build && node scripts/boot-smoke.mjs",
+    "build": "node scripts/check-template.cjs && node scripts/options-dup-gate.mjs && node scripts/feature-coverage-gate.mjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/owner-contract-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && node scripts/js-logic-ratchet-gate.mjs && node scripts/audit-arch.mjs && node scripts/locale-keys-gate.mjs && node scripts/test-isolation-gate.mjs && node scripts/android-locale-keys-gate.mjs && node scripts/call-sound-assets-gate.mjs && npm run smoke:all && vite build && node scripts/boot-smoke.mjs",
     "smoke:all": "for f in scripts/*smoke*.mjs; do case \"$f\" in *boot-smoke*) continue;; esac; node \"$f\" || exit 1; done",
     "smoke:boot": "node scripts/boot-smoke.mjs",
     "gate:cycles": "node scripts/ctx-cycles-gate.mjs",
@@ -54,7 +54,9 @@
     "gate:service-boundary": "node scripts/service-boundary-gate.mjs",
     "gate:tauri-args": "node scripts/tauri-args-gate.mjs",
     "gate:call-wire-names": "node scripts/call-wire-names-gate.mjs",
+    "gate:call-sound-assets": "node scripts/call-sound-assets-gate.mjs",
     "gate:hygiene": "node scripts/hygiene-gate.mjs",
+    "gate:hygiene:notes": "node scripts/hygiene-gate.mjs --notes",
     "gate:test-isolation": "node scripts/test-isolation-gate.mjs",
     "gate:android-locale-keys": "node scripts/android-locale-keys-gate.mjs",
     "gate:parse": "node scripts/parse-gate.mjs",
@@ -65,7 +67,7 @@
     "gate:opus-numbers": "node scripts/opus-numbers-gate.mjs",
     "gate:delegate-wiring": "node scripts/delegate-wiring-gate.mjs",
     "gate:mutations": "node scripts/mutation-gate.mjs",
-    "quality": "npm run gate:parse && npm run gate:mutation-patterns && npm run gate:opus-numbers && npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:service-boundary && npm run gate:tauri-args && npm run gate:call-wire-names && npm run gate:delegate-wiring && npm run gate:hygiene && npm run gate:rust-mutations && npm run gate:mutation-density",
+    "quality": "npm run gate:parse && npm run gate:mutation-patterns && npm run gate:opus-numbers && npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:service-boundary && npm run gate:tauri-args && npm run gate:call-wire-names && npm run gate:call-sound-assets && npm run gate:delegate-wiring && npm run gate:hygiene && npm run gate:rust-mutations && npm run gate:mutation-density",
     "smoke:attachments": "node scripts/attachments-smoke.mjs",
     "smoke:send": "node scripts/send-smoke.mjs",
     "smoke:messages": "node scripts/messages-smoke.mjs"

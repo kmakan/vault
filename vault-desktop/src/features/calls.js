@@ -24,7 +24,7 @@
 //  - пилюли: recordCallEvent, callEventLabel, callPillIcon, canCallBack;
 //  - ретрансляция: startSignalResend/stopSignalResend/sendTerminalRepeat;
 //  - watchdog: armMediaFallback («Соединение…» 90с), часы разговора;
-//  - звук: playCallSound/stopCallSound (Android HTML5 / desktop cpal).
+//  - звук: playCallSound/stopCallSound (мост media_sound_play, канал выбирает Rust).
 //
 // Инвариант: ошибки канала НЕ роняют state machine — релей-копия уходит
 // первой (~1с), SMTP-письмо — фоновый дублирующий канал с ретраями.
@@ -1196,6 +1196,11 @@ export function stopFastPolling() {
 // и this.isAndroid() бросает TypeError. Синхронный бросок рвал
 // acceptCall ДО отправки call_accept. Плюс: функция НИКОГДА не
 // должна бросать — звук вторичен, сигнализация звонка важнее.)
+//
+// ОДИН путь на обе платформы (#71): имя → ядро audio::SOUNDS, которая
+// знает и WAV, и канал. Прежняя Android-ветка (new Audio('/sounds/…'))
+// играла через WebView в USAGE_MEDIA: при нулевой медиа-громкости не
+// слышно ни гудка, ни соединения, ни конца (#70 на X50).
 export function playCallSound(deps, name, looped) {
   try {
     // Настройки звонков: пользователь мог выбрать другой рингтон
@@ -1204,20 +1209,7 @@ export function playCallSound(deps, name, looped) {
     const ringOut = useSession().callRingtoneOutgoing || 'outgoing';
     if (name === 'incoming') name = ringIn;
     else if (name === 'outgoing') name = ringOut;
-    if (deps.isAndroid()) {
-      stopCallSound(deps);
-      const el = new Audio('/sounds/ring_' + name + '.wav');
-      el.loop = !!looped;
-      el.volume = 0.85;
-      el.play().catch(e => console.warn('[call] sound play failed:', e));
-      useSession().setSoundEl(el);
-      // Одноразовые звуки: освобождаем элемент по окончании.
-      if (!looped) {
-        el.onended = () => { if (useSession().callSoundEl === el) useSession().setSoundEl(null); };
-      }
-    } else {
-      api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
-    }
+    api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
   } catch (e) {
     // Звук не критичен — глотаем, чтобы не рвать state machine звонка.
     console.warn('[call] sound failed:', e && e.message || e);
@@ -1226,13 +1218,7 @@ export function playCallSound(deps, name, looped) {
 
 export function stopCallSound(deps) {
   try {
-    if (useSession().callSoundEl) {
-      try { useSession().callSoundEl.pause(); } catch (_) {}
-      useSession().setSoundEl(null);
-    }
-    if (!deps.isAndroid()) {
-      api.mediaSoundStop().catch(() => {});
-    }
+    api.mediaSoundStop().catch(() => {});
   } catch (e) {
     console.warn('[call] sound stop failed:', e && e.message || e);
   }

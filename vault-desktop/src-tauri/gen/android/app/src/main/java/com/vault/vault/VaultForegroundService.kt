@@ -2093,11 +2093,25 @@ class VaultForegroundService : Service() {
 
         /// Выбранный пользователем рингтон входящего (key из prefs) → res/raw.
         /// null = дефолт. Имена совпадают с ключами на фронте (calls.js/SettingsPage).
-        private fun ringtoneResFor(key: String?): Int = when (key) {
+        private fun ringtoneResFor(key: String?): Int =
+            soundResFor(key) ?: R.raw.ring_incoming
+
+        /// Имя звука → res/raw. ОДНА таблица на оба пути звука: гудок, который
+        /// ставит сервис (ringtoneResFor), и звук, который просит фронт через
+        /// мост media_sound_play (#71). Список имён и каналов живёт в Rust
+        /// (audio::SOUNDS) — здесь только проводка имя→ресурс, и её проверяет
+        /// гейт call-sound-assets (Rust ⇄ res/raw ⇄ keep.xml).
+        private fun soundResFor(name: String?): Int? = when (name) {
+            "incoming" -> R.raw.ring_incoming
             "incoming_classic" -> R.raw.ring_incoming_classic
             "incoming_pulse" -> R.raw.ring_incoming_pulse
-            "incoming" -> R.raw.ring_incoming
-            else -> R.raw.ring_incoming
+            "outgoing" -> R.raw.ring_outgoing
+            "outgoing_classic" -> R.raw.ring_outgoing_classic
+            "connect" -> R.raw.ring_connect
+            "connected" -> R.raw.ring_connected
+            "end" -> R.raw.ring_end
+            "missed" -> R.raw.ring_missed
+            else -> null
         }
 
         private fun startRingtone(context: Context) {
@@ -2154,6 +2168,70 @@ class VaultForegroundService : Service() {
                 }
             } catch (_: Throwable) {}
             ringtonePlayer = null
+        }
+
+        /// Звук звонка по запросу фронта (#71): тот же нативный слот, что и у
+        /// сервисного гудка, но канал выбирает ядро — ringtoneUsage=true значит
+        /// «гудок идущего вызова» (USAGE_NOTIFICATION_RINGTONE), false — короткий
+        /// сигнал (USAGE_NOTIFICATION). Ни то ни другое не зависит от
+        /// медиа-громкости: фронт играл их через HTML5 Audio в WebView, а
+        /// WebView относит такой звук к USAGE_MEDIA, и при streamVolume(MUSIC)=0
+        /// человек не слышал ни набора, ни соединения (#70 на X50).
+        ///
+        /// AudioFocus НЕ запрашивается и FGS не переключается: звук поверх
+        /// живого голосового вызова, а захват фокуса сбрасывает маршрутизацию
+        /// звонка. Громкость канала — системная, пользователю видна в регуляторе.
+        @JvmStatic
+        fun playCallSound(context: Context, name: String, looped: Boolean, ringtoneUsage: Boolean) {
+            val resId = soundResFor(name)
+            if (resId == null) {
+                Log.w("VaultRust", "playCallSound: unknown sound $name")
+                return
+            }
+            try {
+                stopRingtone()
+                val mp = MediaPlayer().apply {
+                    setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(
+                                if (ringtoneUsage) {
+                                    android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+                                } else {
+                                    android.media.AudioAttributes.USAGE_NOTIFICATION
+                                }
+                            )
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    val afd = context.resources.openRawResourceFd(resId)
+                    afd.use { setDataSource(it.fileDescriptor, it.startOffset, it.declaredLength) }
+                    isLooping = looped
+                    if (!looped) {
+                        // Одноразовый звук освобождает слот сам: иначе держит
+                        // fd и не даёт следующему звуку/гудку занять проигрыватель.
+                        setOnCompletionListener { player ->
+                            try { player.release() } catch (_: Throwable) {}
+                            if (ringtonePlayer === player) ringtonePlayer = null
+                        }
+                    }
+                    prepare()
+                    start()
+                }
+                ringtonePlayer = mp
+                Log.i(
+                    "VaultRust",
+                    "call sound: $name (loop=$looped, ringtoneChannel=$ringtoneUsage)"
+                )
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "playCallSound failed: " + e.message)
+            }
+        }
+
+        /// Стоп звука звонка (media_sound_stop). Слот общий с сервисным
+        /// гудком, поэтому остановка одна на оба пути.
+        @JvmStatic
+        fun stopCallSound(context: Context) {
+            stopRingtone()
         }
 
         /* Перевести FGS в режим phoneCall. На Android 14+ FGS-тип

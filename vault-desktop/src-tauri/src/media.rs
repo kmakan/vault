@@ -1570,10 +1570,11 @@ pub async fn media_ringtone_stop() -> Result<(), String> {
     Ok(())
 }
 
-/// Звуки звонка: WAV-ассеты через cpal. name
-/// incoming | outgoing | connect | end | missed. looped=true — крутить
-/// до media_sound_stop (для incoming/outgoing). На Android — no-op
-/// (фронт играет HTML5 Audio из public/sounds).
+/// Звуки звонка: один путь на обе платформы. Десктоп — cpal из вшитых WAV,
+/// Android — нативный MediaPlayer сервиса (#71); канал воспроизведения
+/// выбирает ядро по классу имени (audio::SOUNDS), а не фронт. Список имён —
+/// `audio::SOUNDS`, неизвестное имя — отказ на любой платформе.
+/// looped=true — крутить до media_sound_stop (гудки incoming/outgoing).
 #[tauri::command]
 pub async fn media_sound_play(name: String, looped: bool) -> Result<(), String> {
     // cpal может НАМЕРТВО зависнуть на enum/конфиге аудио-устройства

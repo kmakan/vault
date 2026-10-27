@@ -14,7 +14,7 @@ import { identityStore } from '../src/features/identity-store.js';
 const CALL_SEED_KEYS = [
   'callState', 'currentCall', 'lastCallId', 'callMuted', 'callSpeaker',
   'callMediaConnected', 'callClockSec', 'callClockTimer', 'callRingTimer',
-  'callSoundEl', 'callRingtoneIncoming', 'callRingtoneOutgoing',
+  'callRingtoneIncoming', 'callRingtoneOutgoing',
   '_pendingKemct', '_pendingSenderEk', '_mediaFallbackTimer', '_connLostTimer',
 ];
 const toSessionSeed = (over) => {
@@ -28,7 +28,6 @@ const toSessionSeed = (over) => {
   if (over.callClockSec !== undefined) s.callClockSec = over.callClockSec;
   if (over.callClockTimer !== undefined) s.callClockTimer = over.callClockTimer;
   if (over.callRingTimer !== undefined) s.callRingTimer = over.callRingTimer;
-  if (over.callSoundEl !== undefined) s.callSoundEl = over.callSoundEl;
   if (over.callRingtoneIncoming !== undefined) s.callRingtoneIncoming = over.callRingtoneIncoming;
   if (over.callRingtoneOutgoing !== undefined) s.callRingtoneOutgoing = over.callRingtoneOutgoing;
   if (over._pendingKemct !== undefined) s.pendingKemct = over._pendingKemct;
@@ -64,7 +63,7 @@ const apiMock = {
   mediaClose: async (id) => { apiMock.calls.push(['close', id]); },
   mediaSetMuted: async (id, v) => { apiMock.calls.push(['setMuted', id, v]); },
   mediaSetSpeaker: async (id, v) => { apiMock.calls.push(['setSpeaker', id, v]); },
-  mediaSoundPlay: (name, loop) => { apiMock.calls.push(['soundPlay', name, loop]); },
+  mediaSoundPlay: async (name, loop) => { apiMock.calls.push(['soundPlay', name, loop]); },
   mediaSoundStop: async () => { apiMock.calls.push(['soundStop']); },
   // План транспорта — правило Rust (двойник таблицы в lib/transport-plan-mock).
   transportPlan: transportPlanHandler(),
@@ -692,38 +691,73 @@ console.log('7. mute/speaker/resend/watchdog/часы');
 }
 
 // ── 8. Звук ────────────────────────────────────────────────────
+// #71: один путь на обе платформы — имя в мост media_sound_play, а канал
+// (рингтон/уведомление) выбирает Rust по audio::SOUNDS. HTML5-ветка на
+// Android убрана: WebView играл её в USAGE_MEDIA, и при нулевой
+// медиа-громкости гудок молчал (#70 на X50).
 console.log('8. playCallSound/stopCallSound');
 {
   audioInstances.length = 0;
   apiMock.calls.length = 0;
-  // desktop: cpal через api
   const d = makeCtx();
   C.playCallSound(d.deps, 'incoming', true);
-  check('desktop: mediaSoundPlay(incoming, loop)', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming' && c[2] === true));
+  check('mediaSoundPlay(incoming, loop)', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming' && c[2] === true));
   // маппинг рингтонов из настроек
   apiMock.calls.length = 0;
   C.playCallSound(makeCtx({ callRingtoneIncoming: 'classic' }).deps, 'incoming', true);
   check('маппинг выбранного рингтона', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'classic'));
-  // Android: HTML5 Audio
+  // выбранный рингтон касается ТОЛЬКО гудков: сигнал конца не подменяется
+  apiMock.calls.length = 0;
+  C.playCallSound(makeCtx({ callRingtoneIncoming: 'incoming_pulse' }).deps, 'end', false);
+  check('сигнал end не маппится на выбор пользователя', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'end' && c[2] === false));
+  // reset() пишет null — базовое имя обязано остаться (иначе мост получит '' и откажет)
+  apiMock.calls.length = 0;
+  C.playCallSound(makeCtx({ callRingtoneIncoming: null }).deps, 'incoming', true);
+  check('пустой выбор → базовое имя incoming', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming'));
+  // Android: ТОТ ЖЕ мост и ноль конструкций Audio
+  apiMock.calls.length = 0;
   const a = makeCtx({ isAndroid: true });
   C.playCallSound(a.deps, 'incoming', true);
-  check('Android: Audio(/sounds/ring_incoming.wav), loop, vol 0.85', audioInstances.length === 1 && audioInstances[0].src === '/sounds/ring_incoming.wav' && audioInstances[0].loop === true && audioInstances[0].volume === 0.85);
+  check('Android: mediaSoundPlay, Audio() не создаётся', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming') && audioInstances.length === 0);
   C.playCallSound(a.deps, 'end', false);
-  check('Android одноразовый: старый остановлен, новый без loop', audioInstances[0].paused === true && audioInstances[1].loop === false);
-  // звук никогда не бросает
-  const origPlay = apiMock.mediaSoundPlay;
-  apiMock.mediaSoundPlay = () => { throw new Error('cpal boom'); };
-  C.playCallSound(makeCtx().deps, 'incoming', true); // не бросает
-  check('звук не бросает (state machine важнее)', true);
-  apiMock.mediaSoundPlay = origPlay;
-  // stopCallSound
+  check('Android одноразовый идёт в мост (audioInstances пуст)', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'end' && c[2] === false) && audioInstances.length === 0);
+  // stop — один путь для обеих платформ
   apiMock.calls.length = 0;
-  const s = makeCtx({ isAndroid: true, callSoundEl: audioInstances[1] });
-  C.stopCallSound(s.deps);
-  check('stopCallSound: Audio.pause + (desktop) mediaSoundStop', audioInstances[1].paused === true && s.session.callSoundEl === null);
-  const s2 = makeCtx();
-  C.stopCallSound(s2.deps);
-  check('stopCallSound desktop → mediaSoundStop', apiMock.calls.some(c => c[0] === 'soundStop'));
+  C.stopCallSound(makeCtx({ isAndroid: true }).deps);
+  check('stop → mediaSoundStop (Android тоже)', apiMock.calls.some(c => c[0] === 'soundStop'));
+  // Звук никогда не бросает: синхронный бросок рвал acceptCall ДО
+  // call_accept (регресс зафиксирован в шапке функции). Проверяется
+  // утверждением, а не «упал/не упал»: собиратель unhandledRejection ловит
+  // и потерянный .catch, иначе смоук просто падал бы (проверка #64).
+  const origPlay = apiMock.mediaSoundPlay;
+  const origStop = apiMock.mediaSoundStop;
+  let threw = null;
+  apiMock.mediaSoundPlay = () => { throw new Error('cpal boom'); };
+  try { C.playCallSound(makeCtx().deps, 'incoming', true); } catch (e) { threw = e; }
+  apiMock.mediaSoundStop = () => { throw new Error('cpal boom'); };
+  let threwStop = null;
+  try { C.stopCallSound(makeCtx().deps); } catch (e) { threwStop = e; }
+  check('синхронный отказ моста не долетает до state machine', threw === null && threwStop === null, { threw: String(threw), threwStop: String(threwStop) });
+  const rejections = [];
+  const onRej = (r) => rejections.push(r);
+  process.on('unhandledRejection', onRej);
+  apiMock.mediaSoundPlay = () => Promise.reject(new Error('cpal boom'));
+  apiMock.mediaSoundStop = () => Promise.reject(new Error('cpal boom'));
+  C.playCallSound(makeCtx().deps, 'incoming', true);
+  C.stopCallSound(makeCtx().deps);
+  await flush();
+  await flush();
+  process.off('unhandledRejection', onRej);
+  check('отказанный промис съедается .catch (нет unhandledRejection)', rejections.length === 0, { rejections: rejections.length });
+  apiMock.mediaSoundPlay = origPlay;
+  apiMock.mediaSoundStop = origStop;
+  // статикой: HTML5-ветка не должна вернуться (ни в фичу, ни в превью настроек)
+  for (const [rel, label] of [['src/features/calls.js', 'звук звонка'], ['src/components/SettingsPage.vue', 'превью рингтона']]) {
+    const src = readFileSync(new URL('../' + rel, import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')   // блок-комментарии
+      .replace(/^[^\S\n]*\/\/.*$/gm, ''); // строка-комментарий
+    check(`${label}: нет new Audio() и путей /sounds/`, !/new\s+Audio\(/.test(src) && !/\/sounds\//.test(src));
+  }
 }
 
 // ── 9. Баунс письма-вызова → мгновенная отмена (12.10.2026) ─────

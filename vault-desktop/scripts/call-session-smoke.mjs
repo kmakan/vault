@@ -44,7 +44,6 @@ ok('C4 ringtone outgoing', s.callRingtoneOutgoing === 'tone-b');
 // C4b: timers / refs через mutаторы (plain values — не reactivity)
 s.setCallClockTimer(99);
 s.setCallRingTimer(77);
-s.setSoundEl({ play: () => {} });
 s.setCallMediaConnected(true);
 s.setPendingKemct('kem');
 s.setPendingSenderEk('ek');
@@ -54,7 +53,6 @@ s.setSendSeen(true);
 s.setOffers({ local: 'local-o' });
 ok('C4b callClockTimer', s.callClockTimer === 99);
 ok('C4b callRingTimer', s.callRingTimer === 77);
-ok('C4b soundEl', s.callSoundEl && s.callSoundEl.play);
 ok('C4b callMediaConnected', s.callMediaConnected === true);
 ok('C4b pendingKemct', s.pendingKemct === 'kem');
 ok('C4b pendingSenderEk', s.pendingSenderEk === 'ek');
