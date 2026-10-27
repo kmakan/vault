@@ -371,7 +371,9 @@ export default {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: cover;
+  /* contain, не cover: пропорции кадра важнее заполнения. Кадр может быть
+     портретным (телефон) — cover обрезал бы его, contain показывает целиком. */
+  object-fit: contain;
   transform: scaleX(-1); /* mirror — привычный взгляд собеседника */
 }
 /* ── Аватар + пульсирующие кольца дозвона ─────────────────────── */

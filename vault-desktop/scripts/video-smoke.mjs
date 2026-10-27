@@ -67,6 +67,8 @@ let encoderQueueSize = 0;
 const encoders = [];
 const decoders = [];
 let getUserMediaError = null;
+// Подмена потока камеры: ориентация/разрешение, которые вернёт трек.
+let streamFactory = null;
 
 // Node ≥21 объявляет navigator геттером только для чтения — переопределяем.
 Object.defineProperty(globalThis, 'navigator', {
@@ -74,6 +76,7 @@ Object.defineProperty(globalThis, 'navigator', {
     mediaDevices: {
       getUserMedia: async (constraints) => {
         if (getUserMediaError) throw getUserMediaError;
+        if (streamFactory) return streamFactory(constraints);
         const w = (constraints.video && constraints.video.width && constraints.video.width.ideal) || 640;
         const h = (constraints.video && constraints.video.height && constraints.video.height.ideal) || 480;
         // 40 кадров — хватает на полный цикл кодирования и на проверку
@@ -225,6 +228,7 @@ function reset() {
   apiMock.frames.length = 0; apiMock.starts.length = 0; apiMock.stops.length = 0;
   encoders.length = 0; decoders.length = 0;
   getUserMediaError = null;
+  streamFactory = null;
 }
 async function tick(n = 1) {
   for (let i = 0; i < n; i++) await new Promise((r) => process.nextTick(r));
@@ -320,6 +324,25 @@ console.log('2. startCamera — отправка кадров (camera → encode
   await tick(5);
   check('stopCamera(2): энкодер закрыт', enc3.closed === true);
   check('stopCamera(2): треки остановлены', track3.srcObject._track._stopped === true);
+}
+
+// ── 2b. Ориентация камеры: энкодер следует фактическому кадру ──
+console.log('2b. Портретный кадр (480x640) — энкодер не растягивает его под 640x480');
+{
+  reset();
+  // Трек без getSettings: начальный конфиг берёт «идеальные» 640x480,
+  // но кадры приходят портретные. Энкодер обязан перестроиться по кадру,
+  // иначе WebCodecs растянет картинку по осям неравномерно.
+  streamFactory = () => makeMediaStream(4, 480, 640);
+  await V.startCamera('call-portrait');
+  await tick(10);
+  const enc = encoders[0];
+  check('конфиг энкодера = фактическому кадру 480x640',
+    enc && enc.config && enc.config.width === 480 && enc.config.height === 640,
+    enc && enc.config && { w: enc.config.width, h: enc.config.height });
+  check('кадры портретного потока ушли в Rust', apiMock.frames.length > 0, apiMock.frames.length);
+  V.stopCamera();
+  await tick(3);
 }
 
 // ── 3. Идемпотентность startCamera ─────────────────────────────
@@ -473,6 +496,10 @@ console.log('7. Сквозной поток видеозвонка (мок-ст�
   V.decodeFrame({ rgba: Buffer.from(new Uint8Array([9, 9, 9, 255])).toString('base64'), width: 1, height: 1 }); // RGBA-путь desktop (video.js:340)
   await tick(3);
   check('remote-кадр отрисован', remoteCanvas._drawn.length === 1, remoteCanvas._drawn.length);
+  // putImageData рисует 1:1: canvas обязан принять размер кадра, иначе
+  // картинка другого разрешения (портретная камера) обрезается CSS'ом.
+  check('canvas принял размер RGBA-кадра (1x1)', remoteCanvas.width === 1 && remoteCanvas.height === 1,
+    { w: remoteCanvas.width, h: remoteCanvas.height });
 
   // Hangup.
   V.stopCamera();

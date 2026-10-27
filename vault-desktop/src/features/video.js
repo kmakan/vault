@@ -123,7 +123,15 @@ export async function startCamera(callId, opts = {}) {
     try { await opts.localEl.play(); } catch (e) { /* autoplay — не критично */ }
   }
 
-  // 2. VP8-энкодер. WebCodecs требует явного конфига — совпадает с Rust.
+  // 2. VP8-энкодер. Размер конфига — по фактическому кадру камеры.
+  // «Идеальные» 640x480 из constraints не гарантированы: в портретной
+  // ориентации трек отдаёт 480x640, и WebCodecs с конфигом 640x480 растянул
+  // бы кадр по осям неравномерно (собеседник видел искажённые пропорции).
+  const [track] = mediaStream.getVideoTracks();
+  const trackSettings = (track && track.getSettings && track.getSettings()) || {};
+  const even = (n) => Math.max(2, Number(n) - (Number(n) % 2));
+  let encW = even(trackSettings.width || VIDEO_WIDTH);
+  let encH = even(trackSettings.height || VIDEO_HEIGHT);
   let encoded = 0;
   try {
     encoder = new VideoEncoder({
@@ -156,8 +164,8 @@ export async function startCamera(callId, opts = {}) {
   try {
     encoder.configure({
       codec: 'vp8',
-      width: VIDEO_WIDTH,
-      height: VIDEO_HEIGHT,
+      width: encW,
+      height: encH,
       bitrate: VIDEO_BITRATE,
       framerate: VIDEO_FPS,
       // Keyframe каждые KEYFRAME_INTERVAL*fps кадров — для устойчивости
@@ -174,7 +182,6 @@ export async function startCamera(callId, opts = {}) {
   // Источник — MediaStreamTrackProcessor (Insertable Streams, Chrome 94+).
   // На десктопе сюда не доходим: WebKitGTK не имеет ни MSTP, ни кадров из
   // <video> — захват и энкод там в Rust (см. начало startCamera).
-  const [track] = mediaStream.getVideoTracks();
   const keyEvery = KEYFRAME_INTERVAL * VIDEO_FPS;
 
   const sendFrame = (frame, isKey) => {
@@ -185,6 +192,29 @@ export async function startCamera(callId, opts = {}) {
       return;
     }
     try {
+      // Поворот устройства/смена разрешения: конфиг обязан следовать кадру,
+      // иначе WebCodecs масштабирует его неравномерно. После перестройки
+      // шлём ключевой кадр — декодер собеседника должен начать с нового
+      // размера, а не тянуть старые delta-кадры.
+      const fw = even(frame.displayWidth || frame.codedWidth || encW);
+      const fh = even(frame.displayHeight || frame.codedHeight || encH);
+      if (fw !== encW || fh !== encH) {
+        try {
+          encoder.configure({
+            codec: 'vp8',
+            width: fw,
+            height: fh,
+            bitrate: VIDEO_BITRATE,
+            framerate: VIDEO_FPS,
+            keyInterval: KEYFRAME_INTERVAL * VIDEO_FPS,
+          });
+          encW = fw;
+          encH = fh;
+          isKey = true;
+        } catch (e) {
+          console.warn('[video] encoder reconfigure failed:', e && e.message || e);
+        }
+      }
       encoder.encode(frame, { keyFrame: isKey });
     } finally {
       frame.close();
@@ -334,10 +364,16 @@ function decodeVp8Chunk(base64Vp8) {
 
 function drawFrame(canvasEl, frame) {
   if (!canvasEl) return;
+  const fw = frame.displayWidth || VIDEO_WIDTH;
+  const fh = frame.displayHeight || VIDEO_HEIGHT;
   if (!canvasCtx || canvasCtx.canvas !== canvasEl) {
-    canvasEl.width = frame.displayWidth || VIDEO_WIDTH;
-    canvasEl.height = frame.displayHeight || VIDEO_HEIGHT;
     canvasCtx = canvasEl.getContext('2d');
+  }
+  // Размер кадра может смениться (поворот телефона) — canvas следует за ним,
+  // иначе drawImage растянет кадр под старые пропорции.
+  if (canvasEl.width !== fw || canvasEl.height !== fh) {
+    canvasEl.width = fw;
+    canvasEl.height = fh;
   }
   canvasCtx.drawImage(frame, 0, 0, canvasEl.width, canvasEl.height);
 }
@@ -368,6 +404,14 @@ function decodeRgbaFrame(base64Rgba, width, height) {
     const data = new Uint8ClampedArray(raw.length);
     for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
     const imageData = new ImageData(data, width, height);
+    // Canvas подстраивается под фактический размер кадра: putImageData
+    // пишет пиксели 1:1, и при другом размере кадра (портретная камера
+    // собеседника) картинка обрезалась бы, а CSS растянул бы остаток.
+    const canvasEl = canvasCtx.canvas;
+    if (canvasEl.width !== width || canvasEl.height !== height) {
+      canvasEl.width = width;
+      canvasEl.height = height;
+    }
     canvasCtx.putImageData(imageData, 0, 0);
   } catch (e) {
     // Потерянный/битый кадр — пропускаем, следующий всё исправит.
