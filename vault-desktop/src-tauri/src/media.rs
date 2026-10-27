@@ -763,8 +763,17 @@ impl CallMediaManager {
         // сколько кандидатов реально в SDP — если 0
         // соединение не поднимется даже с partial-подходом.
         let cand_count = desc.sdp.matches("a=candidate:").count();
+        // Число кандидатов не различает «звонок в одной Wi-Fi» и «звонок через
+        // relay»: без признака typ relay приёмка не увидит потери relay-пути —
+        // локальный звонок соединится и без него, а вне одной сети человек узнает
+        // о поломке только по тишине.
+        let relay_count = desc
+            .sdp
+            .lines()
+            .filter(|l| l.starts_with("a=candidate:") && l.contains(" typ relay"))
+            .count();
         eprintln!(
-            "[media] local SDP: candidates={cand_count}, len={}",
+            "[media] local SDP: candidates={cand_count} (relay={relay_count}), len={}",
             sdp_json.len()
         );
         Ok(sdp_json)
