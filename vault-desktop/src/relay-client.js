@@ -963,7 +963,7 @@ export async function saveProState(account, state) {
     checkout_id: state.checkout_id || '',
     grace_until: state.grace_until || 0,
     // Устройства и лимиты — тоже часть состояния: экран показывает
-    // «устройств 2/3» и остаток конвертов, и без их сохранения эти строки
+    // «устройств 2/3» и остаток суточной квоты, и без их сохранения эти строки
     // были бы пустыми (сервер ответил, а мы его ответ выбросили).
     devices: state.devices || 0,
     max_devices: state.max_devices || 0,

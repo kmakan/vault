@@ -47,7 +47,7 @@ const LOCALES = {
   pro_buy_failed: 'Не удалось оформить покупку: {why}',
   pro_buy_ok: 'Pro активирован',
   pro_err_generic: 'Не удалось оформить покупку ({why})',
-  pro_daily: 'конвертов сегодня {used}/{limit}',
+  pro_daily: 'действий релея сегодня {used}/{limit}',
 };
 const tl = (key, params) => {
   let s = LOCALES[key] || key;

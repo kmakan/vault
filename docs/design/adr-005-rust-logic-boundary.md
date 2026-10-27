@@ -2487,7 +2487,7 @@ found` — установленный APK старше этого правила
 
 | Решение | Куда легло | Команда моста | JS-адаптер |
 |---|---|---|---|
-| «сколько конвертов в сутки бесплатно» (100; `0` = выключатель; мусор в env = дефолт, а не ноль) | `vault_relay::DEFAULT_FREE_DAILY_LIMIT` + `daily_limit_from_env` | — | — |
+| «сколько действий релея в сутки бесплатно» (100; `0` = выключатель; мусор в env = дефолт, а не ноль) | `vault_relay::DEFAULT_FREE_DAILY_LIMIT` + `daily_limit_from_env` | — | — |
 | «кто потратил сутки» (счётчик на издателя, смена UTC-дня, `retry_after` до полуночи) | `vault_relay::tally_daily` (чистая функция: `day` и `now` — параметры) | — | — |
 | «не ограничивать явно платные/тестовые виды токена» | `publisher_key` + `Kind::is_unlimited` (канальные токены — не безлимит) | — | — |
 | «какой это 429» | `vault_core::relay::pub_rejection` (`daily` / `rate` / `other`) | `relay_pub_rejection(status, body)` | `relay-client.js::classifyPubRejection` — читает тело, вызывает, fail-open на `rate` |

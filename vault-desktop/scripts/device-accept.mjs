@@ -183,7 +183,7 @@ const PROBES = {
     // обязан печатать ЕГО числа. Разрыв «модуль ↔ компонент» здесь и ловится:
     // подменённое поле, своя копия лимита, потерянная строка.
     if (alreadyPro && view) {
-      const q = /(?:конвертов сегодня|envelopes today)\\s*([\\d/]+)/i.exec(content());
+      const q = /(?:действий релея сегодня|relay actions today)\\s*([\\d/]+)/i.exec(content());
       const nums = q ? q[1].split('/') : null;
       step('строка суточной квоты напечатана', !!nums && nums.length === 2, { квота: q ? q[0] : null });
       step('напечатанный лимит = серверный daily_limit',
@@ -220,7 +220,7 @@ const PROBES = {
       step('отсчёт дней срока токена не печатается («осталось 3650 дн.»)',
         !/осталось \d+ дн|days left/i.test(content()), { text: content().slice(0, 300) });
       step('безлимитный токен не вводит счётчиком «сегодня»',
-        !/конвертов сегодня|envelopes today/i.test(content()), { text: content().slice(0, 300) });
+        !/действий релея сегодня|relay actions today/i.test(content()), { text: content().slice(0, 300) });
     } else {
       soft('слова тестового токена не проверены: выдан не тестовый',
         { kind: view ? view.kind : null });
