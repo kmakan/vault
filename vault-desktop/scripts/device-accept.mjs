@@ -271,6 +271,23 @@ const PROBES = {
     step('модалка настроек ОТКРЫЛАСЬ', overlay.length > before && p.showSettings === true,
       { overlayBefore: before, overlayAfter: overlay.length, showSettings: p.showSettings });
     if (overlay.length > before) {
+      // Экран настроек обязан следовать выбранной теме (жалоба 27.10:
+      // попап был в дефолтной GitHub-dark палитре). Сравниваем вычисленный
+      // фон страницы с вычисленным значением --bg-primary темы.
+      const pageEl = document.querySelector('.settings-page');
+      step('экран настроек отрисован', !!pageEl);
+      if (pageEl) {
+        const themeId = localStorage.getItem('vault-theme') || 'dark';
+        const rootBg = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim();
+        const probeEl = document.createElement('div');
+        probeEl.style.color = rootBg;
+        document.body.appendChild(probeEl);
+        const expectedBg = rootBg ? getComputedStyle(probeEl).color : '';
+        probeEl.remove();
+        const pageBg = getComputedStyle(pageEl).backgroundColor;
+        step('фон настроек = фон выбранной темы', !!expectedBg && pageBg === expectedBg,
+          { theme: themeId, pageBg, themeBg: expectedBg });
+      }
       const closeBtn = document.querySelector('.modal-close-x, .modal-close');
       if (closeBtn) closeBtn.click();
       else p.showSettings = false;
@@ -601,12 +618,19 @@ const PROBES = {
       typeof calls === 'boolean' && typeof video === 'boolean', { calls, video });
 
     // 2. Раунд-трип тумблера видео: включённое читается как включённое.
+    // Проба обязана вернуть выбор пользователя: записанное значение — его
+    // воля, а приёмка лишь проверяет проводку. Без восстановления каждый
+    // прогон молча гасит видео тому, кто его включил (так и вышло 27.10).
     await inv('settings_flag_set', { name: 'exp-video', enabled: true });
     const on = await inv('settings_flag', { name: 'exp-video' });
     step('видео: включено и читается как включено', on === true, on);
     await inv('settings_flag_set', { name: 'exp-video', enabled: false });
     const off = await inv('settings_flag', { name: 'exp-video' });
     step('видео: выключено и читается как выключено', off === false, off);
+    await inv('settings_flag_set', { name: 'exp-video', enabled: video });
+    const videoRestored = await inv('settings_flag', { name: 'exp-video' });
+    step('проба вернула выбор пользователя (видео)', videoRestored === video,
+      { before: video, restored: videoRestored });
     const callsAfter = await inv('settings_flag', { name: 'exp-calls' });
     step('тумблер видео не трогает звонки (флаги независимы)', callsAfter === calls,
       { before: calls, after: callsAfter });

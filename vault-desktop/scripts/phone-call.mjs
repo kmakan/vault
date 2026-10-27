@@ -69,6 +69,8 @@ const PROBES = {
     const app = document.querySelector('#app').__vue_app__;
     const p = app._container._vnode.component.proxy;
     const s = p.callSession ? p.callSession.state : {};
+    const inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+    const storedVideo = inv ? await inv('settings_flag', { name: 'exp-video' }) : 'нет моста';
     return {
       email: p.email,
       activeChat: p.activeChat,
@@ -77,7 +79,56 @@ const PROBES = {
       videoOn: s.callVideoOn,
       hasPeerKey: !!(p.peerKeys && p.peerKeys[p.activeChat]),
       expCalls: p.experimentsCalls,
+      expVideo: p.expVideo,
+      storedVideo,
+      cameraButton: !!document.querySelector('.call-orb-extra'),
     };
+  })()`,
+
+  // Проводка темы: фон экрана настроек обязан совпасть с --bg-primary
+  // выбранной темы (жалоба 27.10 — попап был в дефолтной палитре).
+  theme: `(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    p.showSettings = true;
+    await sleep(500);
+    const pageEl = document.querySelector('.settings-page');
+    const themeId = localStorage.getItem('vault-theme') || 'dark';
+    const rootBg = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim();
+    const probeEl = document.createElement('div');
+    probeEl.style.color = rootBg;
+    document.body.appendChild(probeEl);
+    const themeBg = rootBg ? getComputedStyle(probeEl).color : '';
+    probeEl.remove();
+    const pageBg = pageEl ? getComputedStyle(pageEl).backgroundColor : null;
+    p.showSettings = false;
+    return { themeId, pageBg, themeBg, matches: !!pageBg && pageBg === themeBg };
+  })()`,
+
+  // Тумблер видео: запись в kv + перечитывание флагов в живом приложении.
+  // Нужен после приёмки: до 27.10 её проба гасила видео и не возвращала выбор.
+  'video-flag': (() => {
+    const on = process.argv[3] !== 'off';
+    return `(async () => {
+      const inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+      if (!inv) return { error: 'мост недоступен' };
+      await inv('settings_flag_set', { name: 'exp-video', enabled: ${on} });
+      const app = document.querySelector('#app').__vue_app__;
+      const p = app._container._vnode.component.proxy;
+      if (p.loadExperimentFlags) await p.loadExperimentFlags();
+      const stored = await inv('settings_flag', { name: 'exp-video' });
+      return { requested: ${on}, stored, expVideo: p.expVideo };
+    })()`;
+  })(),
+
+  hangup: `(async () => {
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    const before = p.callSession ? p.callSession.state.currentCall : null;
+    if (!before) return { error: 'звонка нет' };
+    await p.hangup('local');
+    return { hungUp: before.call_id };
   })()`,
 
   start: `(async () => {
@@ -101,16 +152,18 @@ const PROBES = {
     const app = document.querySelector('#app').__vue_app__;
     const p = app._container._vnode.component.proxy;
     const before = p.callSession ? p.callSession.state.callVideoOn : null;
-    // Кнопка видео в оверлее звонка.
-    const btns = Array.from(document.querySelectorAll('button'));
-    const vbtn = btns.find((b) => /видео|video/i.test((b.getAttribute('title') || '') + ' ' + (b.innerText || '')));
-    if (!vbtn) return { error: 'кнопка видео не найдена', titles: btns.map((b) => (b.getAttribute('title')||'').slice(0,20)).filter(Boolean).slice(0,25) };
+    // Кнопка камеры в оверлее звонка — по классу (подпись «Камера», а не
+    // «видео»: поиск по слову «видео» не находил её и выдавал ложное «нет кнопки»).
+    const vbtn = document.querySelector('.call-orb-extra');
+    if (!vbtn) return { error: 'кнопка камеры не найдена', overlay: !!document.querySelector('.call-overlay-root') };
+    const title = vbtn.getAttribute('title') || '';
     vbtn.click();
     await sleep(3000);
     const s = p.callSession ? p.callSession.state : {};
     const canvas = document.querySelector('canvas');
-    return { videoOnBefore: before, videoOnAfter: s.callVideoOn, canvas: !!canvas,
+    return { title, videoOnBefore: before, videoOnAfter: s.callVideoOn, canvas: !!canvas,
              canvasSize: canvas ? canvas.width + 'x' + canvas.height : null,
+             objectFit: canvas ? getComputedStyle(canvas).objectFit : null,
              overlay: !!document.querySelector('.call-overlay, .call-overlay-root') };
   })()`,
 };

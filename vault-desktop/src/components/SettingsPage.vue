@@ -251,11 +251,11 @@
           </div>
           <div>
             <label class="toggle"><input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" /><span class="slider"></span></label>
-            <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
+            <span style="margin-left:10px;font-size:13.5px;color:var(--text-secondary,#8b93a7)">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
           </div>
           <div v-if="isAndroid">
             <label class="toggle"><input type="checkbox" v-model="duressBio" @change="onBioChange" /><span class="slider"></span></label>
-            <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_bio') || 'Снимать замок по отпечатку пальца' }}</span>
+            <span style="margin-left:10px;font-size:13.5px;color:var(--text-secondary,#8b93a7)">{{ t('duress_bio') || 'Снимать замок по отпечатку пальца' }}</span>
           </div>
           <div>
             <div class="duress-label">{{ t('duress_recipients') || 'Кому отправлять SOS' }}</div>
@@ -321,7 +321,7 @@
                сборке тестировщику передают готовый токен в обычное поле
                «токен релея» — это не предложение покупки. -->
           <input v-if="relayPromoOpen && purchasesAllowed" v-model="relayPromoKey" class="duress-input" :placeholder="t('relay_promo_ph')" />
-          <button v-if="purchasesAllowed && !relayPromoOpen" style="background:none;border:none;color:#8b8b9e;cursor:pointer;padding:0;font-size:12px;align-self:flex-start;text-decoration:underline" @click="relayPromoOpen = true">
+          <button v-if="purchasesAllowed && !relayPromoOpen" style="background:none;border:none;color:var(--text-secondary,#8b8b9e);cursor:pointer;padding:0;font-size:12px;align-self:flex-start;text-decoration:underline" @click="relayPromoOpen = true">
             {{ t('relay_have_promo') }}
           </button>
         </div>
@@ -1161,18 +1161,21 @@ export default {
 </script>
 
 <style scoped>
+/* Цвета — только из темы (themes.js → CSS-переменные на documentElement).
+   Хардкод GitHub-dark здесь означал, что экран настроек не следовал
+   выбранной теме: светлая тема получала тёмный фон попапа. */
 .settings-page {
   display: flex;
   height: 100%;
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--bg-primary, #0d1117);
+  color: var(--text-primary, #e6edf3);
 }
 
 .settings-sidebar {
   width: 260px;
   min-width: 260px;
-  background: #161b22;
-  border-right: 1px solid #30363d;
+  background: var(--bg-secondary, #161b22);
+  border-right: 1px solid var(--border-subtle, #30363d);
   display: flex;
   flex-direction: column;
 }
@@ -1180,14 +1183,14 @@ export default {
 .settings-profile {
   padding: 24px 20px 16px;
   text-align: center;
-  border-bottom: 1px solid #30363d;
+  border-bottom: 1px solid var(--border-subtle, #30363d);
 }
 
 .profile-name {
   margin-top: 8px;
   font-size: 16px;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--text-primary, #e6edf3);
 }
 
 .settings-nav {
@@ -1203,7 +1206,7 @@ export default {
   padding: 12px 20px;
   background: none;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary, #8b949e);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.15s;
@@ -1211,14 +1214,14 @@ export default {
 }
 
 .settings-nav-item:hover {
-  background: #21262d;
-  color: #e6edf3;
+  background: var(--bg-hover, #21262d);
+  color: var(--text-primary, #e6edf3);
 }
 
 .settings-nav-item.active {
-  background: #1f6feb22;
-  color: #58a6ff;
-  border-right: 2px solid #58a6ff;
+  background: var(--accent-glow, #1f6feb22);
+  color: var(--accent-primary, #58a6ff);
+  border-right: 2px solid var(--accent-primary, #58a6ff);
 }
 
 .nav-icon {
@@ -1231,7 +1234,7 @@ export default {
 .nav-label { flex: 1; }
 
 .nav-arrow {
-  color: #484f58;
+  color: var(--text-muted, #484f58);
   font-size: 18px;
 }
 
@@ -1244,8 +1247,8 @@ export default {
 .settings-section h2 {
   margin: 0 0 20px;
   font-size: 20px;
-  color: #e6edf3;
-  border-bottom: 1px solid #30363d;
+  color: var(--text-primary, #e6edf3);
+  border-bottom: 1px solid var(--border-subtle, #30363d);
   padding-bottom: 12px;
 }
 
@@ -1261,13 +1264,13 @@ export default {
   appearance: none;
   -webkit-appearance: none;
   padding: 10px 36px 10px 14px;
-  background: #0d1117;
+  background: var(--bg-primary, #0d1117);
   background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border-hover, #30363d);
   border-radius: 8px;
-  color: #e6edf3;
+  color: var(--text-primary, #e6edf3);
   font-size: 14px;
   box-sizing: border-box;
 }
@@ -1294,14 +1297,14 @@ export default {
 .setting-hint {
   margin-top: 14px;
   font-size: 12px;
-  color: #8b949e;
+  color: var(--text-secondary, #8b949e);
   line-height: 1.5;
 }
 
 .setting-group label {
   display: block;
   margin-bottom: 6px;
-  color: #8b949e;
+  color: var(--text-secondary, #8b949e);
   font-size: 13px;
 }
 
@@ -1309,10 +1312,10 @@ export default {
   width: 100%;
   max-width: 320px;
   padding: 10px 14px;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border-hover, #30363d);
   border-radius: 8px;
-  color: #e6edf3;
+  color: var(--text-primary, #e6edf3);
   font-size: 14px;
   box-sizing: border-box;
 }
@@ -1322,15 +1325,15 @@ export default {
   align-items: center;
   justify-content: space-between;
   padding: 14px 0;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-subtle, #21262d);
   font-size: 14px;
-  color: #c9d1d9;
+  color: var(--text-primary, #c9d1d9);
 }
 
 /* Строки-ссылки (политика конфиденциальности / условия использования) */
 .settings-link-row { cursor: pointer; }
-.settings-link-row:hover { color: #e6edf3; }
-.settings-link-arrow { color: #58a6ff; }
+.settings-link-row:hover { color: var(--text-primary, #e6edf3); }
+.settings-link-arrow { color: var(--accent-primary, #58a6ff); }
 
 /* Единая система кнопок (глобальная в App.vue): .btn, .btn-primary,
    .btn-secondary, .btn-danger, .btn-ghost, .btn-sm, .btn-lg.
@@ -1351,7 +1354,7 @@ export default {
 .slider {
   position: absolute;
   inset: 0;
-  background: #30363d;
+  background: var(--bg-active, #30363d);
   border-radius: 12px;
   transition: 0.2s;
 }
@@ -1419,9 +1422,9 @@ export default {
 .logout-btn:hover { background: rgba(248, 81, 73, 0.15); }
 
 /* Блоки в секции «Почта»: смена почты + резервная копия */
-.change-email-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
-.change-email-note { color: #8b949e; font-size: 12px; margin-top: 8px; }
-.backup-title { color: #e6edf3; font-size: 14px; margin: 0 0 10px; }
+.change-email-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.08)); }
+.change-email-note { color: var(--text-secondary, #8b949e); font-size: 12px; margin-top: 8px; }
+.backup-title { color: var(--text-primary, #e6edf3); font-size: 14px; margin: 0 0 10px; }
 .backup-btn { display: inline-block; margin-right: 8px; margin-bottom: 4px; }
 .backup-import-label { display: inline-block; cursor: pointer; }
 .backup-file-input { display: none; }
@@ -1436,19 +1439,19 @@ export default {
 }
 .backup-confirm-panel {
   max-width: 340px; width: 100%; padding: 16px;
-  background: var(--panel, #1b1b24);
+  background: var(--bg-secondary, #1b1b24);
   border-radius: 12px; text-align: center;
 }
-.backup-confirm-panel h3 { margin: 0 0 8px; font-size: 15px; color: #e6edf3; line-height: 1.35; }
+.backup-confirm-panel h3 { margin: 0 0 8px; font-size: 15px; color: var(--text-primary, #e6edf3); line-height: 1.35; }
 .backup-confirm-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: center; }
 
 /* Help */
 
 /* Help */
 .help-links { display: flex; flex-direction: column; gap: 12px; }
-.help-links a { color: #58a6ff; text-decoration: none; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
+.help-links a { color: var(--accent-primary, #58a6ff); text-decoration: none; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
 .help-links a:hover { text-decoration: underline; }
-.version { color: #484f58; font-size: 12px; margin-top: 16px; }
+.version { color: var(--text-muted, #484f58); font-size: 12px; margin-top: 16px; }
 
 /* RELEASE-PREP: блок проверки обновлений */
 .update-check { display: flex; flex-direction: column; gap: 10px; }
@@ -1456,15 +1459,15 @@ export default {
 .feedback-input {
   width: 100%; max-width: 420px; box-sizing: border-box; resize: vertical;
   padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.4;
-  border: 1px solid var(--border, #30363d); background: var(--bg-secondary, #0d1117);
+  border: 1px solid var(--border-hover, #30363d); background: var(--bg-secondary, #0d1117);
   color: var(--text-primary, #e6edf3); font-family: inherit;
 }
-.feedback-input:focus { outline: none; border-color: var(--accent, #58a6ff); }
+.feedback-input:focus { outline: none; border-color: var(--accent-primary, #58a6ff); }
 .feedback-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .update-btn {
   align-self: flex-start; padding: 8px 14px; border-radius: 8px;
-  border: 1px solid var(--accent, #58a6ff); background: transparent;
-  color: var(--accent, #58a6ff); font-size: 13px; cursor: pointer;
+  border: 1px solid var(--accent-primary, #58a6ff); background: transparent;
+  color: var(--accent-primary, #58a6ff); font-size: 13px; cursor: pointer;
   transition: background .15s;
 }
 .update-btn:hover:not(:disabled) { background: rgba(88, 166, 255, .12); }
@@ -1505,7 +1508,7 @@ export default {
   }
   .settings-profile {
     padding: 20px 16px 16px;
-    border-bottom: 1px solid #30363d;
+    border-bottom: 1px solid var(--border-subtle, #30363d);
   }
   .settings-nav {
     display: flex;
@@ -1542,23 +1545,23 @@ export default {
   gap: 8px;
   margin: 0 -16px 8px;
   padding: 12px 16px;
-  background: #0d1117;
+  background: var(--bg-primary, #0d1117);
   border: none;
-  color: #e6edf3;
+  color: var(--text-primary, #e6edf3);
   font-size: 15px;
   cursor: pointer;
   text-align: left;
 }
-.settings-back-btn:hover { background: #161b22; }
+.settings-back-btn:hover { background: var(--bg-secondary, #161b22); }
 
 /* Статус «О себе» */
 .bio-input {
   width: 100%; max-width: 320px;
   padding: 10px 14px;
-  background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
-  color: #e6edf3; font-size: 14px; box-sizing: border-box; resize: vertical;
+  background: var(--bg-primary, #0d1117); border: 1px solid var(--border-hover, #30363d); border-radius: 8px;
+  color: var(--text-primary, #e6edf3); font-size: 14px; box-sizing: border-box; resize: vertical;
 }
-.bio-counter { display: block; margin-top: 4px; color: #8b949e; font-size: 11px; text-align: right; max-width: 320px; }
+.bio-counter { display: block; margin-top: 4px; color: var(--text-secondary, #8b949e); font-size: 11px; text-align: right; max-width: 320px; }
 
 /* Кнопки профиля: столбик с зазором */
 .profile-actions {
@@ -1573,15 +1576,15 @@ export default {
 
 
 .duress-block{display:flex;flex-direction:column;align-items:stretch;gap:8px}
-.duress-title{font-size:15px;color:var(--text,#e7ecf5)}
+.duress-title{font-size:15px;color:var(--text-primary,#e7ecf5)}
 .duress-toggle-row{display:flex;align-items:center;gap:10px;width:100%;padding:6px 0}
 .duress-toggle-row .slider{flex:none}
-.duress-toggle-label{flex:1;font-size:14px;color:var(--text,#e7ecf5)}
-.duress-label{display:block;width:100%;font-size:13px;color:var(--muted,#8b93a7);margin-top:6px}
-.duress-input{display:block;width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border,#1f2940);background:var(--bg-soft,#0f1522);color:var(--text,#e7ecf5);font-size:14px}
+.duress-toggle-label{flex:1;font-size:14px;color:var(--text-primary,#e7ecf5)}
+.duress-label{display:block;width:100%;font-size:13px;color:var(--text-secondary,#8b93a7);margin-top:6px}
+.duress-input{display:block;width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border-hover,#1f2940);background:var(--bg-primary,#0f1522);color:var(--text-primary,#e7ecf5);font-size:14px}
 .duress-warn{display:block;width:100%;font-size:12.5px;color:var(--gold,#f59e0b);margin:6px 0 0}
-.duress-contacts{width:100%;max-height:160px;overflow-y:auto;border:1px solid var(--border,#1f2940);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
-.duress-contact{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text,#e7ecf5);cursor:pointer}
+.duress-contacts{width:100%;max-height:160px;overflow-y:auto;border:1px solid var(--border-hover,#1f2940);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.duress-contact{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text-primary,#e7ecf5);cursor:pointer}
 .duress-block .btn-primary{align-self:flex-start}
 
 </style>

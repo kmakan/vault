@@ -82,5 +82,24 @@ function reset() { applied.clear(); mem.clear(); }
     unknownThrew === null && applied.size === first, unknownThrew ? String(unknownThrew.message) : applied.size);
 }
 
+// ── Экран настроек следует выбранной теме ────────────────────────────────
+// Регресс «попап настроек не в выбранной теме»: фон/текст были захардкожены
+// палитрой GitHub-dark и светлая тема получала тёмный экран. Проверяем, что
+// страница и сайдбар берут цвета из CSS-переменных темы.
+{
+  const vue = readFileSync(path.join(ROOT, 'src', 'components', 'SettingsPage.vue'), 'utf8');
+  const block = (sel) => {
+    const m = vue.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}'));
+    return m ? m[1] : '';
+  };
+  const page = block('.settings-page');
+  const sidebar = block('.settings-sidebar');
+  ok('настройки: фон страницы — из темы', /background:\s*var\(--bg-primary/.test(page), page.trim());
+  ok('настройки: текст страницы — из темы', /color:\s*var\(--text-primary/.test(page), page.trim());
+  ok('настройки: сайдбар — из темы', /background:\s*var\(--bg-secondary/.test(sidebar), sidebar.trim());
+  ok('настройки: нет хардкод-фона GitHub-dark',
+    !/background:\s*#(0d1117|161b22)\b/i.test(vue));
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');
 process.exit(fail ? 1 : 0);
