@@ -3,9 +3,19 @@
 #
 # ЗАЧЕМ. «Звонок вне одной сети прошёл» само по себе не говорит, КАК оно
 # прошло: srflx-пара (прямиком через CGNAT) и relay-пара (через TURN) для
-# пользователя выглядят одинаково. Приёмка TURN требует измеримого свидетеля,
-# и счётчик пакетов на адресе релея — самый прямой: если за разговор через
-# relay bytes>0, медиа шла через TURN; если 0 — через прямой путь.
+# пользователя выглядят одинаково.
+#
+# МЕРИТЬ ЭТИМ — фон, а не медиа. Измерено 27.10 на 0.1.282: за 33-секундный
+# звонок, избранная пара которого была прямой (`ice selected candidate pair
+# 192.168.1.4:50521 <-> 91.78.11.152:6714`), сюда навалилось 244 пакета /
+# 37 KB и обратно 69 — это проверки ICE (18 локальных × 10 удалённых пар плюс
+# TURN Allocate/Refresh), а не медиа: принято за тот же звонок было ~320
+# медиа-пакетов, из них с адреса релея только 69. Поэтому nonzero НИЧЕГО не
+# доказывает, а вот положительный контроль (тест B, `call-force-relay.sh`) по
+# этим же счётчикам читается: медиа через relay — это ровные ~50 пакетов/с в
+# обе стороны, а не пачка на установлении. Окончательную меру даёт лог стека:
+# RUST_LOG=info,rtc::peer_connection::handler::ice=debug печатает избранную
+# пару адресами.
 #
 # Использование (пароль sudo передаётся по stdin, в argv не попадает):
 #   printf '%s\0' "$PW" | ./turn-observe.sh add [долгота_сек]
@@ -27,13 +37,19 @@ case "${1:-status}" in
     sudo_run nft add table "$TABLE"
     sudo_run nft add chain inet vault_turn_observe 'out { type filter hook output priority 0; policy accept; }'
     sudo_run nft add chain inet vault_turn_observe 'in { type filter hook input priority 0; policy accept; }'
+    # Повторный add поверх живой таблицы удваивает правила — а два counter-правила
+    # на один поток считают вдвое. Чистим цепочки до вставки.
+    sudo_run nft flush chain inet vault_turn_observe out
+    sudo_run nft flush chain inet vault_turn_observe in
     sudo_run nft add rule inet vault_turn_observe out 'ip daddr '"$RELAY"' meta l4proto udp counter'
     sudo_run nft add rule inet vault_turn_observe in 'ip saddr '"$RELAY"' meta l4proto udp counter'
     echo "наблюдение за $RELAY включено (долгота ${TTL}с)"
     # Само-снятие: счётчики без срока — мусор в правилах фильтрации хоста.
-    setsid env SUDO_PW="$PW" TTL="$TTL" bash -c \
-      'sleep "$TTL"; printf "%s\n" "$SUDO_PW" | sudo -S -p "" nft delete table inet vault_turn_observe' \
-      >/dev/null 2>&1 < /dev/null &
+    # Пароль — фоновому процессу строго по stdin: присваивание вида `env VAR=…`
+    # видно в /proc/<pid>/cmdline чужим пользователям.
+    printf '%s\n' "$PW" | setsid bash -c \
+      'IFS= read -r pw; sleep "$1"; printf "%s\n" "$pw" | sudo -S -p "" nft delete table inet vault_turn_observe' _ "$TTL" \
+      >/dev/null 2>&1 &
     ;;
   peek)
     sudo_run nft list table inet vault_turn_observe 2>/dev/null | command grep -a counter
