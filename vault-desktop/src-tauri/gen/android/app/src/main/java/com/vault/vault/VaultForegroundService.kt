@@ -2228,7 +2228,9 @@ class VaultForegroundService : Service() {
         }
 
         /// Стоп звука звонка (media_sound_stop). Слот общий с сервисным
-        /// гудком, поэтому остановка одна на оба пути.
+        /// гудком, поэтому остановка одна на оба пути. Контекст — часть
+        /// JNI-сигнатуры (Rust передаёт его всем точкам входа), сам здесь не
+        /// нужен: ресурс уже открыт, а держатель — ringtonePlayer.
         @JvmStatic
         fun stopCallSound(context: Context) {
             stopRingtone()
