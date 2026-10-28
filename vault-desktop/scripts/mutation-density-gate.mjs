@@ -60,7 +60,7 @@ const EXEMPT = new Map([
   // вызова чужой библиотеки (FFI), а не ветвление над нашими данными; проверяется
   // звонком/записью на живом устройстве, куда мутационный гейт не дотягивается.
   ['vault-desktop/src-tauri/src/android_save.rs', 'обёртка Android MediaStore (FFI) — форма платформенного вызова, меряется приёмкой на X50'],
-  ['vault-desktop/src-tauri/src/audio/audio_android.rs', 'привязки AAudio (FFI, unsafe) — устройства-зависимый код, меряется живым звонком'],
+  ['vault-desktop/src-tauri/src/audio/audio_android.rs', 'привязки AAudio (FFI, unsafe) — устройства-зависимый код. С 28.10 форма JNI-провода (имя, класс, дескриптор) измерима на хосте: gate:jni-keep + jni-keep-mut (3 мутации здесь), а по артефакту — dex-jni-check; в исключении остаётся только то, что статикой не меряется — сам вывод звука AAudio и канал рингтона, это приёмка на X50 (#40, #63)'],
   ['vault-desktop/src-tauri/src/vp8_decoder.rs', 'привязки libvpx (FFI) — декодер без решений о протоколе, меряется живым звонком'],
   ['vault-desktop/src-tauri/src/vp8_encoder.rs', 'привязки libvpx (FFI) — энкодер без решений о протоколе, меряется живым звонком'],
   ['vault-desktop/src-tauri/src/peer_index.rs', 'индекс peer по публичному ключу — чистый делегат ядру (очередь t_61bd5090: не кандидат)'],

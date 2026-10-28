@@ -69,12 +69,15 @@ cd ~/whisper && ./scripts/test-all.sh   # крейты: core + client + desktop
 дереве (долг, канбан), а в цикле релиза обязательны: `gate:parse`,
 `gate:mutation-patterns` (якоря всех наборов), `gate:opus-numbers` (протокольные
 числа Opus — одна копия в ядре), `build` (все JS-гейты + смоуки + vite),
-`gate:mutations` (JS), `gate:hygiene`, `gate:mutation-density` — и прогон НАБОРОВ,
+`gate:mutations` (JS), `gate:hygiene`, `gate:mutation-density`, `gate:jni-keep`
+(провода Rust→Kotlin: keep-правило + статик-мост на каждую точку JNI) — и прогон
+НАБОРОВ,
 которые касаются именно этой правки (`--set <набор>`, мерка до/после). Пока
 полный прогон идёт, `gate:mutation-patterns` отказывается работать (в дереве
 живёт мутант) — новый набор в такую паузу сверяют счётчиком совпадений по
 тексту файла. Если изменён код звонка, «зелёный quality» не заменяет приёмку на
-устройстве: звук с хоста не слышен.
+устройстве: что метод Доедет — известно с хоста (гейт + DEX), а что он ИГРАЕТ в
+канале рингтона — знает только устройство.
 
 Гейты, которые обязаны быть зелёными: `js-logic-ratchet` (потолок не
 распускается), `mutation-density` (каждый модуль >40 строк имеет набор
@@ -107,6 +110,18 @@ cd ~/whisper/vault-desktop
 ./scripts/build-android-apk.sh     # ~9 мин (компиляция Rust под aarch64)
 # артефакт: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
 ```
+
+Скрипт заканчивается не «собралось», а двумя сверками артефакта: версия внутри
+APK против версии дерева (`versionCode = major*1e6 + minor*1e3 + patch`, иначе
+`install -r` молча оставит старую сборку) и **`node scripts/dex-jni-check.mjs
+<apk>`** — каждая точка JNI, которую зовёт Rust, обязана лежать в `classes.dex`
+на вызываемом классе как `static` с точным дескриптором. Это тот шаг, из-за
+которого 28.10 приёмка 0.1.284 провалилась по звуку звонка: R8 в release-сборке
+вырезал статик-мост `@JvmStatic` под `playCallSound`/`stopCallSound` (из Java их
+никто не зовёт), JNI дал `NoSuchMethodError`, и на хосте всё было зелено —
+`cargo check --target aarch64` собирает Kotlin как есть. Мост до сборки держит
+`npm run gate:jni-keep` (13 точек × две стороны: keep-правило + `companion
+object`/`@JvmStatic`), правда после сборки — DEX. Подробности — ADR-005, партия 5n.
 
 ## 5. Приёмка на устройстве
 
