@@ -20,6 +20,7 @@
 // проверял бы не то, что собирается в приложении.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { bodyDecodeHandler, writeBodyDecodeAdapter } from './lib/body-decode-mock.mjs';
 
 const ROOT = import.meta.dirname;
 const MOCKS = '/tmp/channels-signing-smoke-mocks';
@@ -62,7 +63,9 @@ globalThis.__invoke = async (cmd, args) => {
   if (cmd === 'db_kv_set') { kv.set(args.key, String(args.value)); return null; }
   if (cmd === 'channel_signing_key') return PUBKEY;
   if (cmd === 'channel_sign_post') { signCalls.push(args); return SIG; }
-  return null;
+  // kid канала считает ядро (28.10): двойник отвечает на channel_kid_hex.
+  const body = bodyDecodeHandler(cmd, args);
+  return body === undefined ? null : body;
 };
 globalThis.__fp = 'aa:bb:cc:dd:ee:ff';
 globalThis.window = globalThis;
@@ -86,6 +89,7 @@ writeFileSync(MOCKS + '/crypto.js',
 writeFileSync(MOCKS + '/channels-tokens.js',
   'export const channelTokens = async (keyHex) => globalThis.__tokOf(keyHex);');
 writeFileSync(MOCKS + '/channels.js', 'export const __noop = 1;');
+writeBodyDecodeAdapter(MOCKS, "import { invoke } from './core.js';");
 
 prepareModuleCopy(
   ROOT + '/../src/relay-client.js',
@@ -95,6 +99,7 @@ prepareModuleCopy(
     './api.js': 'api.js',
     './identity.js': 'identity.js',
     './crypto.js': 'crypto.js',
+    './body-decode.js': 'body-decode.js',
   },
   MOCKS,
   [

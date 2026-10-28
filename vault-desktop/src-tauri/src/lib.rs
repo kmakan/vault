@@ -50,6 +50,8 @@ mod backup_import;
 mod key_escrow;
 #[cfg(test)]
 mod key_escrow_smoke;
+#[cfg(test)]
+mod body_decode_smoke;
 mod key_store;
 mod media;
 // Справочник «адрес контакта → ключ». Потребитель (`service_monitor`) компилируется
@@ -1680,6 +1682,23 @@ fn channel_sign_post(kid_hex: String, env_id: String, body: String) -> Result<St
     channel_signing::sign_post(&k.private_key, kid, &env_id, &body).map_err(|e| e.to_string())
 }
 
+/// Тело письма (url-safe base64) → текст. Форма тела — правило ЯДРА
+/// (`crypto::decode_url_safe_text`: переносы транспорта, QP, алфавит,
+/// padding); JS-адаптеры только передают тело и разбирают JSON. Вторая копия
+/// правила в JS уже разъезжалась молча (ADR-005, t_7d2c1bb1).
+#[tauri::command]
+fn vault_decode_url_safe_body(body: String) -> Result<String, String> {
+    vault_client::crypto::decode_url_safe_text(&body).map_err(|e| e.to_string())
+}
+
+/// key_id канала (первые 8 байт read-токена, big-endian hex). Вывод — в ядре
+/// (`crypto::channel_kid_hex`), а не в JS: токен разбирается ровно так же, как
+/// его выводит релей, и kid не может молча разъехаться с подписью (ADR-002).
+#[tauri::command]
+fn channel_kid_hex(token: String) -> Result<String, String> {
+    vault_client::crypto::channel_kid_hex(&token).map_err(|e| e.to_string())
+}
+
 // ── Broadcast channels (M2, docs/design/channels-protocol.md) ─────────────
 
 /// Пара capability-токенов канала (read/write). Логика — в channels.rs,
@@ -2490,6 +2509,8 @@ pub fn run() {
             media::media_call_join,
             channel_signing_key,
             channel_sign_post,
+            vault_decode_url_safe_body,
+            channel_kid_hex,
             channels_tokens,
             channels_load,
             channels_create,

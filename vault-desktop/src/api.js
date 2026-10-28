@@ -4,6 +4,7 @@ import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache,
   resolveAlias as resolveAliasInCore, rememberAlias as rememberAliasInCore,
   isOwnSender as isOwnSenderInCore } from './identity.js';
 import { isRecoveryPending as recoveryIsPending, clearRecoveryPending as recoveryClearPending } from './features/recovery-session.js';
+import { decodeUrlSafeText } from './body-decode.js';
 
 // ═════════════════════════════════════════════════════════════════════════
 // Vault Desktop — serverless email transport (phase 2)
@@ -988,7 +989,7 @@ export class ApiClient {
             // парсится заново каждым поллингом и «приглашения от старых email»
             // приходят бесконечно. Ключа нет = не знаем, повторим следующим тиком.
             if (!Object.prototype.hasOwnProperty.call(bodies, k)) continue;
-            this._handshakeParsed.set(keyOf(m), this._parseHandshakeItem(m, bodies[k] || ''));
+            this._handshakeParsed.set(keyOf(m), await this._parseHandshakeItem(m, bodies[k] || ''));
           }
         }
       }
@@ -1009,11 +1010,12 @@ export class ApiClient {
   }
   // Тело письма → item ({uid,id,date,folder,subject,parsed,kind}) | null
   // (не наш формат: не декодируется / без kind — чужая почта).
-  _parseHandshakeItem(m, body) {
+  // Разбор тела — в ядре (body-decode.js); здесь только JSON-поля.
+  async _parseHandshakeItem(m, body) {
     const subject = m.subject || '';
     let parsed = null;
     if (body) {
-      try { parsed = urlSafeB64Decode(body); } catch (e) { parsed = null; }
+      try { parsed = JSON.parse(await decodeUrlSafeText(body)); } catch (e) { parsed = null; }
     }
     let kind = parsed && parsed.kind || null;
     if (!kind) {
@@ -2205,17 +2207,6 @@ function urlSafeB64(obj) {
   return btoa(unescape(encodeURIComponent(json)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-function urlSafeB64Decode(str) {
-  // Нагрузочное правило здесь — перевод алфавита: atob бросает
-  // InvalidCharacterError на `-` и `_` (замер 25.10), без него инвайт молча
-  // теряется. Снятие пробелов — ЗАЩИТА, а не требование декодера: atob по
-  // WHATWG «forgiving-base64» сам выкидывает ASCII-пробелы, поэтому мутаций
-  // по этой строке нет и быть не может (urlsafe-body-mut.mjs, t_7d2c1bb1).
-  // Отправка фолдит строки ≤76 (fold_lines в email.rs), SMTP-хопы тоже могут
-  // перекодировать — тот же урок, что в CLI (7b6b978).
-  const clean = (str || '').replace(/\s+/g, '');
-  const b64 = clean.replace(/-/g, '+').replace(/_/g, '/');
-  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
-  return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))));
-}
+// Чтение тела письма (алфавит, folding, padding, UTF-8) — в ядре, см.
+// body-decode.js::decodeUrlSafeText.
 

@@ -1,4 +1,5 @@
 import * as EnvelopeRule from './envelope-rule.js';
+import { decodeUrlSafeText } from './body-decode.js';
 export function isTextMime(type, name) {
   if (type && (type.startsWith('text/') || /^(application\/(json|xml|javascript|x-sh)|application\/(x-)?(yaml|csv|markdown))$/.test(type))) return true;
   const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
@@ -140,7 +141,11 @@ export function linkify(text) {
   return tmp;
 }
 
-export function parseMessageContent(content) {
+// Разбор содержимого сообщения (конверт вложения / простой текст).
+//
+// ASYNC: данные текстового вложения расшифровываются ядром (алфавит,
+// folding, padding, UTF-8 — body-decode.js), а мост асинхронен.
+export async function parseMessageContent(content) {
   if (!content || typeof content !== 'string') return { text: content, attachment: null };
   try {
     const parsed = JSON.parse(content);
@@ -152,10 +157,8 @@ export function parseMessageContent(content) {
       const isText = !isImage && !isAudio && isTextMime(parsed.type, parsed.name);
       let textContent = '';
       if (isText) {
-        try {
-          textContent = atob(String(parsed.data || '').replace(/-/g, '+').replace(/_/g, '/'));
-          try { textContent = decodeURIComponent(escape(textContent)); } catch { /* уже utf-8 */ }
-        } catch { textContent = ''; }
+        const decoded = await decodeUrlSafeText(String(parsed.data || ''));
+        textContent = decoded == null ? '' : decoded;
         if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
       }
       const label = isAudio

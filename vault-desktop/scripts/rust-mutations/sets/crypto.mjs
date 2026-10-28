@@ -60,5 +60,28 @@ export default {
     { name: 'восстановление padding не дописывает символы (правило вырождено)',
       pattern: "    while body.len() % 4 != 0 {\n        body.push('=');\n    }",
       replacement: '    body.push_str("");' },
+    // url-safe тело (приглашения CLI-протокола групп, токены каналов): алфавит
+    // возвращается к стандартному ПОСЛЕ чистки, padding — тем же правилом.
+    // Эти мутации бьют ровно по поломкам, которые раньше жили копиями в JS.
+    { name: 'url-safe алфавит не возвращается к стандартному (тело с -/_ не декодируется)',
+      pattern: '    let normalized = clean_base64_body(body)\n        .replace(\'-\', "+")\n        .replace(\'_\', "/");',
+      replacement: '    let normalized = clean_base64_body(body);' },
+    { name: 'url-safe: только `_` переводится, `-` остаётся (декодер падает на алфавите)',
+      pattern: '    let normalized = clean_base64_body(body)\n        .replace(\'-\', "+")\n        .replace(\'_\', "/");',
+      replacement: '    let normalized = clean_base64_body(body)\n        .replace(\'_\', "/");' },
+    { name: 'url-safe: только `-` переводится, `_` остаётся (декодер падает на алфавите)',
+      pattern: '    let normalized = clean_base64_body(body)\n        .replace(\'-\', "+")\n        .replace(\'_\', "/");',
+      replacement: '    let normalized = clean_base64_body(body)\n        .replace(\'-\', "+");' },
+    // key_id канала: 8 байт BE, HEX-строкой. Короткий токен — отказ, а не
+    // усечённый kid (подпись ушла бы не тому каналу).
+    { name: 'key_id берётся из 4 байт вместо 8 (подпись чужого канала)',
+      pattern: '    Ok(hex::encode(&bytes[..8]))',
+      replacement: '    Ok(hex::encode(&bytes[..4]))' },
+    { name: 'key_id читается не big-endian (порядок байт перевёрнут)',
+      pattern: '    Ok(hex::encode(&bytes[..8]))',
+      replacement: '    let mut head = bytes[..8].to_vec();\n    head.reverse();\n    Ok(hex::encode(head))' },
+    { name: 'короткий токен даёт kid, а не отказ (hex из чего получилось)',
+      pattern: '    if bytes.len() < 8 {\n        anyhow::bail!("token shorter than 8 bytes");\n    }',
+      replacement: '    if false {\n        anyhow::bail!("token shorter than 8 bytes");\n    }' },
   ],
 };

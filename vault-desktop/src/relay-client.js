@@ -14,6 +14,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { accountNamespace } from './identity.js';
 import { channelTokens } from './channels-tokens.js';
+import { channelKidHex } from './body-decode.js';
 
 // Наш релей (прод). Первый в списке, но НЕ единственный.
 //
@@ -713,17 +714,11 @@ export function isRelayEnvelope(obj) {
 const KV_CHAN_CURSOR = 'relay-channel-cursor'; // {relayUrl: {chId: ts}}
 
 // ADR-002: key_id канала = первые 8 байт канального read-токена, читаем
-// BE. Возвращаем HEX-СТРОКУ: key_id — это u64, а JSON-число после 2^53
-// теряет точность, и молча подменённый kid означал бы подпись не того канала.
-// В релее kid выводится сервером из самого токена, поэтому расхождение
-// исключено по построению (ADR-002 §4).
-function kidHexOfToken(tok) {
-  const b64 = String(tok || '').replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-  let hex = '';
-  for (let i = 0; i < 8; i++) hex += bin.charCodeAt(i).toString(16).padStart(2, '0');
-  return hex;
-}
+// BE. Вывод — в ядре (body-decode.js::channelKidHex → channel_kid_hex):
+// HEX-СТРОКА обязательна, потому что key_id — это u64, а JSON-число после
+// 2^53 теряет точность, и молча подменённый kid означал бы подпись не того
+// канала. В релее kid выводится сервером из самого токена, поэтому
+// расхождение исключено по построению (ADR-002 §4).
 
 // ADR-002: регистрация публичного ключа подписи канала на релее. Вызывается
 // один раз на (релей, kid) за сессию; релей идемпотентен при повторе с тем же
@@ -734,8 +729,7 @@ function kidHexOfToken(tok) {
 // отдельным полем kid слать нельзя (молча подменённый kid привязал бы ключ
 // не к тому каналу).
 const _chanKeyRegistered = new Set();
-async function ensureChannelKeyRegistered(relay, token) {
-  const kidHex = kidHexOfToken(token);
+async function ensureChannelKeyRegistered(relay, token, kidHex) {
   const mark = relay.url + '::' + kidHex;
   if (_chanKeyRegistered.has(mark)) return;
   if (!relay.myToken) {
@@ -781,9 +775,11 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
       // ADR-002: подпись конверта. Подписывается РОВНО та строка body, что
       // уйдёт в JSON — иначе релей посчитает другую подпись и отклонит пост.
       let sig = null;
+      let kidHex = null;
       try {
-        await ensureChannelKeyRegistered(relay, read);
-        sig = await invoke('channel_sign_post', { kidHex: kidHexOfToken(read), envId: id, body });
+        kidHex = await channelKidHex(read);
+        await ensureChannelKeyRegistered(relay, read, kidHex);
+        sig = await invoke('channel_sign_post', { kidHex, envId: id, body });
       } catch (e) {
         // Не подписываем — публикация уйдёт в v1 и релей её примет. Лучше
         // пост без подписи, чем потерянный пост: включать REQUIRE_SIG можно
@@ -818,7 +814,7 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
           // «зарегистрирован» протухла. Сбрасываем её: иначе клиент больше
           // никогда не попробует зарегистрироваться и канал навсегда остался
           // бы в v1 — дыра открылась бы молча, без единого признака.
-          _chanKeyRegistered.delete(relay.url + '::' + kidHexOfToken(read));
+          if (kidHex) _chanKeyRegistered.delete(relay.url + '::' + kidHex);
           return { ok: false, why: 'signature-rejected' };
         }
         return { ok: false, why: 'http-' + res.status };

@@ -12,16 +12,23 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { bodyDecodeHandler, writeBodyDecodeAdapter } from './lib/body-decode-mock.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/message-format-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
 // Адаптер разбора/сборки wire-конверта (ADR-005 W4) — правила живут в Rust,
-// здесь их тестовый двойник (scripts/lib/envelope-mock.mjs).
+// здесь их тестовый двойник (scripts/lib/envelope-mock.mjs). Рядом — двойник
+// команд разбора тела письма (с 28.10 тело читает только Rust).
 globalThis.__invokeMock = (await import('./lib/envelope-mock.mjs')).installEnvelopeMock(async () => null);
+const envelopeInvoke = globalThis.__invokeMock;
+globalThis.__invokeMock = async (cmd, args) => {
+  const body = bodyDecodeHandler(cmd, args);
+  return body === undefined ? envelopeInvoke(cmd, args) : body;
+};
 writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);');
-// Адаптер — копия настоящего файла, подменён только Tauri-вызов.
+// Адаптеры — копии настоящих файлов, подменён только Tauri-вызов.
 writeFileSync(
   MOCKS + '/envelope-rule.js',
   readFileSync(ROOT + '/src/envelope-rule.js', 'utf8').replaceAll(
@@ -29,11 +36,12 @@ writeFileSync(
     "from './tauri-core.js'",
   ),
 );
-// message-format.js тянет адаптер — копия идёт через prepareModuleCopy.
+writeBodyDecodeAdapter(MOCKS, "const invoke = (...a) => globalThis.__invokeMock(...a);");
+// message-format.js тянет адаптеры — копия идёт через prepareModuleCopy.
 prepareModuleCopy(
   ROOT + '/src/message-format.js',
   MOCKS + '/message-format.mjs',
-  { './envelope-rule.js': 'envelope-rule.js' },
+  { './envelope-rule.js': 'envelope-rule.js', './body-decode.js': 'body-decode.js' },
   MOCKS,
 );
 const M = await import(MOCKS + '/message-format.mjs');
@@ -109,46 +117,50 @@ const att = (o) => JSON.stringify(Object.assign({ vault_attachment: 1 }, o));
 const dec = (b64) => Buffer.from(b64, 'base64').toString('binary');
 
 // Обычная картинка: данных в конверте нет, но она НЕ DoD.
-let p = M.parseMessageContent(att({ name: 'a.png', type: 'image/png', size: 100, data: dec('X') }));
+let p = await M.parseMessageContent(att({ name: 'a.png', type: 'image/png', size: 100, data: dec('X') }));
 ok('обычная картинка помечена isImage', p.attachment.isImage === true);
 ok('обычная картинка не DoD', p.attachment.isDod === false && p.attachment.dod === '');
 
 // DoD-картинка: те же mime и данные, но dod задан — ключевой случай a6204d6.
-p = M.parseMessageContent(att({ name: 'b.png', type: 'image/png', size: 2048, dod: '<dod@x>' }));
+p = await M.parseMessageContent(att({ name: 'b.png', type: 'image/png', size: 2048, dod: '<dod@x>' }));
 ok('DoD-картинка НЕ помечается isImage (иначе UI рисует имя файла)',
   p.attachment.isImage === false);
 ok('DoD-картинка не isAudio и не isText', !p.attachment.isAudio && !p.attachment.isText);
 ok('textContent у DoD пуст даже для текстового типа',
-  M.parseMessageContent(att({ name: 'c.txt', type: 'text/plain', size: 10, dod: '<d@x>' }))
+  (await M.parseMessageContent(att({ name: 'c.txt', type: 'text/plain', size: 10, dod: '<d@x>' })))
     .attachment.textContent === '');
 ok('ссылка на письмо сохранена', p.attachment.dod === '<dod@x>');
 ok('статус загрузки idle на старте', p.attachment.dodStatus === 'idle');
 
 // Явный dod: '' — это НЕ DoD (проверка длины, а не наличия поля).
-p = M.parseMessageContent(att({ name: 'd.png', type: 'image/png', size: 1, data: dec('Y'), dod: '' }));
+p = await M.parseMessageContent(att({ name: 'd.png', type: 'image/png', size: 1, data: dec('Y'), dod: '' }));
 ok('пустой dod не считается DoD', p.attachment.isDod === false && p.attachment.isImage === true);
 
 // Текстовый файл: инлайн, с обрезкой по 8000 символов.
 const long = 'A'.repeat(9000);
-p = M.parseMessageContent(att({ name: 'e.txt', type: 'text/plain', size: 9000,
+p = await M.parseMessageContent(att({ name: 'e.txt', type: 'text/plain', size: 9000,
   data: Buffer.from(long, 'utf8').toString('base64') }));
 ok('текстовый файл распознан как isText', p.attachment.isText === true);
+// Содержимое — декодированный текст, а не базовая строка конверта: base64
+// начинается с «QUFB», и проверка длины ниже этого не отличила бы.
+ok('текст вложения — декодированное содержимое, а не base64',
+  p.attachment.textContent.startsWith('A'));
 // Обрезка: slice(0, 8000) + '\n…' — это ДВА добавленных символа, итого 8002.
 // Первый вариант проверял 8001 и падал: арифметика была моя, не код.
 ok('длинный текст обрезан по 8000 + перенос и многоточие',
   p.attachment.textContent.length === 8002 && p.attachment.textContent.endsWith('\n…'));
 
 // Аудио и метка с размером.
-p = M.parseMessageContent(att({ name: 'v.ogg', type: 'audio/ogg', size: 51200, data: dec('Z') }));
+p = await M.parseMessageContent(att({ name: 'v.ogg', type: 'audio/ogg', size: 51200, data: dec('Z') }));
 ok('аудио помечено isAudio', p.attachment.isAudio === true);
 ok('метка аудио с эмодзи 🎙️', p.text.startsWith('🎙️'));
-p = M.parseMessageContent(att({ name: 'big.bin', type: 'application/octet-stream', size: 2048, data: dec('Q') }));
+p = await M.parseMessageContent(att({ name: 'big.bin', type: 'application/octet-stream', size: 2048, data: dec('Q') }));
 ok('прочий файл — метка с размером в КБ', p.text.includes('2.0KB'));
 
 // Не-вложение и мусор.
-ok('обычный текст остаётся текстом', M.parseMessageContent('просто текст').attachment === null);
-ok('не-строка проходит насквозь', M.parseMessageContent(null).text === null);
-ok('битый JSON не роняет разбор', M.parseMessageContent('{не json').text === '{не json');
+ok('обычный текст остаётся текстом', (await M.parseMessageContent('просто текст')).attachment === null);
+ok('не-строка проходит насквозь', (await M.parseMessageContent(null)).text === null);
+ok('битый JSON не роняет разбор', (await M.parseMessageContent('{не json')).text === '{не json');
 
 // ── прочее ────────────────────────────────────────────────────────────
 ok('imapCursorsKey собирает ключ', M.imapCursorsKey('fp:aa') === 'vault-imap-cursors-fp:aa');

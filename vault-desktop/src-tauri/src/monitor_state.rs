@@ -211,25 +211,14 @@ pub(crate) fn ingest(db: &Db, account: &str, m: &EmailMessage) {
 /// берёт, и без этого распознавания письмо молча умирало как нечитаемое —
 /// ни уведомления при смахнутом приложении, ни следа.
 ///
-/// Детект ДО расшифровки. Письмо фолдится по 76 символов, поэтому пробелы и
-/// переводы вырезаются, urlSafe-алфавит (`-`/`_`) возвращается к `+`/`/`, а
-/// padding добивается до кратности 4.
+/// Детект ДО расшифровки. Форма тела (переносы транспорта, QP, url-safe
+/// алфавит, padding) — правило ЯДРА (`crypto::decode_url_safe_text`): здесь
+/// больше нет своей копии. Копия разъезжалась молча — `replace(['-', '_'],
+/// "+/")` подставлял ВСЮ строку на каждый символ и портил ровно то тело, ради
+/// которого перевод и делался (ADR-005, t_7d2c1bb1).
 pub(crate) fn is_group_invite(body: &str) -> bool {
-    let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-    // Два отдельных replace: `replace(['-', '_'], "+/")` подставляет ВСЮ строку
-    // "+/" на каждый символ (проверено rustc: "a-b_c" → "a+/b+/c"), то есть
-    // конверт портился ровно на том теле, ради которого перевод и делался.
-    let normalized = compact.replace('-', "+").replace('_', "/");
-    let padded_len = normalized.len().div_ceil(4) * 4;
-    let mut padded = normalized;
-    while padded.len() < padded_len {
-        padded.push('=');
-    }
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD
-        .decode(padded.as_bytes())
+    vault_client::crypto::decode_url_safe_text(body)
         .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
         .map(|v| v.get("kind").and_then(|k| k.as_str()) == Some("group-invite"))
         .unwrap_or(false)
@@ -766,6 +755,17 @@ mod tests {
         assert!(
             is_group_invite(&awkward),
             "приглашение читается и в такой форме"
+        );
+
+        // Транспорт может QP-кодировать padding (`=` → `=3D`). QP-проход —
+        // часть правила ЯДРА; копия «снять пробелы + добить padding» его не
+        // читает, и этот кейс ловит возврат копии в модуль.
+        let padded = format!("{}{}", awkward, "=".repeat(4 - awkward.len() % 4));
+        let qp = padded.replace('=', "=3D");
+        assert!(qp.contains("=3D"), "фикстура без QP-экранирования ничего не меряет");
+        assert!(
+            is_group_invite(&qp),
+            "QP-экранирование тела не ломает распознавание"
         );
 
         assert!(

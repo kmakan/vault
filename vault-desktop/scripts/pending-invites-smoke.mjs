@@ -55,6 +55,10 @@ writeFileSync(MOCKS + '/identity.mjs', [
   '};',
   '',
 ].join('\n'));
+// Разбор тела письма — правило ядра (28.10); смоуку нужен только сам файл.
+writeFileSync(MOCKS + '/body-decode.js',
+  'export const decodeUrlSafeText = async (b) => globalThis.__invoke("vault_decode_url_safe_body", { body: b });\n' +
+  'export const channelKidHex = async (t) => globalThis.__invoke("channel_kid_hex", { token: t });\n');
 writeFileSync(MOCKS + '/recovery-session.mjs',
   'export const isRecoveryPending = () => false;\n'
   + 'export const clearRecoveryPending = () => {};\n');
@@ -65,6 +69,7 @@ prepareModuleCopy(ROOT + '/src/api.js', apiFile, {
   './crypto.js': 'crypto.mjs',
   './identity.js': 'identity.mjs',
   './features/recovery-session.js': 'recovery-session.mjs',
+  './body-decode.js': 'body-decode.js',
 }, MOCKS);
 const { default: api } = await import(apiFile);
 

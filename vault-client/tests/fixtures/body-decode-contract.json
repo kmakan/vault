@@ -1,0 +1,69 @@
+{
+  "why": "Форма тела письма одна на всю систему (ADR-005, t_7d2c1bb1): переносы транспорта убираются, QP (=XX) раскодируется, url-safe алфавит -/_ возвращается к +//, хвостовой padding восстанавливается до кратности 4. Правило живёт в Rust (vault-client/src/crypto.rs): decode_mail_body / decode_url_safe_text / channel_kid_hex. JS (api.js, relay-client.js, message-format.js) — тонкие адаптеры команд моста и обязаны передавать тело БЕЗ изменений; фикстура проверяет именно это. Читают: cargo test -p vault-client --lib crypto и смоуки urlsafe-body / channels-signing / message-format.",
+  "mail_body": [
+    {
+      "name": "чистое тело (уже кратно 4, без padding)",
+      "input": "VmF1bHQgbWFpbCBib2R5OiDQv9C10YDQtdC90L7RgdGLLCBwYWRkaW5nINC4IFFQIOKAlCDQv9GA0L7QstC10YDQutCwINGE0L7RgNC80Ysg0YLQtdC70LAg0L/QuNGB0YzQvNCw",
+      "hex": "5661756c74206d61696c20626f64793a20d0bfd0b5d180d0b5d0bdd0bed181d18b2c2070616464696e6720d0b820515020e2809420d0bfd180d0bed0b2d0b5d180d0bad0b020d184d0bed180d0bcd18b20d182d0b5d0bbd0b020d0bfd0b8d181d18cd0bcd0b0"
+    },
+    {
+      "name": "свёрнутое транспортом по 76 колонок",
+      "input": "VmF1bHQgbWFpbCBib2R5OiDQv9C10YDQtdC90L7RgdGLLCBwYWRkaW5nINC4IFFQIOKAlCDQv9GA\r\n0L7QstC10YDQutCwINGE0L7RgNC80Ysg0YLQtdC70LAg0L/QuNGB0YzQvNCw",
+      "hex": "5661756c74206d61696c20626f64793a20d0bfd0b5d180d0b5d0bdd0bed181d18b2c2070616464696e6720d0b820515020e2809420d0bfd180d0bed0b2d0b5d180d0bad0b020d184d0bed180d0bcd18b20d182d0b5d0bbd0b020d0bfd0b8d181d18cd0bcd0b0"
+    },
+    {
+      "name": "QP-кодирование транспортного padding (=3D)",
+      "input": "VmF1bHQgZm9sZGVkIGJvZHk6INC/0LXRgNC10L3QvtGB0Ysg0L/QviA3NiDQutC+0LvQvtC90L7QuiDQuCDQstC+0YHRgdGC0LDQvdC+0LLQu9C10L3QuNC1IHBhZGRpbmc=3D",
+      "hex": "5661756c7420666f6c64656420626f64793a20d0bfd0b5d180d0b5d0bdd0bed181d18b20d0bfd0be20373620d0bad0bed0bbd0bed0bdd0bed0ba20d0b820d0b2d0bed181d181d182d0b0d0bdd0bed0b2d0bbd0b5d0bdd0b8d0b52070616464696e67"
+    },
+    {
+      "name": "снятый транспортный padding (хвостовое =)",
+      "input": "VmF1bHQgZm9sZGVkIGJvZHk6INC/0LXRgNC10L3QvtGB0Ysg0L/QviA3NiDQutC+0LvQvtC90L7QuiDQuCDQstC+0YHRgdGC0LDQvdC+0LLQu9C10L3QuNC1IHBhZGRpbmc",
+      "hex": "5661756c7420666f6c64656420626f64793a20d0bfd0b5d180d0b5d0bdd0bed181d18b20d0bfd0be20373620d0bad0bed0bbd0bed0bdd0bed0ba20d0b820d0b2d0bed181d181d182d0b0d0bdd0bed0b2d0bbd0b5d0bdd0b8d0b52070616464696e67"
+    },
+    {
+      "name": "свёрнутое И со снятым padding",
+      "input": "VmF1bHQgZm9sZGVkIGJvZHk6INC/0LXRgNC10L3QvtGB0Ysg0L/QviA3NiDQutC+0LvQvtC90L7Q\r\nuiDQuCDQstC+0YHRgdGC0LDQvdC+0LLQu9C10L3QuNC1IHBhZGRpbmc",
+      "hex": "5661756c7420666f6c64656420626f64793a20d0bfd0b5d180d0b5d0bdd0bed181d18b20d0bfd0be20373620d0bad0bed0bbd0bed0bdd0bed0ba20d0b820d0b2d0bed181d181d182d0b0d0bdd0bed0b2d0bbd0b5d0bdd0b8d0b52070616464696e67"
+    }
+  ],
+  "url_safe": [
+    {
+      "name": "чистое url-safe тело без padding",
+      "input": "eyJraW5kIjoiZ3JvdXAtaW52aXRlIiwiZ2lkIjoiZy0xMCIsIm5hbWUiOiLQotC10YHRgtC-0LLQsNGPINCz0YDRg9C_0L_QsCIsImZyb20iOiJwZWVyQGV4YW1wbGUuaW52YWxpZCIsImZwIjoiZnA6dGVzdCJ9",
+      "text": "{\"kind\":\"group-invite\",\"gid\":\"g-10\",\"name\":\"Тестовая группа\",\"from\":\"peer@example.invalid\",\"fp\":\"fp:test\"}"
+    },
+    {
+      "name": "свёрнутое url-safe тело",
+      "input": "eyJraW5kIjoiZ3JvdXAtaW52aXRlIiwiZ2lkIjoiZy0xMCIsIm5hbWUiOiLQotC10YHRgtC-0LLQ\r\nsNGPINCz0YDRg9C_0L_QsCIsImZyb20iOiJwZWVyQGV4YW1wbGUuaW52YWxpZCIsImZwIjoiZnA6\r\ndGVzdCJ9",
+      "text": "{\"kind\":\"group-invite\",\"gid\":\"g-10\",\"name\":\"Тестовая группа\",\"from\":\"peer@example.invalid\",\"fp\":\"fp:test\"}"
+    },
+    {
+      "name": "url-safe тело с недостающим padding (len % 4 == 3)",
+      "input": "eyJraW5kIjoiZ3JvdXAtaW52aXRlIiwiZ2lkIjoiZy0xIiwibmFtZSI6ItCT0YDRg9C_0L_QsCDQtNC70Y8g0YHQvNC-0YPQutCwIiwiZnJvbSI6InBlZXJAZXhhbXBsZS5pbnZhbGlkIiwiZnAiOiJmcDp0ZXN0In0",
+      "text": "{\"kind\":\"group-invite\",\"gid\":\"g-1\",\"name\":\"Группа для смоука\",\"from\":\"peer@example.invalid\",\"fp\":\"fp:test\"}"
+    },
+    {
+      "name": "url-safe тело с полным padding",
+      "input": "eyJraW5kIjoiZ3JvdXAtaW52aXRlIiwiZ2lkIjoiZy0xIiwibmFtZSI6ItCT0YDRg9C_0L_QsCDQtNC70Y8g0YHQvNC-0YPQutCwIiwiZnJvbSI6InBlZXJAZXhhbXBsZS5pbnZhbGlkIiwiZnAiOiJmcDp0ZXN0In0=",
+      "text": "{\"kind\":\"group-invite\",\"gid\":\"g-1\",\"name\":\"Группа для смоука\",\"from\":\"peer@example.invalid\",\"fp\":\"fp:test\"}"
+    },
+    {
+      "name": "url-safe тело с QP-кодированным padding",
+      "input": "eyJraW5kIjoiZ3JvdXAtaW52aXRlIiwiZ2lkIjoiZy0xIiwibmFtZSI6ItCT0YDRg9C_0L_QsCDQtNC70Y8g0YHQvNC-0YPQutCwIiwiZnJvbSI6InBlZXJAZXhhbXBsZS5pbnZhbGlkIiwiZnAiOiJmcDp0ZXN0In0=3D",
+      "text": "{\"kind\":\"group-invite\",\"gid\":\"g-1\",\"name\":\"Группа для смоука\",\"from\":\"peer@example.invalid\",\"fp\":\"fp:test\"}"
+    }
+  ],
+  "kid": [
+    {
+      "name": "первые 8 байт токена, big-endian hex",
+      "token": "AQIDBAUGBwhj_____6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6ur",
+      "kid": "0102030405060708"
+    },
+    {
+      "name": "url-safe токен с - и _ в первых байтах",
+      "token": "AAD7_7_-735j_____6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6ur",
+      "kid": "0000fbffbffeef7e"
+    }
+  ]
+}

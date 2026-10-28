@@ -1,25 +1,20 @@
-// Набор мутаций: url-safe base64 ТЕЛА handshake-письма в JS-транспорте
-// (src/api.js, urlSafeB64 / urlSafeB64Decode) — третья копия правила чтения
-// тела. Ядро и мост измерены (crypto.mjs +4, rust-bridge-crypto-mail 19/19),
-// эта копия не измерялась вовсе — канбан t_7d2c1bb1, разбор 25.10.
+// Набор мутаций: тело handshake-письма в JS-транспорте (src/api.js).
 //
-// ПОКРЫТО РОВНО ТО, ЧТО ДЕЙСТВИТЕЛЬНО НАГРУЖЕНО (замер на Node и по WHATWG
-// «forgiving-base64», которому следует и WebView телефона):
-//   · перевод алфавита `-`/`_` → `+`/`/` — atob бросает InvalidCharacterError
-//     на любом из этих байтов, поэтому снимается и целиком, и поодиночке;
-//   · число доклеенных `=` — недобор atob терпит, перебор бросает; для этого
-//     в смоуке есть фикстура с длиной % 4 == 3;
-//   · UTF-8-раундtrip (`escape`/`decodeURIComponent`) — без него кириллица
-//     превращается в mojibake, оставшись Валидным JSON, поэтому сверяется
-//     ЗНАЧЕНИЕ имени группы, а не факт «не упало»;
-//   · no-pad на записи — общий wire-контракт с CLI (URL_SAFE_NO_PAD).
+// ДО 28.10 здесь была третья копия правила ЧТЕНИЯ тела (folding, QP, алфавит,
+// padding, UTF-8) и набор мерил её. Правило сведено в ядро (t_7d2c1bb1):
+// чтение теперь — вызов моста через src/body-decode.js, и его мера — общая
+// фикстура + rust-crypto / rust-bridge-crypto-mail. В api.js остались две
+// вещи, которых в Rust нет и быть не может:
+//   · запись тела (urlSafeB64) — продюсер формата, который читает ядро/CLI;
+//   · проводка классификации: декодировать ли тело, брать ли из него kind,
+//     класть ли parsed в элемент и ждать ли разбор перед кэшированием.
+//
+// Смоук urlsafe-body-smoke.mjs проверяет обе стороны: алфавит записи и то,
+// что классификация реально пользуется результатом моста, а не сырой строкой.
 //
 // СОЗНАТЕЛЬНО НЕ ПРОВЕРЯЕТСЯ (эквивалентные мутанты, проверено 25.10):
-//   * снятие `\s` (`clean = (str||'').replace(/\s+/g,'')`) — atob сам выкидывает
-//     ASCII-пробелы: atob('QU\r\nJD') = 'ABC'. Строка оставлена как защита на
-//     случай смены декодера, но мутаций по ней нет и быть не может;
-//   * guard `(str || '')` в той же строке — единственный вызов с пустым телом
-//     (`_parseHandshakeItem`) идёт под `if (body)`, так что null туда не приходит.
+//   * снятие `\s` при чтении — правило уехало в Rust, в JS такого кода нет;
+//   * guard `(str || '')` в записи — единственный вход всегда строка (JSON.stringify).
 export default {
   id: 'urlsafe-body',
   file: 'src/api.js',
@@ -38,24 +33,27 @@ export default {
     { name: 'запись: алфавит не переводится вовсе (текст письма читает только JS)',
       pattern: "    .replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
       replacement: "    .replace(/=+$/, '');" },
-    // ── чтение ──
-    { name: 'чтение: алфавит `-`/`_` не переведён (atob падает, инвайт теряется)',
-      pattern: "  const b64 = clean.replace(/-/g, '+').replace(/_/g, '/');",
-      replacement: '  const b64 = clean;' },
-    { name: 'чтение: `-` не переведён в `+`',
-      pattern: "  const b64 = clean.replace(/-/g, '+').replace(/_/g, '/');",
-      replacement: "  const b64 = clean.replace(/_/g, '/');" },
-    { name: 'чтение: `_` не переведён в `/`',
-      pattern: "  const b64 = clean.replace(/-/g, '+').replace(/_/g, '/');",
-      replacement: "  const b64 = clean.replace(/-/g, '+');" },
-    { name: 'чтение: padding доклеивается не по недостающему числу (перебор — atob падает)',
-      pattern: "  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';",
-      replacement: "  const pad = b64.length % 4 ? '='.repeat(b64.length % 4) : '';" },
-    { name: 'чтение: UTF-8-раундtrip снят (кириллица имени группы — mojibake, JSON валиден)',
-      pattern: '  return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))));',
-      replacement: '  return JSON.parse(atob(b64 + pad));' },
-    { name: 'чтение: не наше тело бросает наружу (чужое письмо роняет весь скан)',
-      pattern: '      try { parsed = urlSafeB64Decode(body); } catch (e) { parsed = null; }',
-      replacement: '      try { parsed = urlSafeB64Decode(body); } catch (e) { throw e; }' },
+    // ── проводка классификации (правило чтения — в ядре) ──
+    { name: 'классификация разбирает СЫРОЕ тело, не спрашивая ядро (folding/url-safe теряются)',
+      pattern: "      try { parsed = JSON.parse(await decodeUrlSafeText(body)); } catch (e) { parsed = null; }",
+      replacement: "      try { parsed = JSON.parse(body); } catch (e) { parsed = null; }" },
+    { name: 'результат моста не ожидается (JSON.parse от Promise → всегда null)',
+      pattern: "      try { parsed = JSON.parse(await decodeUrlSafeText(body)); } catch (e) { parsed = null; }",
+      replacement: "      try { parsed = JSON.parse(decodeUrlSafeText(body)); } catch (e) { parsed = null; }" },
+    { name: 'тело не разбирается вовсе (kind только из темы письма)',
+      pattern: "    let parsed = null;\n    if (body) {",
+      replacement: "    let parsed = null;\n    if (false) {" },
+    { name: 'отказ разбора JSON всплывает наружу (чужое письмо роняет весь скан)',
+      pattern: "      try { parsed = JSON.parse(await decodeUrlSafeText(body)); } catch (e) { parsed = null; }",
+      replacement: "      try { parsed = JSON.parse(await decodeUrlSafeText(body)); } catch (e) { throw e; }" },
+    { name: 'kind из тела игнорируется (письмо без темы теряется)',
+      pattern: "    let kind = parsed && parsed.kind || null;",
+      replacement: "    let kind = null;" },
+    { name: 'разобранные поля тела не кладутся в элемент (gid/name теряются)',
+      pattern: "      parsed,\n      kind,",
+      replacement: "      parsed: null,\n      kind," },
+    { name: 'разбор не ожидается на месте вызова (в кэш уходит Promise)',
+      pattern: "this._handshakeParsed.set(keyOf(m), await this._parseHandshakeItem(m, bodies[k] || ''));",
+      replacement: "this._handshakeParsed.set(keyOf(m), this._parseHandshakeItem(m, bodies[k] || ''));" },
   ],
 };

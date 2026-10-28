@@ -3,17 +3,17 @@
 // ЗАЧЕМ. crypto.rs — вторая (и третья, и четвёртая) копия одного и того же
 // протокола: base64(nonce‖ciphertext) со стелс-меткой AAD="VAULT", 24-байтный
 // nonce, симметричный групповой ключ, DH-ключ собеседника либо самошифровка.
-// Тело письма приходит не из памяти, а из SMTP/IMAP: переносы по 76 колонок и
-// съеденный decode_quoted_printable пэйдинг лечит ОДНА функция —
-// b64_decode_mail, и до этого набора её не мерил никто (roundtrip-тесты
-// подавали тело целиком). Приём «наше это письмо или нет» — решение
-// безопасности: ошиблась одна копия → переписка либо читается чужим, либо
-// перестаёт читаться вовсе.
+// Тело письма приходит не из памяти, а из SMTP/IMAP: переносы по 76 колонок,
+// QP и съеденный padding лечит правило ЯДРА (vault_client::crypto::decode_mail_body,
+// t_7d2c1bb1). b64_decode_mail в мосту — тонкая делегация; мутация «локальный
+// декод вместо делегации» ловится QP-тестом моста. Приём «наше это письмо или
+// нет» — решение безопасности: ошиблась одна копия → переписка либо читается
+// чужим, либо перестаёт читаться вовсе.
 //
-// Мутируем сами решения: длина nonce как точка разбиения, очистка и
-// восстановление base64, проверка длины перед split_at, длина ключа, литерал
-// метки на каждой из четырёх сторон, порядок legacy-фолбэка и выбор ключа
-// (DH против самошифровки) на vault-пути.
+// Мутируем сами решения: делегация формы тела, длина nonce как точка разбиения
+// (в письме и в медиа-фрейме), проверка длины перед split_at, длина ключа,
+// литерал метки на каждой из четырёх сторон, порядок legacy-фолбэка и выбор
+// ключа (DH против самошифровки) на vault-пути.
 //
 // Что осталось неизмеримым осознанно: `derive_key` (фиксированный префикс
 // «vault-self-encryption-v1») и литерал метки, изменённый НА ОБЕИХ сторонах
@@ -31,21 +31,6 @@ export default {
     { name: 'длина nonce сдвинута — точка разбиения письма больше не формат',
       pattern: 'pub const NONCE_LEN: usize = 24;',
       replacement: 'pub const NONCE_LEN: usize = 16;' },
-    { name: 'переносы SMTP не вычищаются (76 колонок = мусор в base64, письмо не читается)',
-      pattern: '    let mut cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();',
-      replacement: '    let mut cleaned: String = ciphertext.to_string();' },
-    { name: 'пэйдинг не восстанавливается (потеря «==» транспортом = ошибка декодера)',
-      pattern: '    if rem != 0 {',
-      replacement: '    if false {' },
-    { name: 'пэйдинг дописывается к каждому телу (валидное становится кратным 4 + 4)',
-      pattern: '    if rem != 0 {',
-      replacement: '    if true {' },
-    { name: 'вместо «=» дописывается посторонний символ (декодер отворачивает письмо)',
-      pattern: '        cleaned.push_str(&"=".repeat(4 - rem));',
-      replacement: '        cleaned.push_str(&"x".repeat(4 - rem));' },
-    { name: 'дописывается четыре символа, а не недостающее (хвост тела уезжает)',
-      pattern: '        cleaned.push_str(&"=".repeat(4 - rem));',
-      replacement: '        cleaned.push_str(&"=".repeat(4));' },
     { name: 'личное письмо короче nonce не отвергается — split_at паникует',
       pattern: ') -> anyhow::Result<String> {\n    let decoded = b64_decode_mail(ciphertext)?;\n\n    if decoded.len() < NONCE_LEN {',
       replacement: ') -> anyhow::Result<String> {\n    let decoded = b64_decode_mail(ciphertext)?;\n\n    if false {' },
@@ -85,5 +70,21 @@ export default {
     { name: 'ключ 1-на-1 на приёме берётся из своего ключа, а не из DH — письмо не читается',
       pattern: '            *shared.as_bytes()\n        }\n        None => derive_key(&public),\n    };\n\n    let (nonce_bytes, ciphertext_bytes) = decoded.split_at(NONCE_LEN);\n    let cipher = XChaCha20Poly1305::new((&key).into());\n    let nonce = XNonce::from_slice(nonce_bytes);\n\n    let payload = Payload {',
       replacement: '            derive_key(&public)\n        }\n        None => derive_key(&public),\n    };\n\n    let (nonce_bytes, ciphertext_bytes) = decoded.split_at(NONCE_LEN);\n    let cipher = XChaCha20Poly1305::new((&key).into());\n    let nonce = XNonce::from_slice(nonce_bytes);\n\n    let payload = Payload {' },
+    { name: 'форма тела письма декодируется локально, а не делегацией в ядро (QP/padding теряются)',
+      pattern: '    vault_client::crypto::decode_mail_body(ciphertext)\n        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))',
+      replacement: '    base64::engine::general_purpose::STANDARD\n        .decode(ciphertext)\n        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))' },
+    // ── медиа-фрейм звонка: nonce(24) ‖ ciphertext ──
+    { name: 'медиа-фрейм короче nonce не отвергается — split_at паникует',
+      pattern: '    if data.len() < 24 {\n        anyhow::bail!("frame too short");\n    }',
+      replacement: '    if false {\n        anyhow::bail!("frame too short");\n    }' },
+    { name: 'nonce медиа-фрейма режется на 16 байт (расшифровка не сходится)',
+      pattern: '    let (nonce_bytes, ct) = data.split_at(24);',
+      replacement: '    let (nonce_bytes, ct) = data.split_at(16);' },
+    { name: 'nonce медиа-фрейма пишется укороченным (формат nonce ‖ ciphertext сломан)',
+      pattern: '    let mut out = Vec::with_capacity(24 + ciphertext.len());\n    out.extend_from_slice(&nonce_bytes);',
+      replacement: '    let mut out = Vec::with_capacity(24 + ciphertext.len());\n    out.extend_from_slice(&nonce_bytes[..16]);' },
+    { name: 'nonce медиа-фрейма пишется ПОСЛЕ шифротекста (получатель читает сдвиг)',
+      pattern: '    let mut out = Vec::with_capacity(24 + ciphertext.len());\n    out.extend_from_slice(&nonce_bytes);\n    out.extend_from_slice(&ciphertext);',
+      replacement: '    let mut out = Vec::with_capacity(24 + ciphertext.len());\n    out.extend_from_slice(&ciphertext);\n    out.extend_from_slice(&nonce_bytes);' },
   ],
 };

@@ -62,24 +62,26 @@ JS-гейты **входят в `npm run build`**: `smoke:m0-wire`, `smoke:incom
 всей фикстуре *до* выполнения и сверяется с выполненным, поэтому пропущенный
 кейс или непокрытое поле → красный.
 
-### Правило чтения тела (переносы, QP, снятый padding)
+### Правило чтения тела (переносы, QP, снятый padding, url-safe)
 
 До расшифровки тело письма приводится к валидному base64: убрать переносы,
-раскодировать `=XX` (quoted-printable, который накладывают SMTP-хопы), восстановить
-хвостовые `=`. Это решение о ФОРМАТЕ, значит оно обязано быть одинаковым на всех
-сторонах обмена — иначе письмо читается на телефоне и не читается в CLI.
+раскодировать `=XX` (quoted-printable, который накладывают SMTP-хопы), перевести
+url-safe алфавит `-`/`_` к стандартному, восстановить хвостовые `=`. Это решение
+о ФОРМАТЕ, значит оно обязано быть одинаковым на всех сторонах обмена — иначе
+письмо читается на телефоне и не читается в CLI.
 
-| Копия правила | Где | Чем меряется |
+С 28.10 (`t_7d2c1bb1`, ADR-005 партия 5o) правило живёт в ОДНОМ месте — ядре:
+
+| Сторона | Где | Чем меряется |
 |---|---|---|
-| ядро CLI | `vault-client/src/crypto.rs` (`clean_base64_body` + `repair_base64_padding`) | набор `crypto` (4 мутации по правилу), unit-проба на инвариант кратности 4, `tests/qp_transport.rs` |
-| мост десктопа/телефона | `vault-desktop/src-tauri/src/crypto.rs` (`b64_decode_mail`) | набор `rust-bridge-crypto-mail` (19/19), `vault_1on1_folded_and_unpadded_body_decrypts` |
-| JS (приглашения групп, base64url) | `vault-desktop/src/api.js:2217` (`urlSafeB64Decode` + `urlSafeB64`), соседи `relay-client.js:721`, `message-format.js:156` | набор `urlsafe-body` (10/10, 25.10) — алфавит `-`/`_`, число доклеенных `=`, UTF-8-раундtrip, no-pad на записи и «чужое тело не роняет скан». Срез пробелов и починка padding мутациям НЕ поддаются: `atob` по WHATWG «forgiving-base64» сам выкидывает ASCII-пробелы и терпит недобор `=` (проверено 25.10: `atob('QU\r\nJD')` = `ABC`), поэтому они остаются страховкой, а не проверенным правилом. Соседи (`relay-client.js`, `message-format.js`) по-прежнему не меряются |
+| ядро (единственная реализация) | `vault-client/src/crypto.rs`: `clean_base64_body` + `repair_base64_padding`, `decode_mail_body`, `decode_url_safe_text`, `channel_kid_hex` | набор `crypto` (20/20) — переносы, QP, padding, алфавит `-`/`_` и оба перевода по отдельности, 8 байт BE у key_id, отказ на коротком токене; общая фикстура `vault-client/tests/fixtures/body-decode-contract.json` (`mail_body` / `url_safe` / `kid`, «сколько объявлено — столько проверено»); `tests/qp_transport.rs` |
+| мост десктопа/телефона | `vault-desktop/src-tauri/src/crypto.rs::b64_decode_mail` — делегация ядру; команды `vault_decode_url_safe_body`, `channel_kid_hex` в `lib.rs` | набор `rust-bridge-crypto-mail` (19/19, в т.ч. «локальный декод вместо делегации»), `body_decode_smoke.rs` — те же команды на общей фикстуре |
+| `monitor_state.rs::is_group_invite` | делегация `crypto::decode_url_safe_text`, решает только «kind == group-invite» | набор `rust-bridge-monitor-state` (64/64) — какой декодер, какой ключ kind, что при отказе |
+| JS (api.js, relay-client.js, message-format.js) | `vault-desktop/src/body-decode.js` — только транспорт: команда `vault_decode_url_safe_body` (аргумент `body`) и `channel_kid_hex` (аргумент `token`); `api.js` классифицирует письмо по `kind` из уже разобранного тела | набор `body-decode-mut` (6/6: имя команды, имена аргументов, отказ не всплывает, пустой вход не идёт в мост), `urlsafe-body` (11/11 — проводка классификации + алфавит записи), `channels-signing-mut` (8/8), `message-format-mut` (5/5 — инлайн-текст раскодирован ядром) |
 
-Расхождение ядро↔мост поймано и закрыто 25.10 (`b5f99bb`): ядро восстанавливало
-padding только на выходе QP-декодера, а мост — всегда. Третья копия (JS) разобрана
-25.10: она меряется набором `urlsafe-body` (10/10), а перенос правила в мостовую
-команду, чтобы копий стало две вместо трёх, остаётся задачей `t_7d2c1bb1` вместе с
-соседними декодерами (`relay-client.js`, `message-format.js`).
+Срез пробелов и починка padding в JS больше не меряются и не могут: этого кода
+там нет — их проверяет ядро (`crypto` + фикстура), а `body-decode-smoke` следит,
+что JS передаёт тело в мост ЦЕЛИКОМ (фолдинг чинит ядро, а не JS).
 
 ## 4. Что этим гейтом НЕ покрыто
 

@@ -261,7 +261,7 @@ export async function loadMessages(deps, email) {
                 if (env.id) msgId = env.id;
                 // Вложение внутри конверта: text = JSON {vault_attachment,...}
                 // (файлы и голосовые идут этим путём).
-                const pp = MsgFormat.parseMessageContent(env.text);
+                const pp = await MsgFormat.parseMessageContent(env.text);
                 if (pp.attachment) {
                   attachment = pp.attachment;
                   content = pp.text;
@@ -371,7 +371,7 @@ export async function loadMessages(deps, email) {
                 }
               } else {
                 // 3) Legacy: простой текст (старые письма без конверта).
-                const pp = MsgFormat.parseMessageContent(text);
+                const pp = await MsgFormat.parseMessageContent(text);
                 content = pp.text || content;
                 if (pp.attachment) {
                   attachment = pp.attachment;
@@ -515,7 +515,7 @@ export async function loadMessages(deps, email) {
                   };
                 }
               }
-              const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
+              const { text, attachment } = await MsgFormat.parseMessageContent(msg.content);
               const base = {
                 ...msg,
                 content: text,
@@ -545,7 +545,7 @@ export async function loadMessages(deps, email) {
                     if (!deps.isOwnSender(msg.sender_id)) {
                       deps.noteSeen(chatUi.activeChat, new Date(msg.created_at).getTime());
                     }
-                    const parsed = MsgFormat.parseMessageContent(env.text);
+                    const parsed = await MsgFormat.parseMessageContent(env.text);
                     // Исчезающие: отсчёт у получателя — от момента доставки
                     // (created_at письма). Точный «от просмотра» потребовал бы
                     // read-receipt-синхронизации; доставка — честный компромисс.
@@ -555,7 +555,7 @@ export async function loadMessages(deps, email) {
                     const expiresAt = await expireAt(mailTs, env.ttl);
                     return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true, ttl: env.ttl || 0, expiresAt };
                   }
-                  const parsed = MsgFormat.parseMessageContent(text);
+                  const parsed = await MsgFormat.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
@@ -568,8 +568,8 @@ export async function loadMessages(deps, email) {
           deps.chat.set(decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
           for (const m of deps.chat.state.messages) if (m.expiresAt) deps.scheduleEphemeral(m, chatUi.activeChat).catch(() => {});
         } else {
-          deps.chat.set(raw.map(msg => {
-            const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
+          const processed = await Promise.all(raw.map(async msg => {
+            const { text, attachment } = await MsgFormat.parseMessageContent(msg.content);
             return {
               ...msg,
               content: text,
@@ -579,7 +579,8 @@ export async function loadMessages(deps, email) {
               encrypted: false,
               attachment,
             };
-          }).filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
+          }));
+          deps.chat.set(processed.filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
         }
       } catch (error) {
         console.error('Failed to load messages:', error);

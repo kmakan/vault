@@ -220,7 +220,7 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
                 if (await WireSignalRule.parseDodData(plaintext)) continue;
               }
             }
-            const { text, attachment } = MsgFormat.parseMessageContent(plaintext);
+            const { text, attachment } = await MsgFormat.parseMessageContent(plaintext);
             if (env && !deps.isOwnSender(msg.sender_id)) {
               markSeen(msg.sender_id, new Date(msg.created_at).getTime());
             }
@@ -314,8 +314,8 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
           deps.sendReadReceipts(incoming);
         } else {
           // No group key — show as-is (unencrypted)
-          deps.chat.set(raw.map(msg => {
-            const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
+          const processed = await Promise.all(raw.map(async msg => {
+            const { text, attachment } = await MsgFormat.parseMessageContent(msg.content);
             return {
               ...msg,
               content: text,
@@ -325,7 +325,8 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
               encrypted: false,
               attachment,
             };
-          }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
+          }));
+          deps.chat.set(processed.sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
         }
       } catch (error) {
         console.error('Failed to load group messages:', error);

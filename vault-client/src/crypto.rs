@@ -94,6 +94,48 @@ fn repair_base64_padding(body: String) -> String {
     body
 }
 
+/// Декодировать тело письма (standard base64) после чистки транспорта.
+///
+/// ОДНА точка правила для ядра и моста (ADR-005, t_7d2c1bb1): мост больше не
+/// держит вторую копию «убрать переносы + добить padding» — расхождение копий
+/// уже давало «письмо читается на телефоне и не читается в CLI».
+pub fn decode_mail_body(ciphertext: &str) -> Result<Vec<u8>> {
+    BASE64
+        .decode(clean_base64_body(ciphertext))
+        .context("Invalid Base64")
+}
+
+/// url-safe тело (приглашения CLI-протокола групп) → байты.
+///
+/// Алфавит возвращается к стандартному ПОСЛЕ чистки: `-`/`_` не являются
+/// base64-символами и до перевода ломают декодер. QP-проход и восстановление
+/// padding — уже сделаны `clean_base64_body` (перевод символов длину не меняет),
+/// поэтому второй добивки здесь нет: правило живёт в одном месте.
+fn decode_url_safe_bytes(body: &str) -> Result<Vec<u8>> {
+    let normalized = clean_base64_body(body)
+        .replace('-', "+")
+        .replace('_', "/");
+    BASE64.decode(normalized).context("Invalid Base64")
+}
+
+/// url-safe тело → UTF-8 текст (handshake-приглашения, текст вложений).
+pub fn decode_url_safe_text(body: &str) -> Result<String> {
+    String::from_utf8(decode_url_safe_bytes(body)?).context("Invalid UTF-8 in url-safe body")
+}
+
+/// key_id канала = первые 8 байт base64url read-токена, big-endian hex.
+///
+/// Возвращается HEX-СТРОКОЙ, а не числом: key_id — это u64, а JSON-число
+/// после 2^53 теряет точность, и молча подменённый kid означал бы подпись не
+/// того канала (ADR-002 §4).
+pub fn channel_kid_hex(token: &str) -> Result<String> {
+    let bytes = decode_url_safe_bytes(token)?;
+    if bytes.len() < 8 {
+        anyhow::bail!("token shorter than 8 bytes");
+    }
+    Ok(hex::encode(&bytes[..8]))
+}
+
 pub struct CryptoClient {
     private_key: Option<StaticSecret>,
     public_key: Option<PublicKey>,
@@ -298,8 +340,7 @@ impl CryptoClient {
     /// SMTP-транспорты накладывают на тело) раскодируется в
     /// [`clean_base64_body`].
     pub fn decrypt(&self, ciphertext: &str) -> Result<String> {
-        let compact = clean_base64_body(ciphertext);
-        let decoded = BASE64.decode(compact).context("Invalid Base64")?;
+        let decoded = decode_mail_body(ciphertext)?;
         let plaintext = self.do_decrypt(&decoded)?;
         String::from_utf8(plaintext).context("Invalid UTF-8 in decrypted text")
     }
@@ -382,8 +423,7 @@ impl CryptoClient {
             }
         }
 
-        let compact = clean_base64_body(ciphertext);
-        let decoded = BASE64.decode(compact).context("Invalid Base64")?;
+        let decoded = decode_mail_body(ciphertext)?;
 
         let key = self.get_key()?;
 
@@ -408,8 +448,7 @@ impl CryptoClient {
 
     /// Check if text looks like encrypted data
     pub fn is_encrypted(&self, text: &str) -> bool {
-        let compact = clean_base64_body(text);
-        if let Ok(decoded) = BASE64.decode(compact) {
+        if let Ok(decoded) = decode_mail_body(text) {
             decoded.len() >= NONCE_LEN + 17 && self.has_keys()
         } else {
             false
@@ -886,5 +925,68 @@ mod tests {
             "is_encrypted теряет тело без хвостового padding"
         );
         assert_eq!(crypto.decrypt(stripped).unwrap(), plaintext);
+    }
+
+    // Общая фикстура формы тела (ADR-005, t_7d2c1bb1): те же входы проверяет
+    // JS-сторона — адаптеры обязаны отдавать ядру тело БЕЗ изменений, а правило
+    // (переносы, QP, url-safe, padding) живёт только здесь.
+    #[test]
+    fn body_decode_contract_matches_shared_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/body-decode-contract.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("фикстура {} недоступна: {e}", path.display()));
+        let f: serde_json::Value = serde_json::from_str(&raw).expect("фикстура — валидный JSON");
+        let mut checked = 0usize;
+
+        for c in f["mail_body"].as_array().expect("поле mail_body") {
+            let name = c["name"].as_str().unwrap_or("?");
+            let got = decode_mail_body(c["input"].as_str().unwrap_or(""))
+                .unwrap_or_else(|e| panic!("[{name}] {e}"));
+            assert_eq!(hex::encode(got), c["hex"].as_str().unwrap(), "[{name}] mail_body");
+            checked += 1;
+        }
+        for c in f["url_safe"].as_array().expect("поле url_safe") {
+            let name = c["name"].as_str().unwrap_or("?");
+            let got = decode_url_safe_text(c["input"].as_str().unwrap_or(""))
+                .unwrap_or_else(|e| panic!("[{name}] {e}"));
+            assert_eq!(got, c["text"].as_str().unwrap(), "[{name}] url_safe");
+            checked += 1;
+        }
+        for c in f["kid"].as_array().expect("поле kid") {
+            let name = c["name"].as_str().unwrap_or("?");
+            let got = channel_kid_hex(c["token"].as_str().unwrap_or(""))
+                .unwrap_or_else(|e| panic!("[{name}] {e}"));
+            assert_eq!(got, c["kid"].as_str().unwrap(), "[{name}] kid");
+            checked += 1;
+        }
+
+        // «Сколько объявлено — столько проверено»: молча выпавший кейс валит
+        // тест, а не оставляет его зелёным (как в m0-wire-contract).
+        let declared: usize = ["mail_body", "url_safe", "kid"]
+            .iter()
+            .map(|k| f[k].as_array().map(|a| a.len()).unwrap_or(0))
+            .sum();
+        assert_eq!(checked, declared, "проверок {checked} из объявленных {declared}");
+    }
+
+    /// Токен короче key_id — отказ, а не «kid из чего получилось».
+    ///
+    /// Фикстура проверяет только успешные случаи; без этой пробы снятый guard
+    /// (`bytes.len() < 8`) выжил бы и вернул hex из 3 байт — подпись канала
+    /// молча ушла бы с чужим key_id.
+    #[test]
+    fn short_token_is_not_a_channel_kid() {
+        use base64::Engine as _;
+        let enc = |n: usize| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(vec![1u8; n])
+        };
+        assert!(channel_kid_hex("").is_err(), "пустой токен — не kid");
+        assert!(channel_kid_hex(&enc(7)).is_err(), "7 байт — не kid");
+        assert_eq!(
+            channel_kid_hex(&enc(8)).unwrap(),
+            "0101010101010101",
+            "ровно 8 байт — минимальный валидный kid"
+        );
     }
 }

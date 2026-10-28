@@ -28,6 +28,10 @@ mkdirSync(MOCKS, { recursive: true });
 // Мок крипто-модуля, на который перенаправляется import из api.js.
 // Мок крипты: ЖИВОЙ (читает глобал в момент вызова), иначе модуль,
 // поднятый раньше, схватил бы undefined и проверки шли бы мимо.
+// Разбор тела письма — правило ядра (28.10); api.js только зовёт адаптер.
+writeFileSync(MOCKS + '/body-decode.js',
+  'export const decodeUrlSafeText = async (b) => globalThis.__INVOKE__("vault_decode_url_safe_body", { body: b });\n' +
+  'export const channelKidHex = async (t) => globalThis.__INVOKE__("channel_kid_hex", { token: t });\n');
 writeFileSync(MOCKS + '/crypto.js', `
 const M = (name, ...a) => globalThis.__CRYPTO__[name](...a);
 export default {
@@ -183,7 +187,7 @@ async function loadApi(cfg) {
     file,
     // Крипто уходит на мок; таури-зависимость подменяется через `extra` —
     // это ИМЯ ИМПОРТА, а не путь (хелпер подменяет импорт целиком).
-    { './crypto.js': 'crypto.js' },
+    { './crypto.js': 'crypto.js', './body-decode.js': 'body-decode.js' },
     MOCKS,
     [["import { invoke } from '@tauri-apps/api/core';", 'const invoke = globalThis.__INVOKE__;']],
   );

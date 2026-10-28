@@ -21,6 +21,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { bodyDecodeHandler } from './lib/body-decode-mock.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/body-absence-smoke-mocks';
@@ -70,7 +71,10 @@ globalThis.__INVOKE__ = async (cmd, args) => {
     case 'email_fetch_body':
       if (W.bodyThrows) throw new Error('Timed out fetching message body');
       return W.body;
-    default: return undefined;
+    default: {
+      const body = bodyDecodeHandler(cmd, args);
+      return body === undefined ? undefined : body;
+    }
   }
 };
 
@@ -90,6 +94,9 @@ export const resolveAlias = async (a) => a;
 export const rememberAlias = async () => {};
 export const isOwnSender = async (a, e) => String(a||'').trim().toLowerCase() === String(e||'').trim().toLowerCase();
 `);
+writeFileSync(MOCKS + '/body-decode.js',
+  'export const decodeUrlSafeText = async (b) => globalThis.__INVOKE__("vault_decode_url_safe_body", { body: b });\n' +
+  'export const channelKidHex = async (t) => globalThis.__INVOKE__("channel_kid_hex", { token: t });\n');
 writeFileSync(MOCKS + '/recovery-session.js', `
 export const isRecoveryPending = () => false;
 export const clearRecoveryPending = () => true;
@@ -107,6 +114,7 @@ prepareModuleCopy(
     './crypto.js': 'crypto.js',
     './identity.js': 'identity.js',
     './features/recovery-session.js': 'recovery-session.js',
+    './body-decode.js': 'body-decode.js',
   },
   MOCKS,
   [["import { invoke } from '@tauri-apps/api/core';", 'const invoke = (...a) => globalThis.__INVOKE__(...a);']],

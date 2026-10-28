@@ -10,6 +10,7 @@
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { bodyDecodeHandler, writeBodyDecodeAdapter } from './lib/body-decode-mock.mjs';
 
 const ROOT = import.meta.dirname;
 const MOCKS = '/tmp/relay-pro-smoke-mocks';
@@ -29,9 +30,11 @@ globalThis.__invoke = async (cmd, args) => {
   if (cmd === 'db_kv_get') return kv.has(args.key) ? kv.get(args.key) : null;
   if (cmd === 'db_kv_set') { kv.set(args.key, args.value); return null; }
   if (cmd === 'get_fingerprint') return 'fp-alice';
-  return null;
+  const body = bodyDecodeHandler(cmd, args);
+  return body === undefined ? null : body;
 };
 writeFileSync(MOCKS + '/core.js', 'export const invoke = (...a) => globalThis.__invoke(...a);\n');
+writeBodyDecodeAdapter(MOCKS, "import { invoke } from './core.js';");
 writeFileSync(MOCKS + '/crypto.js', `
 export default {
   fingerprint: async () => 'fp-alice',
@@ -74,7 +77,7 @@ globalThis.fetch = async (url, opts = {}) => {
 prepareModuleCopy(
   path.resolve(ROOT, '../src/relay-client.js'),
   MOCKS + '/relay-client.mjs',
-  { '@tauri-apps/api/core': 'core.js', './crypto.js': 'crypto.js' },
+  { '@tauri-apps/api/core': 'core.js', './crypto.js': 'crypto.js', './body-decode.js': 'body-decode.js' },
   MOCKS,
 );
 const R = await import(MOCKS + '/relay-client.mjs');

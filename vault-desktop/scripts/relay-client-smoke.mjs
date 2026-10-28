@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { relayRejectionHandler, RELAY_DAILY_BODY, RELAY_RATE_BODY } from './lib/relay-rejection-mock.mjs';
+import { bodyDecodeHandler, writeBodyDecodeAdapter } from './lib/body-decode-mock.mjs';
 
 const ROOT = import.meta.dirname;
 const MOCKS = '/tmp/relay-client-smoke-mocks';
@@ -31,7 +32,9 @@ globalThis.__invoke = async (cmd, args) => {
     if (globalThis.__rejectionBroken) throw new Error('No such command: relay_pub_rejection');
     return reject({ status: args.status, body: args.body });
   }
-  return null;
+  // kid канала считает ядро (28.10) — двойник отвечает на channel_kid_hex.
+  const body = bodyDecodeHandler(cmd, args);
+  return body === undefined ? null : body;
 };
 globalThis.__fp = 'aa:bb:cc:dd:ee:ff';
 globalThis.window = globalThis; // relay-client трогает window.VaultFcm (FCM-мост)
@@ -53,6 +56,7 @@ writeFileSync(MOCKS + '/api.js',
   'export const accountNamespace = (e) => globalThis.__nsOf(String(e || "").trim().toLowerCase());');
 writeFileSync(MOCKS + '/crypto.js',
   'const c = { fingerprint: async () => globalThis.__fp }; export default c;');
+writeBodyDecodeAdapter(MOCKS, "import { invoke } from './core.js';");
 // По умолчанию namespace = почта (legacy). Тест 8 переключает на fp:,
 // чтобы воспроизвести регресс 25dd18a (from уезжал отпечатком).
 globalThis.__nsOf = (e) => e;
@@ -66,6 +70,7 @@ prepareModuleCopy(
     './identity.js': 'identity.js',
     './channels-tokens.js': 'channels-tokens.js',
     './crypto.js': 'crypto.js',
+    './body-decode.js': 'body-decode.js',
   },
   MOCKS,
   [

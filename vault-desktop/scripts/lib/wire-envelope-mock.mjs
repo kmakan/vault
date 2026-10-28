@@ -32,6 +32,15 @@ export async function installEnvelopeMock(mocksDir) {
     const v = wire(cmd, args);
     return v !== undefined ? v : prevInvoke(cmd, args);
   };
+  // Разбор тела письма с 28.10 — тоже правило ядра: двойник общий
+  // (scripts/lib/body-decode-mock.mjs), чтобы смоуки, читающие тело, видели
+  // одну и ту же форму вызова (body / token).
+  const bodyDecode = (await import('./body-decode-mock.mjs')).bodyDecodeHandler;
+  const prevBody = globalThis.__invokeMock;
+  globalThis.__invokeMock = async (cmd, args) => {
+    const v = bodyDecode(cmd, args);
+    return v !== undefined ? v : prevBody(cmd, args);
+  };
   writeFileSync(
     path.join(mocksDir, 'tauri-core.js'),
     'export const invoke = (...a) => globalThis.__invokeMock(...a);',
@@ -40,6 +49,15 @@ export async function installEnvelopeMock(mocksDir) {
   writeFileSync(
     path.join(mocksDir, 'envelope-rule.js'),
     readFileSync(path.join(ROOT, 'src', 'envelope-rule.js'), 'utf8').replaceAll(
+      "from '@tauri-apps/api/core'",
+      "from './tauri-core.js'",
+    ),
+  );
+  // Адаптер разбора тела письма — копия настоящего файла с подменённым
+  // Tauri-вызовом (общий мост __invokeMock).
+  writeFileSync(
+    path.join(mocksDir, 'body-decode.js'),
+    readFileSync(path.join(ROOT, 'src', 'body-decode.js'), 'utf8').replaceAll(
       "from '@tauri-apps/api/core'",
       "from './tauri-core.js'",
     ),

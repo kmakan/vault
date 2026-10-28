@@ -152,18 +152,12 @@ pub fn encrypt_cmd(
     Ok(base64::engine::general_purpose::STANDARD.encode(&output))
 }
 
-/// base64 из письма: игнорируем пробельные переносы SMTP и ВОССТАНАВЛИВАЕМ
-/// пэйдинг, который исторически съедал decode_quoted_printable (см. email.rs).
-/// Валидный base64 всегда кратен 4 → re-pad не меняет корректные тела, но
-/// лечит уже закэшированные повреждённые (нет перечитывания IMAP).
+/// base64 из письма: форма тела — правило ЯДРА (`crypto::decode_mail_body`:
+/// переносы SMTP, QP-экранирование `=XX`, восстановление снятого padding).
+/// Здесь только мост: вторая копия правила уже разъезжалась с ядром молча —
+/// письмо читалось на телефоне и не читалось в CLI (ADR-005, t_7d2c1bb1).
 fn b64_decode_mail(ciphertext: &str) -> anyhow::Result<Vec<u8>> {
-    let mut cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
-    let rem = cleaned.len() % 4;
-    if rem != 0 {
-        cleaned.push_str(&"=".repeat(4 - rem));
-    }
-    base64::engine::general_purpose::STANDARD
-        .decode(cleaned)
+    vault_client::crypto::decode_mail_body(ciphertext)
         .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))
 }
 
@@ -628,5 +622,40 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("32 bytes"), "текст ошибки: {err}");
+    }
+
+    // ── форма тела: мост делегирует ядру ──
+    //
+    // QP-экранирование (`=` → `=3D`) — часть того же правила: транспорт кодирует
+    // письмо целиком. Копия «снять пробелы + добить padding» этого случая не
+    // читает, поэтому тест ловит возврат локальной копии в мост.
+
+    #[test]
+    fn qp_encoded_body_is_read_by_the_bridge() {
+        let key = hex::encode([14u8; 32]);
+        let encrypted = encrypt_symmetric_cmd("qp body", &key).unwrap();
+        let qp = encrypted.replace('=', "=3D");
+        assert_ne!(qp, encrypted, "фикстура без padding ничего не меряет");
+        assert_eq!(decrypt_symmetric_cmd(&qp, &key).unwrap(), "qp body");
+    }
+
+    // ── медиа-фрейм: nonce(24) ‖ ciphertext ──
+
+    #[test]
+    fn media_frame_roundtrip() {
+        let key = [5u8; 32];
+        let frame = b"opus frame bytes";
+        let wire = media_encrypt_frame(&key, frame).unwrap();
+        assert_eq!(wire.len(), 24 + frame.len() + 16, "nonce + tag — часть формата");
+        assert_eq!(media_decrypt_frame(&key, &wire).unwrap(), frame);
+    }
+
+    #[test]
+    fn short_media_frame_is_error_not_panic() {
+        // Меньше nonce — split_at(24) паникует, а не возвращает ошибку.
+        let err = media_decrypt_frame(&[1u8; 32], &[0u8; 20])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("frame too short"), "текст ошибки: {err}");
     }
 }
