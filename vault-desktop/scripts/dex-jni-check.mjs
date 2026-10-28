@@ -8,7 +8,7 @@
 // $Companion» от «метод есть на наружном классе» — а JNI зовёт наружный.
 // Проверка по DEX — последнее, что можно снять без телефона.
 //
-// Использование: node scripts/dex-jni-check.mjs <путь к APK>
+// Использование: node scripts/dex-jni-check.mjs <путь к APK или AAB>
 //   VAULT_DEXDUMP — путь к dexdump (по умолчанию ищется в Android SDK).
 import fs from 'node:fs';
 import os from 'node:os';
@@ -47,10 +47,18 @@ if (!dexdump) {
   process.exit(1);
 }
 
-// DEX лежит внутри APK как zip: распаковываем classes*.dex во временный каталог.
+// DEX лежит внутри артефакта как zip. В APK это classes.dex в корне, в AAB —
+// base/dex/classes.dex: имена путей разные, поэтому список берём из самого
+// архива и достаём с сохранением только файла (-j), иначе проверка честно
+// сказала бы «dex нет» на бандле, который собран правильно.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dexjni-'));
+let entries = [];
 try {
-  execFileSync('unzip', ['-qo', apk, 'classes*.dex', '-d', tmp]);
+  entries = execFileSync('unzip', ['-Z1', apk])
+    .toString('utf8').split('\n')
+    .filter((l) => /(^|\/)classes\d*\.dex$/.test(l.trim())).map((l) => l.trim());
+  if (!entries.length) throw new Error('в архиве нет classes*.dex');
+  execFileSync('unzip', ['-j', '-qo', apk, ...entries, '-d', tmp]);
 } catch (e) {
   console.error('✗ dex-jni-check: не удалось прочитать classes*.dex из ' + apk);
   console.error(String(e && e.message ? e.message : e).slice(0, 200));
@@ -58,7 +66,7 @@ try {
 }
 const dexFiles = fs.readdirSync(tmp).filter((f) => /^classes\d*\.dex$/.test(f));
 if (!dexFiles.length) {
-  console.error('✗ dex-jni-check: в APK нет classes*.dex — проверить сборку');
+  console.error('✗ dex-jni-check: распаковать classes*.dex не удалось — проверить сборку');
   process.exit(1);
 }
 let dump = '';
@@ -104,7 +112,7 @@ if (gaps.length) {
   console.error(`✗ dex-jni-check: ${gaps.length} из ${calls.length} точек JNI отсутствуют как статические методы на вызываемом классе (${path.basename(apk)}):`);
   for (const g of gaps) console.error('  • ' + g);
   console.error('  Причина обычно R8: нет keep-правила или нет @JvmStatic.');
-  console.error('  Такой APK на устройстве даст NoSuchMethodError — не принимать.');
+  console.error('  Такой артефакт на устройстве даст NoSuchMethodError — не принимать.');
   process.exit(1);
 }
 console.log(`✓ dex-jni-check: все ${calls.length} точек JNI из Rust видны в DEX как статические методы с нужной сигнатурой (${path.basename(apk)}).`);
