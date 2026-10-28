@@ -68,6 +68,12 @@ case "$MODE" in
     --release|*)
         echo ""
         echo "📦 Building release packages..."
+        # Архивные системные библиотеки (Arch) несут секцию `.relr.dyn` (RELR),
+        # а strip, встроенный в AppImage linuxdeploy, её не разбирает:
+        # «unknown type [0x13] section `.relr.dyn'» → «failed to run linuxdeploy»
+        # на каждом бандле. Бинарь сам по себе стрипнут сборкой, поэтому
+        # повторный strip в AppDir ничего не добавляет, кроме отказа: NO_STRIP=1.
+        export NO_STRIP=1
         npm run tauri build 2>&1
 
         echo ""

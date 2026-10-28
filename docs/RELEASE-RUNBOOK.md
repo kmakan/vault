@@ -340,6 +340,17 @@ cd ~/whisper/vault-desktop && npx tauri build --bundles deb
 # артефакт: src-tauri/target/release/bundle/deb/Vault_<версия>_amd64.deb
 ```
 
+AppImage — только с `NO_STRIP=1`: `env NO_STRIP=1 npx tauri build --bundles
+appimage` (в `scripts/build-desktop.sh --release` это уже стоит). Без него
+`linuxdeploy` падает с `failed to run linuxdeploy`, и причина не в нашем коде:
+его встроенный `strip` (старый binutils внутри AppImage) не разбирает секцию
+`.relr.dyn`, с которой Arch собирает системные библиотеки, и отказ на каждой из
+183 библиотек AppDir означает провал бандла. Бинарь стрипнут самой сборкой,
+поэтому второй strip ничего не экономит; цена — вес файла: 116 МБ
+(`Vault_0.1.285_amd64.AppImage`). На канале выдачи по-прежнему deb + tar.gz
+(§7): AppImage собирается, но живой запуск на X11/Wayland не проверялся, и
+класть его в релиз без проверки не нужно.
+
 ## 6а. Деплой релея (vault-relay) — серверная часть
 
 Релей — продовый сервис доставки (пуши, каналы, будилки FCM/ntfy). Собран
