@@ -101,6 +101,16 @@
     public static void syncCallPrefs(android.content.Context, java.lang.String, java.lang.String, java.lang.String);
 }
 
+# ЗВУК ЗВОНКА (#71): playCallSound/stopCallSound зовёт ТОЛЬКО Rust
+# (audio_android.rs → call_static_method на ВНЕШНЕМ классе). 28.10 на X50 это
+# и стоило приёмки: метод дожил только на $Companion, статик-мост @JvmStatic R8
+# вырезал, JNI дал NoSuchMethodError → «Java exception was thrown», гудок молчал
+# при полностью зелёных хостовых мерах. Мера — scripts/jni-keep-gate.mjs.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void playCallSound(android.content.Context, java.lang.String, boolean, boolean);
+    public static void stopCallSound(android.content.Context);
+}
+
 # УВЕДОМЛЕНИЯ: small-icon ic_notification зовётся из JS строкой
 # (notify.js opts.icon) — Java-коллера нет, R8 вырезал drawable →
 # уведомления показывались системным «!». Держим весь класс drawable
