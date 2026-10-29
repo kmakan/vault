@@ -84,5 +84,18 @@ export default {
     { name: "отказ сборки без покупок превращается в успех (клиент врал бы об оплате)",
       pattern: "    return { ok: false, error: 'purchases_disabled' };",
       replacement: "    return { ok: true, error: null };" },
+    // ── Живой провайдер: открыть страницу оплаты и дождаться подтверждения ──
+    { name: "живой провайдер не открывается в браузере (клиент ждёт оплату, которой не было)",
+      pattern: "  if (live) {",
+      replacement: "  if (false) {" },
+    { name: "тестовый провайдер отправляется в браузер (открывается несуществующая vault-relay-ссылка)",
+      pattern: "  const live = /^https?:\\/\\//i.test(payUrl);",
+      replacement: "  const live = true;" },
+    { name: "not_paid_yet прерывает ожидание как ошибка (живой платёж не доживает до оплаты)",
+      pattern: "    if (v.error !== 'not_paid_yet') break;",
+      replacement: "    break;" },
+    { name: "между опросами verify нет паузы (шквал запросов к платёжному шлюзу)",
+      pattern: "    if (i < attempts - 1 && deps.sleep) await deps.sleep(deps.pollMs || 3000);",
+      replacement: "    if (false) await deps.sleep(deps.pollMs || 3000);" },
   ],
 };

@@ -681,6 +681,7 @@ export default {
   pro_action_extend: 'Extend',
   pro_buy_failed: 'Could not complete the purchase: {why}',
   pro_buy_ok: 'Pro activated',
+  pro_pay_open: 'Complete the payment on the opened page — Pro turns on automatically',
   pro_err_disabled: 'Purchases are not available yet (no payment provider connected)',
   pro_err_active: 'You already have an active subscription',
   pro_err_rate: 'Too many attempts. Try again in an hour',

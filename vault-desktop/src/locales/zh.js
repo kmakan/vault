@@ -675,6 +675,7 @@ export default {
   pro_action_extend: '续期',
   pro_buy_failed: '无法完成购买：{why}',
   pro_buy_ok: 'Pro 已激活',
+  pro_pay_open: '请在打开的页面完成付款 — Pro 将自动开通',
   pro_err_disabled: '购买暂不可用（未接入支付服务商）',
   pro_err_active: '您已有有效订阅',
   pro_err_rate: '尝试次数过多，请一小时后再试',

@@ -664,6 +664,8 @@ export default {
         await ProPlan.buyPro({
           checkout: (plan, months) => relayClient.purchaseCheckout(this.email || 'anon', plan, months),
           verify: (id) => relayClient.purchaseVerify(this.email || 'anon', id),
+          open: (url) => this.openExternalLink(url),
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
           refresh: () => this.proRefresh(),
           toast: (m) => uiStore.toast(m),
           tr: (k, p) => this.t(k, p),

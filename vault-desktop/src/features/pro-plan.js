@@ -20,6 +20,8 @@
 //   account          — аккаунт (KV и fingerprint);
 //   checkout(plan, months) — создать платёжную сессию;
 //   verify(checkoutId)     — подтвердить оплату и получить токен;
+//   open(url)        — открыть внешнюю страницу оплаты (живой провайдер);
+//   sleep(ms)        — пауза между опросами verify (в тестах — мгновенная);
 //   refresh()        — перечитать состояние подписки;
 //   toast(msg) / tr(key, params) — обратная связь;
 //   now()            — unix-секунды (в тестах — фиксированные);
@@ -244,7 +246,7 @@ export function proErrorText(error, t) {
 // активирует токен на устройстве). Возвращает { ok, error }.
 export async function buyPro(deps) {
   // Покупка закрыта и здесь, не только на экране: сборка без покупок не
-  // должна уметь создать чекаут, даже если вызов пришёл не с кнопки.
+  // должна уметь создать платёжную сессию, даже если вызов пришёл не с кнопки.
   if (!purchasesAllowed(deps.env)) {
     return { ok: false, error: 'purchases_disabled' };
   }
@@ -254,7 +256,29 @@ export async function buyPro(deps) {
     deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));
     return { ok: false, error: why };
   }
-  const v = await deps.verify(res.checkout_id);
+  // Живой провайдер (YooKassa) даёт внешнюю страницу оплаты: человек платит в
+  // браузере, а сервер узнаёт об оплате САМ, только когда его спросят (pull —
+  // вебхука нет). Пока платёж не внесён, verify честно отвечает not_paid_yet:
+  // это не провал покупки, а ожидание. Значит — открыть страницу и опрашивать
+  // verify, пока сервер не подтвердит оплату или пока не выйдет окно ожидания.
+  // Тестовый провайдер подтверждает мгновенно и внешней страницы не имеет
+  // (payment_url — не http), для него открывать и поллить нечего: один verify.
+  // Клиент НЕ решает, оплачено ли, — он лишь открывает ссылку и переспрашивает
+  // сервер; вердикт остаётся на сервере (главное правило честности выше).
+  const payUrl = res.payment_url || '';
+  const live = /^https?:\/\//i.test(payUrl);
+  if (live) {
+    if (deps.open) await deps.open(payUrl);
+    deps.toast(deps.tr('pro_pay_open'));
+  }
+  const attempts = live ? (deps.maxVerify || 40) : 1;
+  let v = null;
+  for (let i = 0; i < attempts; i++) {
+    v = await deps.verify(res.checkout_id);
+    if (!v || !v.error) break;                 // подтверждено — токен выдан
+    if (v.error !== 'not_paid_yet') break;     // реальная ошибка — её не ждём
+    if (i < attempts - 1 && deps.sleep) await deps.sleep(deps.pollMs || 3000);
+  }
   if (!v || v.error) {
     const why = (v && v.error) || 'network';
     deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));

@@ -219,6 +219,63 @@ console.log('4. buyPro');
     !calls.some((c) => c[0] === 'refresh'), calls);
 }
 
+// ── 4b. buyPro: живой провайдер (страница оплаты + ожидание) ─────────────
+console.log('4b. buyPro: живой провайдер');
+{
+  // YooKassa: payment_url — http(s). Клиент обязан ОТКРЫТЬ страницу и
+  // опрашивать verify, пока сервер не подтвердит оплату. not_paid_yet — это
+  // ожидание, а не провал.
+  const calls = [];
+  const toasts = [];
+  let verifyCount = 0;
+  const liveDeps = (verifyFn) => ({
+    checkout: async () => { calls.push(['checkout']); return { checkout_id: 'co_live', provider: 'yookassa', payment_url: 'https://yoomoney.ru/checkout/pay/agw/i/co_live' }; },
+    verify: async (id) => { calls.push(['verify', id]); verifyCount++; return verifyFn(verifyCount); },
+    open: async (url) => { calls.push(['open', url]); },
+    sleep: async () => { calls.push(['sleep']); },
+    refresh: async () => { calls.push(['refresh']); },
+    toast: (m) => toasts.push(m),
+    tr: tl,
+    maxVerify: 5, pollMs: 10,
+  });
+
+  // Оплата подтверждается со 2-го опроса (первый — ещё не заплатил).
+  verifyCount = 0; calls.length = 0; toasts.length = 0;
+  let res = await P.buyPro(liveDeps((n) => (n >= 2 ? { token: 'v2', plan: 'pro', paid_until: NOW + 365 * DAY } : { error: 'not_paid_yet' })));
+  check('живой: страница оплаты открыта по payment_url',
+    calls.some((c) => c[0] === 'open' && c[1].startsWith('https://yoomoney.ru/')), calls);
+  check('живой: подсказка «завершите платёж» показана', toasts.includes('pro_pay_open'), toasts);
+  check('живой: not_paid_yet не прервал ожидание (verify вызван >1 раза)', verifyCount >= 2, calls);
+  check('живой: между опросами есть пауза (не шквал запросов к шлюзу)', calls.some((c) => c[0] === 'sleep'), calls);
+  check('живой: успех после подтверждения', res.ok === true && res.plan === 'pro', res);
+  check('живой: состояние перечитано после оплаты', calls.some((c) => c[0] === 'refresh'), calls);
+
+  // Человек не оплатил за окно — ok=false, но НЕ «успех»; refresh не вызван.
+  verifyCount = 0; calls.length = 0; toasts.length = 0;
+  res = await P.buyPro(liveDeps(() => ({ error: 'not_paid_yet' })));
+  check('живой: неоплата за окно → ok=false', res.ok === false && res.error === 'not_paid_yet', res);
+  check('живой: неоплата → состояние НЕ перечитывается', !calls.some((c) => c[0] === 'refresh'), calls);
+  check('живой: опрос ограничен maxVerify', verifyCount === 5, verifyCount);
+
+  // Реальная ошибка (не not_paid_yet) прерывает ожидание сразу, без поллинга.
+  verifyCount = 0; calls.length = 0; toasts.length = 0;
+  res = await P.buyPro(liveDeps(() => ({ error: 'payment rejected' })));
+  check('живой: реальная ошибка прерывает ожидание за один шаг', verifyCount === 1 && res.ok === false, verifyCount);
+
+  // Тестовый провайдер: payment_url — не http → страницу НЕ открываем, один verify.
+  const tcalls = [];
+  res = await P.buyPro({
+    checkout: async () => { tcalls.push(['checkout']); return { checkout_id: 'co_test', provider: 'test', payment_url: 'vault-relay://pay/test/fp' }; },
+    verify: async () => { tcalls.push(['verify']); return { token: 'v2', plan: 'pro', paid_until: NOW + 365 * DAY }; },
+    open: async (url) => { tcalls.push(['open', url]); },
+    sleep: async () => { tcalls.push(['sleep']); },
+    refresh: async () => { tcalls.push(['refresh']); },
+    toast: () => {}, tr: tl,
+  });
+  check('тестовый провайдер: браузер НЕ открывается (нет http-ссылки)', !tcalls.some((c) => c[0] === 'open'), tcalls);
+  check('тестовый провайдер: один verify, успех', tcalls.filter((c) => c[0] === 'verify').length === 1 && res.ok === true, tcalls);
+}
+
 // ── 5. Бейдж Pro в шапке чата ───────────────────────────────────────────
 console.log('5. isProActive');
 {
