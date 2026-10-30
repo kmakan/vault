@@ -6,6 +6,7 @@ pub mod fcm;
 pub mod persist;
 pub mod rate;
 pub mod store;
+pub mod test_codes;
 pub mod tokens;
 pub mod turn;
 

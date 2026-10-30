@@ -103,5 +103,11 @@ export default {
     { name: 'право publish больше не отличается от права чтения',
       pattern: "        self.scope == Scope::ChannelWrite && read_tok.scope == Scope::ChannelRead",
       replacement: "        read_tok.scope == Scope::ChannelRead" },
+    { name: 'срок тест-кода не ограничен десятью годами (код «на полгода» живёт вечно)',
+      pattern: "    let days = days.clamp(1, TOKEN_LIFETIME_DAYS);",
+      replacement: "    let days = days.max(1);" },
+    { name: 'дни тест-кода считаются часами (токен протухает в 24 раза быстрее)',
+      pattern: "    let exp = now.saturating_add(days.saturating_mul(86400));",
+      replacement: "    let exp = now.saturating_add(days.saturating_mul(3600));" },
   ],
 };

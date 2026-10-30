@@ -292,7 +292,14 @@ pub fn issue_install(keys: &ServerKeys, now: u32) -> String {
 /// Выдать тестовый (промо-ключ) read-токен: тот же срок, но без суточного
 /// лимита — явный вид `test`, а не эвристика по сроку.
 pub fn issue_test(keys: &ServerKeys, now: u32) -> String {
-    let exp = now.saturating_add(TOKEN_LIFETIME_DAYS.saturating_mul(86400));
+    issue_test_days(keys, now, TOKEN_LIFETIME_DAYS)
+}
+
+/// Тестовый токен с явным сроком: персональные коды тестеров живут 6 месяцев,
+/// общий промо-ключ владельца — 10 лет. Срок клампится теми же границами.
+pub fn issue_test_days(keys: &ServerKeys, now: u32, days: u32) -> String {
+    let days = days.clamp(1, TOKEN_LIFETIME_DAYS);
+    let exp = now.saturating_add(days.saturating_mul(86400));
     issue_v2(keys, Scope::Read, Plan::Trial, 0, exp)
 }
 
@@ -749,6 +756,19 @@ mod tests {
         assert_eq!(p.plan, Plan::Trial);
         assert_eq!(Kind::of(&p), Kind::Test);
         assert!(Kind::of(&p).is_unlimited());
+    }
+
+    #[test]
+    fn test_token_days_sets_expiry_and_clamps() {
+        let k = keys();
+        let now = now_u32();
+        let p = parse(&k, &issue_test_days(&k, now, 180)).expect("parses");
+        assert_eq!(p.plan, Plan::Trial);
+        assert_eq!(p.expiry, now + 180 * 86400, "код тестера живёт ровно свой срок");
+        let zero = parse(&k, &issue_test_days(&k, now, 0)).expect("parses");
+        assert_eq!(zero.expiry, now + 86400, "минимальный срок — один день");
+        let huge = parse(&k, &issue_test_days(&k, now, 99_999)).expect("parses");
+        assert_eq!(huge.expiry, now + TOKEN_LIFETIME_DAYS * 86400);
     }
 
     #[test]

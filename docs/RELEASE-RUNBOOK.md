@@ -414,6 +414,47 @@ ssh server 'systemctl is-active vault-relay
 мгновенно) и выключают сразу после: включённый тестовый провайдер в проде
 раздаёт бесплатные Pro-токены всем подряд.
 
+### Тест-коды тестеров (безлимит на срок, с отзывом)
+
+Общий ключ `VAULT_RELAY_UNLIMITED_KEY` выдаёт безлимитный тестовый токен на
+10 лет и не отзывается у одного человека отдельно — его держат только
+аккаунты владельца. Приглашённым тестерам выдаётся **личный код**:
+
+- формат `vt1-<32 hex>`, одноразовый, привязан к первому `fp`;
+- срок по умолчанию 180 дней (кламп 1..3650, задаётся при создании);
+- в `state.json` хранится только SHA-256 кода; открытый текст виден один раз;
+- ввод — тем же полем, что и промо-ключ (Настройки → Релей), пересборка
+  приложения не нужна;
+- отзыв — по коду или по `fp` (fp — это отпечаток, не почта), токен уходит в
+  `revoked_tokens` и перестаёт приниматься на чтении и публикации.
+
+Роуты живут только при заданном `VAULT_RELAY_ADMIN_KEY` (пусто = 404) и
+вызываются ТОЛЬКО с localhost по SSH; nginx `/admin/*` наружу не проксирует:
+
+```bash
+# в env релея (sudo не нужен, сервис перезапустить):
+ssh server 'printf "VAULT_RELAY_ADMIN_KEY=%s\n" "$(openssl rand -hex 32)" >> ~/vault-relay/env'
+
+# выдать код (label — для списка; days опущен = 180)
+ssh server 'A=$(command grep ^VAULT_RELAY_ADMIN_KEY= ~/vault-relay/env | cut -d= -f2-)
+  curl -s -X POST http://127.0.0.1:8091/admin/test-code -H "x-admin-key: $A" \
+    -H "Content-Type: application/json" -d "{\"label\":\"тестер-1\"}"'
+
+# список (без открытых значений), count/used/revoked/fp
+ssh server 'A=$(command grep ^VAULT_RELAY_ADMIN_KEY= ~/vault-relay/env | cut -d= -f2-)
+  curl -s -H "x-admin-key: $A" http://127.0.0.1:8091/admin/test-codes'
+
+# отзыв: {"code":"vt1-…"} или {"fp":"aa:bb:…"}
+ssh server 'A=$(command grep ^VAULT_RELAY_ADMIN_KEY= ~/vault-relay/env | cut -d= -f2-)
+  curl -s -X POST http://127.0.0.1:8091/admin/revoke -H "x-admin-key: $A" \
+    -H "Content-Type: application/json" -d "{\"fp\":\"aa:bb:cc:dd:ee:ff\"}"'
+```
+
+Живая проверка после деплоя (30.10): код → `kind=test`, `unlimited=true`,
+`days=180`; `tokens/info` 200 → после отзыва 401; чужой fp по отозванному
+коду 403; промо-ключ владельца по-прежнему даёт 10 лет; `/admin/test-codes`
+снаружи — 404.
+
 ### Откат
 
 ```bash

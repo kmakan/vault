@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::test_codes::{TesterCode, MAX_DAYS, MIN_DAYS};
+
 /// Переменная окружения с путём к файлу состояния.
 pub const ENV_STATE_PATH: &str = "VAULT_RELAY_STATE";
 /// Файл состояния по умолчанию (WorkingDirectory сервиса).
@@ -97,6 +99,17 @@ pub struct PersistedState {
     /// полуночи UTC всё равно начинается с нуля.
     #[serde(default)]
     pub daily_pub: HashMap<String, (u64, u32)>,
+    /// Персональные тестовые коды тестеров: hash(code) → запись.
+    /// Хранится ТОЛЬКО хеш: открытый код показывает один раз при выдаче.
+    /// Персист обязателен — иначе рестарт релея забыл бы, кому какой код
+    /// выдан, и отзыв «по коду» стал бы невозможен.
+    #[serde(default)]
+    pub tester_codes: HashMap<String, TesterCode>,
+    /// Отозванные токены: hash(read-токена). Токен stateless, поэтому отзыв
+    /// возможен только денлистом, который проверяется на каждом чтении.
+    /// Персист: рестарт релея не должен воскрешать отозванный безлимит.
+    #[serde(default)]
+    pub revoked_tokens: std::collections::BTreeSet<String>,
 }
 
 /// Состояние оплаченной подписки.
@@ -211,6 +224,8 @@ impl PersistedState {
         subscriptions: &HashMap<String, Subscription>,
         sub_tokens: &HashMap<String, Vec<String>>,
         daily_pub: &HashMap<String, (u64, u32)>,
+        tester_codes: &HashMap<String, TesterCode>,
+        revoked_tokens: &std::collections::BTreeSet<String>,
     ) -> Self {
         Self {
             v: STATE_VERSION,
@@ -223,6 +238,8 @@ impl PersistedState {
             subscriptions: subscriptions.clone(),
             sub_tokens: sub_tokens.clone(),
             daily_pub: daily_pub.clone(),
+            tester_codes: tester_codes.clone(),
+            revoked_tokens: revoked_tokens.clone(),
         }
     }
 
@@ -337,6 +354,33 @@ impl PersistedState {
             }
             tracing::warn!(dropped = extra, "state: daily counters over cap dropped");
         }
+        // Тестовые коды: ключ — sha256 hex, срок в границах, хеш токена —
+        // hex-тема. Битая запись хуже отсутствия: по ней нельзя ни выдать,
+        // ни отозвать безлимит.
+        self.tester_codes.retain(|k, v| {
+            valid_topic(k)
+                && (MIN_DAYS..=MAX_DAYS).contains(&v.days)
+                && v.label.len() <= 256
+                && v.fp.as_deref().map(valid_fp).unwrap_or(true)
+                && v.token_hash.as_deref().map(valid_topic).unwrap_or(true)
+        });
+        self.revoked_tokens.retain(|h| valid_topic(h));
+        if self.tester_codes.len() > MAX_ENTRIES {
+            let extra = self.tester_codes.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.tester_codes.keys().take(extra).cloned().collect();
+            for k in drop {
+                self.tester_codes.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: tester codes over cap dropped");
+        }
+        if self.revoked_tokens.len() > MAX_ENTRIES {
+            let extra = self.revoked_tokens.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.revoked_tokens.iter().take(extra).cloned().collect();
+            for k in drop {
+                self.revoked_tokens.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: revoked tokens over cap dropped");
+        }
     }
 
     /// Сохранить атомарно: пишем `<path>.tmp`, fsync, затем `rename` в
@@ -413,6 +457,7 @@ pub fn state_path_from_raw(v: Option<&str>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     /// ПРИВЯЗКА ТОКЕНА ПЕРЕЖИВАЕТ РЕСТАРТ.
     ///
@@ -443,6 +488,8 @@ mod tests {
             &subs,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -495,6 +542,8 @@ mod tests {
             &subs,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -540,6 +589,8 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
         );
         st.save_atomic(&path).expect("save");
 
@@ -580,6 +631,8 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
         )
         .save_atomic(&path)
         .expect("save 2");
@@ -663,6 +716,8 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
         )
         .save_atomic(&path)
         .expect("save");
@@ -695,6 +750,8 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &counters,
+            &HashMap::new(),
+            &BTreeSet::new(),
         )
         .save_atomic(&path)
         .expect("save");

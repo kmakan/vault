@@ -24,6 +24,7 @@ use vault_relay::channel_keys;
 use vault_relay::fcm::FcmSender;
 use vault_relay::persist::{self, FpToken, PersistedState};
 use vault_relay::store::Store;
+use vault_relay::test_codes::{self, Claim, TesterCode};
 use vault_relay::tokens::Kind;
 use vault_relay::{ServerKeys, Scope};
 
@@ -44,6 +45,9 @@ pub struct AppState {
     pub require_sig: bool,
     /// Промо-ключ безлимита (VAULT_RELAY_UNLIMITED_KEY): тестерам/владельцу.
     pub unlimited_key: Option<String>,
+    /// Секрет админ-роутов (VAULT_RELAY_ADMIN_KEY). None = админ-роуты
+    /// отвечают 404: без секрета их не существует, а не «работают без пароля».
+    pub admin_key: Option<String>,
     /// TURN REST (звонки вне одной подсети): секрет coturn `use-auth-secret`
     /// и хост. None = `VAULT_TURN_SECRET` не задан → /relay/turn отвечает 503,
     /// а клиент остаётся на STUN (поведение прежних сборок, а не фиктивный
@@ -124,6 +128,12 @@ pub struct AppState {
     /// Персистится в state.json: иначе рестарт релея снова ломал бы
     /// адреса очереди у всех, кто перерегистрируется.
     pub fp_tokens: std::sync::Mutex<HashMap<String, FpToken>>,
+    /// Персональные тестовые коды: hash(code) → запись. Персист: рестарт
+    /// релея не должен забывать, кому выдан код и что он отозван.
+    pub tester_codes: std::sync::Mutex<HashMap<String, TesterCode>>,
+    /// Отозванные токены (hash): токен stateless, поэтому отзыв — денлист,
+    /// который проверяется на каждом чтении/публикации. Персист обязателен.
+    pub revoked_tokens: std::sync::Mutex<std::collections::BTreeSet<String>>,
     /// t_b8f44bdf: принимать ли «заявку» уже имеющегося токена (`keep` в
     /// /relay/register) — клиент связывает fp → токен ДО протухания, чтобы
     /// адрес очереди не сменился. Kill-switch `VAULT_RELAY_KEEP_CLAIM=0`
@@ -141,12 +151,13 @@ impl AppState {
         allow_anonymous_pub: bool,
         ntfy_url: String,
         unlimited_key: Option<String>,
+        admin_key: Option<String>,
         free_daily_limit: u32,
         fcm: Option<Arc<FcmSender>>,
         state_path: Option<std::path::PathBuf>,
         payment: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
     ) -> Self {
-        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens, daily_pub) =
+        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens, daily_pub, tester_codes, revoked_tokens) =
             match &state_path {
                 Some(p) => {
                     let st = PersistedState::load(p);
@@ -159,6 +170,8 @@ impl AppState {
                         st.subscriptions,
                         st.sub_tokens,
                         st.daily_pub,
+                        st.tester_codes,
+                        st.revoked_tokens,
                     )
                 }
                 None => (
@@ -170,6 +183,8 @@ impl AppState {
                     HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
+                    HashMap::new(),
+                    std::collections::BTreeSet::new(),
                 ),
             };
         let require_sig = std::env::var("VAULT_RELAY_REQUIRE_SIG")
@@ -185,6 +200,7 @@ impl AppState {
             require_sig,
             ntfy_url,
             unlimited_key,
+            admin_key,
             daily_pub: std::sync::Mutex::new(daily_pub),
             daily_persist_at: AtomicU64::new(0),
             free_daily_limit,
@@ -203,6 +219,8 @@ impl AppState {
             topic_fcm: std::sync::Mutex::new(topic_fcm),
             state_path,
             fp_tokens: std::sync::Mutex::new(fp_tokens),
+            tester_codes: std::sync::Mutex::new(tester_codes),
+            revoked_tokens: std::sync::Mutex::new(revoked_tokens),
             keep_claim: std::sync::atomic::AtomicBool::new(
                 std::env::var("VAULT_RELAY_KEEP_CLAIM")
                     .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
@@ -335,6 +353,8 @@ impl AppState {
             &self.subscriptions.lock().expect("subscriptions lock"),
             &self.sub_tokens.lock().expect("sub_tokens lock"),
             &self.daily_pub.lock().expect("daily_pub lock"),
+            &self.tester_codes.lock().expect("tester_codes lock"),
+            &self.revoked_tokens.lock().expect("revoked_tokens lock"),
         );
         if let Err(e) = st.save_atomic(path) {
             tracing::error!(path = %path.display(), error = %e, "state: save failed");
@@ -526,6 +546,12 @@ pub async fn relay_pub(
     if to_tok.is_expired() {
         return err(StatusCode::PAYMENT_REQUIRED, "recipient subscription expired");
     }
+    // Отозванный токен получателя: очередь закрыта (иначе отзыв безлимита
+    // ничего не менял бы, пока живёт токен).
+    if token_revoked(&app, &to_tok.hash) {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::UNAUTHORIZED, "recipient token revoked");
+    }
     let is_channel = to_tok.scope == Scope::ChannelRead;
     // Способ авторизации отправителя: запоминаем здесь, а метрику пишем только
     // после успешной постановки в очередь (см. `pub_ok` ниже) — тогда отказы
@@ -559,6 +585,10 @@ pub async fn relay_pub(
     }
     if let Some(auth) = auth_header(&headers) {
         match vault_relay::parse(&app.keys, &auth) {
+            Some(t) if token_revoked(&app, &t.hash) => {
+                app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                return err(StatusCode::UNAUTHORIZED, "token revoked");
+            }
             Some(t) if t.scope == Scope::Write && !t.is_expired() && !is_channel => {
                 authz = Authz::Header;
             }
@@ -607,6 +637,10 @@ pub async fn relay_pub(
     if !is_channel {
         if let Some(sender_tok) = req.tok.as_deref().filter(|s| !s.is_empty()) {
             if let Some(t) = vault_relay::parse(&app.keys, sender_tok) {
+                if token_revoked(&app, &t.hash) {
+                    app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                    return err(StatusCode::UNAUTHORIZED, "token revoked");
+                }
                 if !check_token_binding(&app, &t.hash, &req.fp) {
                     app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
                     return err(StatusCode::FORBIDDEN, "token bound to another account");
@@ -948,9 +982,22 @@ async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, socket: axum::ext
 
 // ───────────────────────── Вспомогательное ─────────────────────────
 
+/// Токен отозван: токен stateless, поэтому отзыв живёт денлистом, и каждый
+/// путь чтения/публикации обязан его спросить (иначе «отозванный» безлимит
+/// продолжал бы работать до конца срока).
+fn token_revoked(app: &AppState, hash: &str) -> bool {
+    app.revoked_tokens
+        .lock()
+        .expect("revoked_tokens lock")
+        .contains(hash)
+}
+
 fn require_read(app: &Arc<AppState>, headers: &HeaderMap) -> Option<vault_relay::Token> {
     let auth = auth_header(headers)?;
     let t = vault_relay::parse(&app.keys, &auth)?;
+    if token_revoked(app, &t.hash) {
+        return None;
+    }
     (t.scope == Scope::Read || t.scope == Scope::ChannelRead).then_some(t)
 }
 
@@ -1583,8 +1630,38 @@ async fn relay_register(
         .map(|(k, p)| k == p)
         .unwrap_or(false);
     let fp = norm_fp(req.fp.as_deref());
-    // Вид токена для НОВОЙ выдачи: промо-ключ → тестовый, иначе установочный.
-    let want_kind = if promo_ok { Kind::Test } else { Kind::Install };
+    // Персональный тестовый код (6 месяцев, отзываемый). Общий промо-ключ
+    // владельца остаётся отдельной веткой: он живёт 10 лет и общий.
+    let code_hash = req.promo.as_deref().and_then(test_codes::hash);
+    let code_rec = code_hash.as_ref().and_then(|h| {
+        app.tester_codes
+            .lock()
+            .expect("tester_codes lock")
+            .get(h)
+            .cloned()
+    });
+    if code_rec.is_some() && fp.is_none() {
+        // Код без fp нечем привязать: выдали бы безлимит «в воздух».
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "fp required for tester code");
+    }
+    if let (Some(rec), Some(fp_ref)) = (code_rec.as_ref(), fp.as_deref()) {
+        match test_codes::claim(rec, fp_ref) {
+            Claim::Revoked => return err(StatusCode::FORBIDDEN, "tester code revoked"),
+            Claim::Other => {
+                return err(StatusCode::CONFLICT, "tester code bound to another account")
+            }
+            Claim::Fresh | Claim::Same => {}
+        }
+    }
+    // Приглашённый (промо-ключ или личный код) не тратит IP-квоту: тестер
+    // приходит по нашей воле, а не «третья выдача с этого IP за сутки».
+    let invite_ok = promo_ok || code_rec.is_some();
+    let code_days = code_rec
+        .as_ref()
+        .map(|r| test_codes::ttl_days(Some(r.days)))
+        .unwrap_or(test_codes::DEFAULT_DAYS);
+    // Вид токена для НОВОЙ выдачи: промо-ключ/код → тестовый, иначе установочный.
+    let want_kind = if invite_ok { Kind::Test } else { Kind::Install };
 
     // (1) ИДЕМПОТЕНТНОСТЬ по fp: адрес очереди НЕ меняется. Клиент, потерявший
     // свою запись (миграция kv, чистая переустановка, рестарт релея), получит
@@ -1659,7 +1736,9 @@ async fn relay_register(
             }
             if let Some(t) = vault_relay::parse(&app.keys, &rec.token) {
                 let kind = Kind::of(&t);
-                if !(promo_ok && kind == Kind::Install) {
+                // Отозванный токен не возвращаем: выдаём новый ниже.
+                let existing_revoked = token_revoked(&app, &t.hash);
+                if !(existing_revoked || (invite_ok && kind == Kind::Install)) {
                     // Отдаём его же токен: квота IP не тратится, state не меняется.
                     app.metrics.register_reuse.fetch_add(1, Ordering::Relaxed);
                     ringtone_resolve(&app.topic_ringtone, &t.hash, req.ringtone.as_deref());
@@ -1693,7 +1772,9 @@ async fn relay_register(
     if app.keep_claim.load(Ordering::Relaxed) {
         if let (Some(fp_ref), Some(keep_raw)) = (fp.as_deref(), req.keep.as_deref()) {
             let keep_tok = keep_raw.trim();
-            if let Some(t) = vault_relay::parse(&app.keys, keep_tok) {
+            if let Some(t) = vault_relay::parse(&app.keys, keep_tok)
+                .filter(|t| !token_revoked(&app, &t.hash))
+            {
                 // (а) токен валиден и не протух + это адрес очереди аккаунта
                 // (read-scope; write/канальные токены адресом очереди не являются).
                 if t.scope == Scope::Read && !t.is_expired() {
@@ -1741,7 +1822,7 @@ async fn relay_register(
     }
 
     // (2) Новая выдача: только она расходует IP-квоту (3/сутки).
-    if !promo_ok {
+    if !invite_ok {
         let mut rl = app.registrations.lock().unwrap();
         let (count, window_start) = rl.entry(ip).or_insert((0u32, now_secs));
         if now_secs.saturating_sub(*window_start) > 86400 {
@@ -1757,11 +1838,16 @@ async fn relay_register(
         }
         *count += 1;
     }
-    // install: 10 лет + суточный лимит; test: 10 лет без лимита.
+    // install: 10 лет + суточный лимит; test: без лимита.
     // Срок намеренно долгий: короткий срок = периодическая смена адреса
     // очереди = потеря канала у собеседников (см. TOKEN_LIFETIME_DAYS).
-    let token = match want_kind {
-        Kind::Test => vault_relay::tokens::issue_test(&app.keys, now32),
+    // Исключение — личный код тестера: у него свой ограниченный срок,
+    // чтобы забытый код не жил вечно (отзыв — отдельно, денлистом).
+    let token = match (want_kind, promo_ok) {
+        (Kind::Test, true) => vault_relay::tokens::issue_test(&app.keys, now32),
+        (Kind::Test, false) => {
+            vault_relay::tokens::issue_test_days(&app.keys, now32, code_days)
+        }
         _ => vault_relay::tokens::issue_install(&app.keys, now32),
     };
     let Some(parsed) = vault_relay::parse(&app.keys, &token) else {
@@ -1794,6 +1880,23 @@ async fn relay_register(
         }
         persisted = true;
     }
+    // Личный код: закрепляем за fp и запоминаем выданный токен — по этому
+    // хешу работает отзыв, а по fp — повторная идемпотентная выдача.
+    if let (Some(h), Some(fp_ref)) = (code_hash.as_deref(), fp.as_deref()) {
+        if let Some(rec) = app
+            .tester_codes
+            .lock()
+            .expect("tester_codes lock")
+            .get_mut(h)
+        {
+            rec.fp = Some(fp_ref.to_string());
+            rec.token_hash = Some(topic.clone());
+            if rec.days == 0 {
+                rec.days = code_days;
+            }
+            persisted = true;
+        }
+    }
     app.metrics.register_ok.fetch_add(1, Ordering::Relaxed);
     tracing::info!(
         fp = fp.as_deref().unwrap_or("-"),
@@ -1813,6 +1916,205 @@ async fn relay_register(
             unlimited: want_kind.is_unlimited(),
             kind: want_kind.as_str().to_string(),
         }),
+    )
+        .into_response()
+}
+
+// ───────────────────────── Админ: тестовые коды ─────────────────────────
+//
+// Роуты существуют только при заданном VAULT_RELAY_ADMIN_KEY: без секрета
+// они отвечают 404 (не «работают без пароля»). Nginx наружу их не отдаёт —
+// вызов только с localhost по SSH. Код — bearer-секрет, поэтому в list
+// отдаём только хеш, а открытый текст — ровно один раз при создании.
+
+fn admin_ok(app: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = app.admin_key.as_deref() else {
+        return false;
+    };
+    let Some(got) = headers
+        .get("x-admin-key")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    // Сравнение постоянного времени: длина + XOR по всем байтам.
+    got.len() == expected.len()
+        && got
+            .bytes()
+            .zip(expected.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+}
+
+#[derive(Deserialize)]
+pub struct TestCodeReq {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    days: Option<u32>,
+}
+
+/// POST /admin/test-code — выдать персональный код тестеру.
+async fn admin_test_code_create(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumJson(req): AxumJson<TestCodeReq>,
+) -> Response {
+    if !admin_ok(&app, &headers) {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    let code = test_codes::generate();
+    let hash = test_codes::hash(&code).expect("generated code is canonical");
+    let days = test_codes::ttl_days(req.days);
+    let label: String = req.label.trim().chars().take(120).collect();
+    let rec = TesterCode {
+        label: label.clone(),
+        days,
+        created_at: now(),
+        fp: None,
+        token_hash: None,
+        revoked: false,
+    };
+    app.tester_codes
+        .lock()
+        .expect("tester_codes lock")
+        .insert(hash, rec);
+    app.persist();
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({
+            "code": code,
+            "label": label,
+            "days": days,
+        })),
+    )
+        .into_response()
+}
+
+/// GET /admin/test-codes — список кодов (без открытых значений).
+async fn admin_test_codes_list(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if !admin_ok(&app, &headers) {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    let map = app.tester_codes.lock().expect("tester_codes lock");
+    let mut items: Vec<serde_json::Value> = map
+        .iter()
+        .map(|(hash, r)| {
+            serde_json::json!({
+                "code_hash": hash,
+                "label": r.label,
+                "days": r.days,
+                "created_at": r.created_at,
+                "fp": r.fp,
+                "used": r.fp.is_some(),
+                "revoked": r.revoked,
+            })
+        })
+        .collect();
+    items.sort_by_key(|v| v["created_at"].as_u64().unwrap_or(0));
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "codes": items, "count": items.len() })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RevokeReq {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    fp: Option<String>,
+}
+
+/// POST /admin/revoke — отозвать безлимит по коду или fingerprint.
+async fn admin_revoke(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumJson(req): AxumJson<RevokeReq>,
+) -> Response {
+    if !admin_ok(&app, &headers) {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    let mut revoked = 0usize;
+    let mut found = false;
+    // По коду: помечаем запись и кладём её токен в денлист.
+    if let Some(raw) = req.code.as_deref() {
+        let Some(h) = test_codes::hash(raw) else {
+            return err(StatusCode::UNPROCESSABLE_ENTITY, "bad code");
+        };
+        let token_hash = {
+            let mut map = app.tester_codes.lock().expect("tester_codes lock");
+            match map.get_mut(&h) {
+                Some(rec) => {
+                    found = true;
+                    rec.revoked = true;
+                    rec.token_hash.clone()
+                }
+                None => None,
+            }
+        };
+        if let Some(th) = token_hash {
+            if app
+                .revoked_tokens
+                .lock()
+                .expect("revoked_tokens lock")
+                .insert(th)
+            {
+                revoked += 1;
+            }
+        }
+    }
+    // По fp: убираем выдачу (следующая регистрация даст обычный токен),
+    // отзываем её токен и связанные коды — «удалить у аккаунта» одним ключом.
+    if let Some(fp) = req.fp.as_deref().and_then(|f| norm_fp(Some(f))) {
+        let rec = app
+            .fp_tokens
+            .lock()
+            .expect("fp_tokens lock")
+            .remove(&fp);
+        if let Some(rec) = rec {
+            found = true;
+            if let Some(t) = vault_relay::parse(&app.keys, &rec.token) {
+                if app
+                    .revoked_tokens
+                    .lock()
+                    .expect("revoked_tokens lock")
+                    .insert(t.hash)
+                {
+                    revoked += 1;
+                }
+            }
+        }
+        // Гард отпускаем ДО persist(): он берёт те же мьютексы заново,
+        // а std-мьютекс не рекурсивен.
+        let marked = {
+            let mut codes = app.tester_codes.lock().expect("tester_codes lock");
+            let mut marked = 0usize;
+            for c in codes.values_mut() {
+                if c.fp
+                    .as_deref()
+                    .map(|f| f.eq_ignore_ascii_case(&fp))
+                    .unwrap_or(false)
+                {
+                    c.revoked = true;
+                    marked += 1;
+                }
+            }
+            marked
+        };
+        found |= marked > 0;
+    }
+    if !found {
+        return err(StatusCode::NOT_FOUND, "nothing to revoke");
+    }
+    app.persist();
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "revoked": revoked })),
     )
         .into_response()
 }
@@ -1980,6 +2282,9 @@ async fn relay_tokens_info(
     let Some(t) = vault_relay::parse(&app.keys, &token) else {
         return err(StatusCode::UNAUTHORIZED, "bad token");
     };
+    if token_revoked(&app, &t.hash) {
+        return err(StatusCode::UNAUTHORIZED, "token revoked");
+    }
     if t.is_expired() {
         return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
     }
@@ -2039,6 +2344,9 @@ async fn relay_turn(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Res
     let Some(t) = vault_relay::parse(&app.keys, &token) else {
         return err(StatusCode::UNAUTHORIZED, "bad token");
     };
+    if token_revoked(&app, &t.hash) {
+        return err(StatusCode::UNAUTHORIZED, "token revoked");
+    }
     if t.is_expired() {
         return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
     }
@@ -2398,6 +2706,9 @@ async fn main() {
     let ntfy_url = std::env::var("VAULT_RELAY_NTFY_URL").unwrap_or_default();
     let unlimited_key = std::env::var("VAULT_RELAY_UNLIMITED_KEY").ok()
         .filter(|s| !s.trim().is_empty());
+    // Секрет админ-роутов выдачи/отзыва тестовых кодов. Пусто = роутов нет.
+    let admin_key = std::env::var("VAULT_RELAY_ADMIN_KEY").ok()
+        .filter(|s| !s.trim().is_empty());
     // §0 company.md: бесплатный суточный лимит конвертов на издателя
     // (по умолчанию 100; 0 = выключен; Premium-токены без лимита).
     let free_daily_limit =
@@ -2457,6 +2768,7 @@ async fn main() {
         allow_anonymous_pub,
         ntfy_url,
         unlimited_key,
+        admin_key,
         free_daily_limit,
         fcm,
         state_path,
@@ -2490,6 +2802,10 @@ async fn main() {
         // FCM Part B: привязка reg_token получателя к его теме.
         .route("/relay/fcm/register", post(relay_fcm_register))
         .route("/relay/metrics", get(metrics))
+        // Админ: персональные тест-коды и отзыв токенов (VAULT_RELAY_ADMIN_KEY).
+        .route("/admin/test-code", post(admin_test_code_create))
+        .route("/admin/test-codes", get(admin_test_codes_list))
+        .route("/admin/revoke", post(admin_revoke))
         .layer(cors_layer())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
@@ -2579,6 +2895,7 @@ mod tests {
             true,
             String::new(),
             None,
+            None,
             0,
             None,
             None,
@@ -2593,6 +2910,7 @@ mod tests {
             k,
             true,
             String::new(),
+            None,
             None,
             0,
             None,
@@ -2856,6 +3174,7 @@ mod tests {
             true,
             String::new(),
             None,
+            None,
             0,
             None,
             None,
@@ -2895,6 +3214,7 @@ mod tests {
             true,
             String::new(),
             None,
+            None,
             0,
             None,
             Some(path.clone()),
@@ -2921,6 +3241,7 @@ mod tests {
             keys(),
             true,
             String::new(),
+            None,
             None,
             0,
             None,
@@ -2992,11 +3313,72 @@ mod tests {
             true,
             String::new(),
             unlimited.map(str::to_string),
+            None,
             0,
             None,
             None,
             None,
         ))
+    }
+
+    /// Роут с админ-секретом и (опционально) общим промо-ключом.
+    fn admin_state(
+        k: ServerKeys,
+        admin: Option<&str>,
+        unlimited: Option<&str>,
+    ) -> Arc<AppState> {
+        Arc::new(AppState::new(
+            Store::new(),
+            k,
+            true,
+            String::new(),
+            unlimited.map(str::to_string),
+            admin.map(str::to_string),
+            0,
+            None,
+            None,
+            None,
+        ))
+    }
+
+    fn admin_headers(key: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-admin-key", key.parse().expect("hdr"));
+        h
+    }
+
+    async fn resp_json(resp: Response) -> (StatusCode, serde_json::Value) {
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    }
+
+    async fn admin_create(
+        app: &Arc<AppState>,
+        key: &str,
+        req: TestCodeReq,
+    ) -> (StatusCode, serde_json::Value) {
+        resp_json(
+            admin_test_code_create(State(app.clone()), admin_headers(key), Json(req)).await,
+        )
+        .await
+    }
+
+    async fn admin_list(app: &Arc<AppState>, key: &str) -> (StatusCode, serde_json::Value) {
+        resp_json(admin_test_codes_list(State(app.clone()), admin_headers(key)).await).await
+    }
+
+    async fn revoke_req(
+        app: &Arc<AppState>,
+        key: &str,
+        req: RevokeReq,
+    ) -> (StatusCode, serde_json::Value) {
+        resp_json(
+            admin_revoke(State(app.clone()), admin_headers(key), Json(req)).await,
+        )
+        .await
     }
 
     async fn reg(
@@ -3006,7 +3388,6 @@ mod tests {
     ) -> (StatusCode, serde_json::Value) {
         reg_full(app, fp, promo, None).await
     }
-
     async fn reg_full(
         app: &Arc<AppState>,
         fp: Option<&str>,
@@ -3078,6 +3459,228 @@ mod tests {
         let (_s3, j3) = reg(&app, Some("ee:ff"), Some("WRONG")).await;
         assert_eq!(j3["kind"], "install");
         assert_eq!(j3["unlimited"], false);
+    }
+
+    // ── Персональные тест-коды: 6 месяцев, привязка к fp, отзыв ──────────
+
+    #[tokio::test]
+    async fn tester_codes_do_not_spend_ip_quota() {
+        // Приглашённый приходит по нашей воле: четвёртая выдача с того же IP
+        // не должна упираться в «3 в сутки», даже если коды разные.
+        let app = admin_state(keys(), Some("ADMIN"), None);
+        for i in 0..4 {
+            let (_, j) = admin_create(
+                &app,
+                "ADMIN",
+                TestCodeReq {
+                    label: format!("t{i}"),
+                    days: None,
+                },
+            )
+            .await;
+            let code = j["code"].as_str().expect("code").to_string();
+            let fp = format!("aa:bb:cc:0{i}");
+            let (s, r) = reg(&app, Some(&fp), Some(&code)).await;
+            assert_eq!(s, StatusCode::OK, "выдача {i} не должна упираться в квоту IP");
+            assert_eq!(r["kind"], "test");
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_routes_need_key() {
+        // Секрет не задан — роутов как будто нет, даже с любым ключом.
+        let app = admin_state(keys(), None, None);
+        let (s, _) = admin_create(
+            &app,
+            "x",
+            TestCodeReq {
+                label: String::new(),
+                days: None,
+            },
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        // Секрет задан: чужой ключ тоже 404 — существование роута не подтверждаем.
+        let app = admin_state(keys(), Some("ADMIN"), None);
+        let (s, _) = admin_create(
+            &app,
+            "wrong",
+            TestCodeReq {
+                label: String::new(),
+                days: None,
+            },
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert_eq!(admin_list(&app, "wrong").await.0, StatusCode::NOT_FOUND);
+        let (s, j) = admin_create(
+            &app,
+            "ADMIN",
+            TestCodeReq {
+                label: "тестер-1".into(),
+                days: None,
+            },
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["days"], 180, "по умолчанию полгода");
+        assert!(j["code"].as_str().unwrap().starts_with("vt1-"));
+    }
+
+    #[tokio::test]
+    async fn tester_code_grants_six_month_unlimited_token() {
+        let app = admin_state(keys(), Some("ADMIN"), None);
+        let (_, j) = admin_create(
+            &app,
+            "ADMIN",
+            TestCodeReq {
+                label: "anna".into(),
+                days: None,
+            },
+        )
+        .await;
+        let code = j["code"].as_str().expect("code").to_string();
+        let (s, r) = reg(&app, Some("aa:bb:cc:dd"), Some(&code)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(r["kind"], "test");
+        assert_eq!(r["unlimited"], true);
+        let exp = r["exp"].as_u64().expect("exp") as i64;
+        let now = now() as i64;
+        assert!(
+            exp >= now + 179 * 86400 && exp <= now + 181 * 86400,
+            "срок ~6 месяцев, получили {exp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tester_code_sticks_to_first_fp() {
+        let app = admin_state(keys(), Some("ADMIN"), None);
+        let (_, j) = admin_create(
+            &app,
+            "ADMIN",
+            TestCodeReq {
+                label: "anna".into(),
+                days: Some(30),
+            },
+        )
+        .await;
+        assert_eq!(j["days"], 30, "явный срок уважается");
+        let code = j["code"].as_str().expect("code").to_string();
+        let (s1, r1) = reg(&app, Some("aa:bb"), Some(&code)).await;
+        assert_eq!(s1, StatusCode::OK);
+        // Тот же аккаунт (регистр fp не важен) — тот же токен.
+        let (s2, r2) = reg(&app, Some("AA:BB"), Some(&code)).await;
+        assert_eq!(s2, StatusCode::OK);
+        assert_eq!(r1["token"], r2["token"]);
+        // Другой аккаунт код не получает: он личный.
+        let (s3, j3) = reg(&app, Some("ee:ff"), Some(&code)).await;
+        assert_eq!(s3, StatusCode::CONFLICT);
+        assert_eq!(j3["error"], "tester code bound to another account");
+        // Код без fp нечем привязать — безлимит «в воздух» не выдаём.
+        let (_, j) = admin_create(
+            &app,
+            "ADMIN",
+            TestCodeReq {
+                label: "bob".into(),
+                days: None,
+            },
+        )
+        .await;
+        let code2 = j["code"].as_str().expect("code").to_string();
+        let (s4, _) = reg(&app, None, Some(&code2)).await;
+        assert_eq!(s4, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn revoked_code_stops_grants_and_issued_token() {
+        let app = admin_state(keys(), Some("ADMIN"), None);
+        let (_, j) = admin_create(
+            &app,
+            "ADMIN",
+            TestCodeReq {
+                label: "anna".into(),
+                days: None,
+            },
+        )
+        .await;
+        let code = j["code"].as_str().expect("code").to_string();
+        let (s, r) = reg(&app, Some("aa:bb"), Some(&code)).await;
+        assert_eq!(s, StatusCode::OK);
+        let token = r["token"].as_str().expect("token").to_string();
+        let (s, j) = revoke_req(
+            &app,
+            "ADMIN",
+            RevokeReq {
+                code: Some(code.clone()),
+                fp: None,
+            },
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["revoked"], 1, "выданный по коду токен ушёл в денлист");
+        // Выданный токен больше не принимается.
+        let (s, _) =
+            resp_json(relay_tokens_info(State(app.clone()), auth_headers(&token)).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // И код не выдаёт безлимит другому аккаунту.
+        let (s, _) = reg(&app, Some("cc:dd"), Some(&code)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        // Список видит отзыв, но открытого значения кода в нём нет.
+        let (_, l) = admin_list(&app, "ADMIN").await;
+        assert_eq!(l["count"], 1);
+        assert_eq!(l["codes"][0]["revoked"], true);
+        assert_eq!(l["codes"][0]["used"], true);
+        assert!(l["codes"][0].get("code").is_none());
+    }
+
+    #[tokio::test]
+    async fn revoke_by_fp_kills_token_and_its_code() {
+        let app = admin_state(keys(), Some("ADMIN"), None);
+        let (_, j) = admin_create(
+            &app,
+            "ADMIN",
+            TestCodeReq {
+                label: "anna".into(),
+                days: None,
+            },
+        )
+        .await;
+        let code = j["code"].as_str().expect("code").to_string();
+        let (s, r) = reg(&app, Some("aa:bb"), Some(&code)).await;
+        assert_eq!(s, StatusCode::OK);
+        let token = r["token"].as_str().expect("token").to_string();
+        let (s, j) = revoke_req(
+            &app,
+            "ADMIN",
+            RevokeReq {
+                code: None,
+                fp: Some("aa:bb".into()),
+            },
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["revoked"], 1);
+        let (s, _) =
+            resp_json(relay_tokens_info(State(app.clone()), auth_headers(&token)).await).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // Код помечен отозванным: повторный ввод безлимит не вернёт.
+        let (s, _) = reg(&app, Some("aa:bb"), Some(&code)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        // Без кода аккаунт живёт обычным установочным токеном.
+        let (s, j) = reg(&app, Some("aa:bb"), None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["kind"], "install");
+        // Нечего отзывать — 404, а не «успешно отозвали 0».
+        let (s, _) = revoke_req(
+            &app,
+            "ADMIN",
+            RevokeReq {
+                code: None,
+                fp: Some("99:99".into()),
+            },
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -3346,6 +3949,7 @@ mod tests {
             k,
             false, // VAULT_RELAY_ANON_PUB=0
             String::new(),
+            None,
             None,
             0,
             None,
@@ -4212,6 +4816,7 @@ mod tests {
             anon,
             String::new(),
             None,
+            None,
             limit,
             None,
             None,
@@ -4394,6 +4999,7 @@ mod tests {
                 false,
                 String::new(),
                 None,
+                None,
                 limit,
                 None,
                 Some(path.clone()),
@@ -4546,6 +5152,7 @@ mod tests {
             k,
             true,
             String::new(),
+            None,
             None,
             free_daily_limit,
             None,
