@@ -141,6 +141,12 @@ const PROBES = {
       pushVNodes(comp.subTree);
     }
 
+    // Витрина /relay/plans приходит сетевым ответом: без ожидания проба
+    // меряет промежуточный DOM (запасная одна кнопка) и каталог «не видит».
+    for (let i = 0; i < 20 && pro && !(Array.isArray(pro.proPlans) && pro.proPlans.length); i++) {
+      await sleep(200);
+    }
+
     // Проба ИДЕМПОТЕНТНА и БЕСПЛАТНА: активный тариф только проверяем. Если
     // тариф free — покупку не совершаем (чекаут = реальная платёжная сессия),
     // а мягко пропускаем шаги, которые без покупки не проверить.
@@ -155,20 +161,45 @@ const PROBES = {
     const EXTEND_LABELS = ${EXTEND_LABELS};
     const hasExtendBtn = () => btnTexts().some((x) => EXTEND_LABELS.includes(x));
     const buyBtn = btnNodes.find((b) => BUY_LABELS.includes(norm(b.innerText)));
+    // Покупка — это либо кнопки периодов с ценой («Месяц · 149 ₽»), либо
+    // запасная одна кнопка «Купить Pro», когда витрина /relay/plans молчит.
+    // Периоды и цену решает сервер, поэтому именно они и меряются.
+    const PLAN_RE = /·\\s*(\\d[\\d\\s]*)\\s*₽$/;
+    const planButtons = btnNodes.filter((b) => PLAN_RE.test(norm(b.innerText)));
     // Есть ли в ЭТОЙ сборке покупка — берём у самого приложения (компонент
     // держит правило флага сборки), а не у оператора: проба меряет проводку
     // «флаг сборки → computed → v-if», а не веру в запускающего. Сборки без
     // этого computed (до флага) считаются сборками с покупкой.
     const allowPurchases = !(pro && pro.purchasesAllowed === false);
     if (allowPurchases) {
-      step('кнопка «Купить Pro» есть (или тариф уже активен)', !!buyBtn || alreadyPro, {
-        alreadyPro,
-        buttons: btnTexts().map((e) => e.slice(0, 24)),
-      });
+      step('покупка есть: кнопки периодов с ценой (или «Купить Pro»)',
+        !!buyBtn || planButtons.length > 0 || alreadyPro, {
+          alreadyPro,
+          periods: planButtons.length,
+          buttons: btnTexts().map((e) => e.slice(0, 24)),
+        });
+      // Каждая кнопка обязана печатать серверную цену (копейки/100): своя
+      // копия прайса на клиенте — дефект размещения (ADR-005).
+      const plans = pro && Array.isArray(pro.proPlans) ? pro.proPlans : [];
+      if (plans.length) {
+        const want = plans.map((p) => Math.round(p.kopecks / 100));
+        const got = planButtons.map((b) => Number(PLAN_RE.exec(norm(b.innerText))[1].replace(/\\s/g, '')));
+        step('цена и число периодов на экране = каталог /relay/plans',
+          want.length === got.length && want.every((v, i) => got[i] === v),
+          { сервер: want, экран: got });
+      } else if (planButtons.length) {
+        step('кнопки периодов есть, но каталог в компоненте пуст', false, {
+          buttons: btnTexts().map((e) => e.slice(0, 24)),
+        });
+      } else {
+        soft('каталог /relay/plans не пришёл: экран показал запасную кнопку',
+          'витрина недоступна в этой сети; покупка по одному сроку остаётся рабочей');
+      }
       step('сборка с покупками: вход в промо-ключ есть',
         btnTexts().some((x) => /промо|promo/i.test(x)), { buttons: btnTexts().map((e) => e.slice(0, 24)) });
     } else {
-      step('сборка без покупок: кнопки покупки нет', !buyBtn, { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+      step('сборка без покупок: кнопок покупки и периодов нет',
+        !buyBtn && planButtons.length === 0, { buttons: btnTexts().map((e) => e.slice(0, 24)) });
       // Промо-ключ = безлимитный тестовый токен бесплатно, то есть платная
       // возможность мимо стора: в такой сборке его входа нет.
       step('сборка без покупок: входа в промо-ключ нет',
@@ -196,7 +227,7 @@ const PROBES = {
         !!dnums && Number(dnums[0]) === view.devices && Number(dnums[1]) === view.maxDevices,
         { напечатано: dnums, сервер: [view.devices, view.maxDevices] });
       if (allowPurchases) {
-        step('кнопка — «Продлить» (не покупка)', hasExtendBtn(),
+        step('продление на месте: «Продлить» или выбор периода', hasExtendBtn() || planButtons.length > 0,
           { label: buyBtn ? 'есть «Купить Pro» при активном тарифе' : 'ok', buttons: btnTexts().map((e) => e.slice(0, 24)) });
       } else {
         // В сборке без покупок продлить подписку нельзя даже руками —
