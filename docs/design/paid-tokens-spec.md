@@ -267,7 +267,7 @@ Authorization: VaultRelay <token>
 ### 3.5 `GET /pay-return/:id` — страница возврата с оплаты
 
 ```
-GET /pay-return/<checkout_id>?lang=ru|en
+GET /pay-return/<checkout_id>?lang=ru|en|zh
 → 200 text/html   -- сессия найдена: «вернитесь в приложение»
 → 404 text/html   -- сессия неизвестна (рестарт релея / старая ссылка)
 → 410 text/html   -- сессия истекла
@@ -276,7 +276,8 @@ GET /pay-return/<checkout_id>?lang=ru|en
 Это `return_url` ЮKassa. Страница ничего не подтверждает и НЕ выпускает токен:
 оплату подтверждает только `/relay/purchase/verify` у провайдера (клиент сам
 опрашивает его после возврата). fp и id сессии на страницу не попадают;
-`Cache-Control: no-store`, CSP без скриптов.
+`Cache-Control: no-store`, CSP без скриптов. Языков три, как в приложении
+(ru/en/zh); неизвестный или отсутствующий `lang` даёт ru.
 
 ---
 

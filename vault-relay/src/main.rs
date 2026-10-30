@@ -2254,13 +2254,17 @@ async fn pay_return(
     Path(id): Path<String>,
     Query(q): Query<PayReturnQuery>,
 ) -> Response {
-    let en = q.lang.as_deref().unwrap_or("").eq_ignore_ascii_case("en");
+    let lang = match q.lang.as_deref() {
+        Some(l) if l.eq_ignore_ascii_case("en") => "en",
+        Some(l) if l.eq_ignore_ascii_case("zh") => "zh",
+        _ => "ru",
+    };
     let (status, kind) = match app.get_checkout(&id) {
         None => (StatusCode::NOT_FOUND, PayReturnKind::NotFound),
         Some(c) if c.expires_at < now() => (StatusCode::GONE, PayReturnKind::Expired),
         Some(_) => (StatusCode::OK, PayReturnKind::Ok),
     };
-    let mut resp = Html(pay_return_page(en, kind)).into_response();
+    let mut resp = Html(pay_return_page(lang, kind)).into_response();
     *resp.status_mut() = status;
     let h = resp.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -2275,49 +2279,70 @@ async fn pay_return(
 
 /// Тексты страницы возврата: только статические строки, без подстановки данных
 /// запроса (нечего экранировать и нечего утекать).
-fn pay_return_page(en: bool, kind: PayReturnKind) -> String {
-    let (lang, title, heading, body, hint) = match (en, kind) {
-        (false, PayReturnKind::Ok) => (
-            "ru",
-            "Vault — проверка оплаты",
-            "Проверяем оплату",
-            "Вернитесь в приложение Vault — статус тарифа обновится после подтверждения платежа.",
-            "Если приложение не открылось, запустите его и откройте «Настройки → Тариф Pro».",
-        ),
-        (false, PayReturnKind::Expired) => (
-            "ru",
-            "Vault — сессия оплаты истекла",
-            "Сессия оплаты истекла",
-            "Вернитесь в приложение и начните покупку заново.",
-            "Деньги за неоплаченную сессию не списываются.",
-        ),
-        (false, PayReturnKind::NotFound) => (
-            "ru",
-            "Vault — ссылка устарела",
-            "Ссылка устарела",
-            "Не удалось найти эту платёжную сессию. Вернитесь в приложение и начните покупку заново.",
-            "Если оплата уже прошла, откройте «Настройки → Тариф Pro» — статус подтянется с сервера.",
-        ),
-        (true, PayReturnKind::Ok) => (
+fn pay_return_page(lang: &str, kind: PayReturnKind) -> String {
+    let (lang, title, heading, body, hint) = match (lang, kind) {
+        ("en", PayReturnKind::Ok) => (
             "en",
             "Vault — payment check",
             "Checking your payment",
             "Return to the Vault app — your plan status will update once the payment is confirmed.",
             "If the app did not open, start it and go to Settings → Pro plan.",
         ),
-        (true, PayReturnKind::Expired) => (
+        ("en", PayReturnKind::Expired) => (
             "en",
             "Vault — payment session expired",
             "Payment session expired",
             "Return to the app and start the purchase again.",
             "No money is charged for an unpaid session.",
         ),
-        (true, PayReturnKind::NotFound) => (
+        ("en", PayReturnKind::NotFound) => (
             "en",
             "Vault — link expired",
             "Link expired",
             "This payment session could not be found. Return to the app and start the purchase again.",
             "If you already paid, open Settings → Pro plan — the status will be fetched from the server.",
+        ),
+        ("zh", PayReturnKind::Ok) => (
+            "zh",
+            "Vault — 支付确认中",
+            "正在确认支付",
+            "请返回 Vault 应用——支付确认后，套餐状态会自动更新。",
+            "如果应用没有自动打开，请手动启动并进入「设置 → Pro 套餐」。",
+        ),
+        ("zh", PayReturnKind::Expired) => (
+            "zh",
+            "Vault — 支付会话已过期",
+            "支付会话已过期",
+            "请返回应用并重新发起购买。",
+            "未支付的会话不会扣款。",
+        ),
+        ("zh", PayReturnKind::NotFound) => (
+            "zh",
+            "Vault — 链接已失效",
+            "链接已失效",
+            "找不到此支付会话。请返回应用并重新发起购买。",
+            "如果已经付款，请打开「设置 → Pro 套餐」——状态会从服务器获取。",
+        ),
+        (_, PayReturnKind::Ok) => (
+            "ru",
+            "Vault — проверка оплаты",
+            "Проверяем оплату",
+            "Вернитесь в приложение Vault — статус тарифа обновится после подтверждения платежа.",
+            "Если приложение не открылось, запустите его и откройте «Настройки → Тариф Pro».",
+        ),
+        (_, PayReturnKind::Expired) => (
+            "ru",
+            "Vault — сессия оплаты истекла",
+            "Сессия оплаты истекла",
+            "Вернитесь в приложение и начните покупку заново.",
+            "Деньги за неоплаченную сессию не списываются.",
+        ),
+        (_, PayReturnKind::NotFound) => (
+            "ru",
+            "Vault — ссылка устарела",
+            "Ссылка устарела",
+            "Не удалось найти эту платёжную сессию. Вернитесь в приложение и начните покупку заново.",
+            "Если оплата уже прошла, откройте «Настройки → Тариф Pro» — статус подтянется с сервера.",
         ),
     };
     PAY_RETURN_TEMPLATE
@@ -3739,7 +3764,8 @@ mod tests {
         );
     }
 
-    /// Язык берётся из `?lang=en` (ЮKassa передаёт его из чекаута).
+    /// Язык берётся из `?lang=ru|en|zh` (ЮKassa передаёт его из чекаута).
+    /// Три языка — как в приложении, а не только ru/en.
     #[tokio::test]
     async fn pay_return_page_honours_lang() {
         let app = pay_app_state(
@@ -3747,16 +3773,25 @@ mod tests {
             Some(Arc::new(vault_relay::payments::TestProvider::new())),
         );
         let checkout_id = create_checkout_id(app.clone()).await;
-        let resp = pay_return(
-            State(app),
-            Path(checkout_id),
-            pay_return_query(Some("en")),
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let html = body_text(resp).await;
-        assert!(html.contains("Checking your payment"), "{html}");
-        assert!(html.contains(r#"lang="en""#), "{html}");
+        let cases = [
+            (Some("en"), "Checking your payment", r#"lang="en""#),
+            (Some("zh"), "正在确认支付", r#"lang="zh""#),
+            (Some("EN"), "Checking your payment", r#"lang="en""#),
+            (Some("de"), "Проверяем оплату", r#"lang="ru""#),
+            (None, "Проверяем оплату", r#"lang="ru""#),
+        ];
+        for (lang, text, tag) in cases {
+            let resp = pay_return(
+                State(app.clone()),
+                Path(checkout_id.clone()),
+                pay_return_query(lang),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let html = body_text(resp).await;
+            assert!(html.contains(text), "lang={lang:?}: {html}");
+            assert!(html.contains(tag), "lang={lang:?}: {html}");
+        }
     }
 
     /// Неизвестный id (релей перезапускался, сессия потеряна) — 404, а не 500.
