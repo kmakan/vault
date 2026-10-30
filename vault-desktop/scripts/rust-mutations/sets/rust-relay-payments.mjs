@@ -87,5 +87,11 @@ export default {
     { name: 'тестовый провайдер не оплачивает собственный чекаут (промо-путь мёртв)',
       pattern: '                Some(_) => Ok(PaymentStatus::Paid),',
       replacement: '                Some(_) => Ok(PaymentStatus::Pending),' },
+    { name: 'витрина считает цену не из кассы (обещает в приложении чужую сумму)',
+      pattern: '            let kopecks = YkProvider::amount_kopecks(Plan::Pro, months);',
+      replacement: '            let kopecks = 100;' },
+    { name: 'витрина предлагает срок, который нельзя купить (год подменён)',
+      pattern: 'pub const PURCHASABLE_MONTHS: [u32; 5] = [1, 3, 6, 9, 12];',
+      replacement: 'pub const PURCHASABLE_MONTHS: [u32; 5] = [1, 3, 6, 9, 3];' },
   ],
 };

@@ -18,6 +18,10 @@
 //
 // deps (ADR-001 R3): всё, что нужно снаружи, — явными параметрами:
 //   account          — аккаунт (KV и fingerprint);
+//   months           — выбранный человеком период (1 мес или 12 мес, список
+//                      отдаёт сервер через /relay/plans). Не задан — берём
+//                      PRO_DEFAULT_MONTHS (месяц: дешёвый вход в неизвестное
+//                      приложение; годовую подписку никто с порога не купит).
 //   checkout(plan, months) — создать платёжную сессию;
 //   verify(checkoutId)     — подтвердить оплату и получить токен;
 //   open(url)        — открыть внешнюю страницу оплаты (живой провайдер);
@@ -38,7 +42,9 @@ export const PRO_KIND = {
 };
 
 export const PRO_PLAN = 'pro';
-export const PRO_MONTHS = 12;
+// Период по умолчанию, если человек ничего не выбрал: МЕСЯЦ. Годовая подписка
+// в неизвестном приложении с порога не продаётся, поэтому вход — дешёвый.
+export const PRO_DEFAULT_MONTHS = 1;
 export const FREE_DAILY_LIMIT = 100;
 
 // Три вида токена, которые различает СЕРВЕР (vault-relay tokens.rs: Kind), и
@@ -250,7 +256,10 @@ export async function buyPro(deps) {
   if (!purchasesAllowed(deps.env)) {
     return { ok: false, error: 'purchases_disabled' };
   }
-  const res = await deps.checkout(PRO_PLAN, PRO_MONTHS);
+  // Период выбирает человек (кнопки месяца/года на экране), клиент его лишь
+  // передаёт; цену и допустимость срока считает сервер (касса = /relay/plans).
+  const months = Number(deps.months) > 0 ? deps.months : PRO_DEFAULT_MONTHS;
+  const res = await deps.checkout(PRO_PLAN, months);
   if (!res || res.error) {
     const why = (res && res.error) || 'network';
     deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));

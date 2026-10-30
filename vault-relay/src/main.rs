@@ -2085,6 +2085,16 @@ async fn relay_turn(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Res
         .into_response()
 }
 
+/// GET /relay/plans — витрина покупаемых тарифов. Цену считает сервер
+/// (payments::pro_catalog = та же таблица, что и касса чекаута), клиент ничего
+/// о цене не решает — только показывает. Публичный, без fp.
+async fn relay_plans() -> Response {
+    AxumJson(serde_json::json!({
+        "plans": vault_relay::payments::pro_catalog(),
+    }))
+    .into_response()
+}
+
 /// POST /relay/purchase/checkout — создать платёжную сессию.
 async fn relay_purchase_checkout(
     State(app): State<Arc<AppState>>,
@@ -2097,7 +2107,7 @@ async fn relay_purchase_checkout(
     let Some(plan) = paid_plan(&req.plan) else {
         return err(StatusCode::UNPROCESSABLE_ENTITY, "bad plan/months");
     };
-    if req.months != 1 && req.months != 12 {
+    if !vault_relay::payments::PURCHASABLE_MONTHS.contains(&req.months) {
         return err(StatusCode::UNPROCESSABLE_ENTITY, "bad plan/months");
     }
     let Some(fp) = norm_fp(Some(&req.fp)) else {
@@ -2434,6 +2444,7 @@ async fn main() {
     let app = Router::new()
         .route("/relay/pub", post(relay_pub))
         // Платёжные роуты (шаг 4 плана платных токенов).
+        .route("/relay/plans", get(relay_plans))
         .route("/relay/purchase/checkout", post(relay_purchase_checkout))
         .route("/relay/purchase/verify", post(relay_purchase_verify))
         // return_url провайдера (ЮKassa): человеку — страница, не 404.
@@ -3527,11 +3538,24 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
     }
 
-    /// Плохой план или срок → 422 (не «платёж создан»).
+    /// Плохой план или срок вне каталога → 422. Единый источник истины —
+    /// PURCHASABLE_MONTHS: маршрут принимает ровно то, что показывает витрина,
+    /// и отвергает всё остальное (старый тест держал политику «только 1 и 12»,
+    /// когда 3/6/9 тоже стали покупаемыми сроками).
     #[tokio::test]
     async fn purchase_checkout_rejects_bad_plan_or_months() {
         let app = pay_app_state(keys(), Some(Arc::new(vault_relay::payments::TestProvider::new())));
-        for (plan, months) in [("free", 1u32), ("pro", 3), ("pro", 0)] {
+        for (plan, months) in [
+            ("free", 1u32),
+            ("trial", 1),
+            ("pro", 0),
+            ("pro", 2),
+            ("pro", 4),
+            ("pro", 5),
+            ("pro", 7),
+            ("pro", 13),
+            ("business", 11),
+        ] {
             let resp = relay_purchase_checkout(
                 State(app.clone()),
                 Json(checkout_req(plan, months, "fp-alice")),
@@ -3541,6 +3565,28 @@ mod tests {
                 resp.status(),
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "план {plan} / {months} месяцев должен отклоняться"
+            );
+        }
+    }
+
+    /// Покупаемые сроки каталога (1, 3, 6, 9, 12) — принимаются (200). Иначе
+    /// витрина обещает срок, за который нельзя заплатить (дефект, из-за которого
+    /// месяц за 149 ₽ был недоступен). Свой fingerprint на срок — чтобы не
+    /// упереться в лимит 5 чекаутов/час.
+    #[tokio::test]
+    async fn purchase_checkout_accepts_every_catalog_period() {
+        let app = pay_app_state(keys(), Some(Arc::new(vault_relay::payments::TestProvider::new())));
+        for months in vault_relay::payments::PURCHASABLE_MONTHS {
+            let fp = format!("fp-buy-{months}");
+            let resp = relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req("pro", months, &fp)),
+            )
+            .await;
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "срок {months} месяцев должен покупаться, а не отклоняться"
             );
         }
     }

@@ -97,5 +97,12 @@ export default {
     { name: "между опросами verify нет паузы (шквал запросов к платёжному шлюзу)",
       pattern: "    if (i < attempts - 1 && deps.sleep) await deps.sleep(deps.pollMs || 3000);",
       replacement: "    if (false) await deps.sleep(deps.pollMs || 3000);" },
+    // ── Выбор периода: месяц/год ──
+    { name: "период человека игнорируется — всегда год (месяц за 149 ₽ купить нельзя)",
+      pattern: "  const months = Number(deps.months) > 0 ? deps.months : PRO_DEFAULT_MONTHS;",
+      replacement: "  const months = 12;" },
+    { name: "дефолт без выбора — год вместо дешёвого входа (месяц)",
+      pattern: "export const PRO_DEFAULT_MONTHS = 1;",
+      replacement: "export const PRO_DEFAULT_MONTHS = 12;" },
   ],
 };

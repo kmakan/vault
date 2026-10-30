@@ -1063,8 +1063,35 @@ export async function fetchTurnCredentials(account) {
   }
 }
 
+// GET /relay/plans — витрина покупаемых тарифов. Цену назначает СЕРВЕР
+// (/relay/plans = та же таблица, что и касса чекаута); клиент о цене ничего не
+// решает и не хранит — только показывает ответ. Публичный, fp не нужен.
+export async function purchasePlans() {
+  try {
+    const url = normalizeRelayUrl(DEFAULT_RELAY_URL);
+    if (!url) return { error: 'no_relay' };
+    const res = await rfetch(url + '/plans', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      connectTimeout: 10000,
+    });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) {
+      return { error: (body && body.error) || ('http_' + res.status), status: res.status, body };
+    }
+    return body;
+  } catch (e) {
+    console.log('[relay] purchase/plans failed:', e && e.message || e);
+    return { error: 'network' };
+  }
+}
+
 // POST /relay/purchase/checkout — создать платёжную сессию.
-export async function purchaseCheckout(account, plan, months) {
+// lang — язык интерфейса человека («ru» | «en» | «zh»); он уходит на сервер и
+// определяет текст страницы возврата. НЕ подставлять 'ru' по умолчанию:
+// иначе англоязычный покупатель получает русскую страницу.
+export async function purchaseCheckout(account, plan, months, lang) {
   try {
     account = await accountNamespace(account);
     const url = normalizeRelayUrl(DEFAULT_RELAY_URL);
@@ -1073,7 +1100,7 @@ export async function purchaseCheckout(account, plan, months) {
     const res = await rfetch(url + '/purchase/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan, months, fp, lang: 'ru' }),
+      body: JSON.stringify({ plan, months, fp, lang: lang || 'ru' }),
       connectTimeout: 10000,
     });
     let body = null;

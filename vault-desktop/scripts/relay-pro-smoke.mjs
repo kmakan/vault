@@ -94,6 +94,19 @@ console.log('1. purchaseCheckout');
   check('в теле ушёл fingerprint', net.some(([, , b]) => b.includes('fp-alice')), net);
   check('в теле ушёл план и срок',
     net.some(([, , b]) => b.includes('"plan":"pro"') && b.includes('"months":12')), net);
+
+  // Язык платёжной страницы — ЯЗЫК ЧЕЛОВЕКА, а не константа. Страница возврата
+  // релея отдаёт ru для всего, что не «en»: с жёстким 'ru' англоязычный
+  // покупатель получал русскую страницу посреди оплаты.
+  net.length = 0;
+  await R.purchaseCheckout('me@x.ru', 'pro', 1, 'en');
+  check('язык человека уходит в чекаут (en)',
+    net.some(([, , b]) => b.includes('"lang":"en"') && b.includes('"months":1')), net);
+
+  net.length = 0;
+  await R.purchaseCheckout('me@x.ru', 'pro', 1);
+  check('без языка — русский как база, а не пусто',
+    net.some(([, , b]) => b.includes('"lang":"ru"')), net);
 }
 
 // ── 2. Верификация: токен + активация + запись в relay-list ─────────────

@@ -385,6 +385,31 @@ impl YkProvider {
     }
 }
 
+/// Что вообще можно купить и на какой срок. ЕДИНЫЙ источник и для витрины
+/// (`/relay/plans`), и для проверки чекаута: периода, которого нет здесь,
+/// клиент не увидит, а реле не примет к оплате — так витрина и касса не
+/// разъезжаются (иначе можно показать срок, за который нельзя заплатить).
+pub const PURCHASABLE_MONTHS: [u32; 5] = [1, 3, 6, 9, 12];
+
+/// Витрина тарифов Pro для клиента. Цена — ровно `amount_kopecks`, поэтому
+/// показанное в приложении и списанное ЮKassa — одно и то же число (ADR-005:
+/// цену считает Rust, JS лишь рисует ответ сервера, своей цены у клиента нет).
+pub fn pro_catalog() -> Vec<serde_json::Value> {
+    PURCHASABLE_MONTHS
+        .iter()
+        .map(|&months| {
+            let kopecks = YkProvider::amount_kopecks(Plan::Pro, months);
+            serde_json::json!({
+                "plan": "pro",
+                "months": months,
+                "kopecks": kopecks,
+                "amount": format!("{:.2}", kopecks as f64 / 100.0),
+                "currency": "RUB",
+            })
+        })
+        .collect()
+}
+
 impl PaymentProvider for YkProvider {
     fn name(&self) -> &str {
         "yookassa"
@@ -693,6 +718,37 @@ mod tests {
         // их отсекает, а нулевая цена в теле платежа — это проданная подписка за 0.
         assert_eq!(YkProvider::amount_kopecks(Plan::Free, 1), 14_900);
         assert_eq!(YkProvider::amount_kopecks(Plan::Trial, 1), 14_900);
+    }
+
+    #[test]
+    fn pro_catalog_matches_kassa() {
+        // Витрина = касса: только сроки из PURCHASABLE_MONTHS и цена ровно из
+        // amount_kopecks. Разъезд здесь — обещание в приложении, которое платёж
+        // не исполнит, либо срок, который вообще нельзя купить.
+        assert_eq!(PURCHASABLE_MONTHS, [1, 3, 6, 9, 12]);
+        let cat = pro_catalog();
+        assert_eq!(cat.len(), 5, "витрина обязана предлагать ровно покупаемые сроки");
+        for row in &cat {
+            let months = row["months"].as_u64().unwrap() as u32;
+            assert!(
+                PURCHASABLE_MONTHS.contains(&months),
+                "витрина предлагает некупый срок {months}"
+            );
+            assert_eq!(
+                row["kopecks"].as_u64().unwrap(),
+                YkProvider::amount_kopecks(Plan::Pro, months),
+                "цена витрины ≠ касса для {months} мес"
+            );
+            assert_eq!(row["plan"], "pro");
+            assert_eq!(row["currency"], "RUB");
+        }
+        // Конкретные числа живого платёжа: месяц 149 ₽, 3/6/9 — по 149·n,
+        // год 1490 ₽ (единственный срок со скидкой ×10).
+        assert_eq!(cat[0]["amount"], "149.00");
+        assert_eq!(cat[1]["amount"], "447.00");
+        assert_eq!(cat[2]["amount"], "894.00");
+        assert_eq!(cat[3]["amount"], "1341.00");
+        assert_eq!(cat[4]["amount"], "1490.00");
     }
 
     fn checkout_with_ref(ref_: &str) -> Checkout {

@@ -287,10 +287,21 @@
           {{ proStatusText }}
         </div>
         <div v-if="proDetailsText" style="font-size:12px;opacity:.7">{{ proDetailsText }}</div>
-        <button v-if="purchasesAllowed" class="btn-primary" style="padding:9px 16px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start"
-                :disabled="proBusy" @click="proBuy">
-          {{ proBusy ? t('pro_buy_busy') : proActionLabel }}
-        </button>
+        <!-- Покупка: список периодов и цены берём с сервера (/relay/plans),
+             клиент не решает, сколько стоит и что можно купить (ADR-005). -->
+        <div v-if="purchasesAllowed" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+          <button v-for="p in proPlans" :key="p.months" class="btn-primary"
+                  style="padding:9px 14px;border-radius:8px;border:none;cursor:pointer"
+                  :disabled="proBusy" @click="proBuy(p.months)">
+            {{ proPeriodLabel(p.months) }} · {{ Math.round(p.kopecks / 100) }} ₽
+          </button>
+          <!-- Витрина не ответила — одна кнопка на месяц (дефолт дешёвого входа). -->
+          <button v-if="!proPlans.length" class="btn-primary"
+                  style="padding:9px 16px;border-radius:8px;border:none;cursor:pointer"
+                  :disabled="proBusy" @click="proBuy()">
+            {{ proBusy ? t('pro_buy_busy') : proActionLabel }}
+          </button>
+        </div>
       </div>
 
       <!-- M2.2/M2.4: Push-релеи. Модель доставки: пользователь САМ выбирает
@@ -502,6 +513,11 @@ export default {
       // сервер (плюс офлайн-грейс, когда сервер недоступен).
       proState: null,
       proBusy: false,
+      // Витрина тарифов — ОТ СЕРВЕРА (/relay/plans): [{plan, months, kopecks,
+      // amount, currency}, …]. Клиент не хранит и не считает цены сам (ADR-005):
+      // что отдаст реле, то и показываем; пусто — значит сеть не ответила, и
+      // кнопка откатывается на одиночный «Купить Pro» на месяц.
+      proPlans: [],
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -620,6 +636,14 @@ export default {
       // Состояние платного тарифа (Pro). Ошибка не критична: без него экран
       // покажет «бесплатный тариф» — это правда, а не поломка.
       try { await this.proRefresh(); } catch (e) { /* ignore */ }
+      // Витрина тарифов для кнопок покупки. Только там, где покупка вообще
+      // разрешена каналом (в Play-сборке флаг VITE_NO_PURCHASES — запрос не нужен).
+      try {
+        if (ProPlan.purchasesAllowed()) {
+          const pl = await relayClient.purchasePlans();
+          this.proPlans = (pl && pl.plans) || [];
+        }
+      } catch (e) { /* без витрины — одиночная кнопка на месяц */ }
     } catch (e) { /* ignore */ }
   },
   computed: {
@@ -657,12 +681,21 @@ export default {
         this.$emit('pro-state', this.proState);
       } catch (e) { /* офлайн: показываем последнее известное состояние */ }
     },
-    async proBuy() {
+    // Подпись периода кнопки. Локализация месяца/года — это представление, а не
+    // решение о цене: срок и цену даёт сервер, мы лишь переводим «1/12 месяцев»
+    // в слово.
+    proPeriodLabel(m) {
+      if (m === 1) return this.t('pro_period_month');
+      if (m === 12) return this.t('pro_period_year');
+      return this.t('pro_period_months', { n: m });
+    },
+    async proBuy(months) {
       if (this.proBusy) return;
       this.proBusy = true;
       try {
         await ProPlan.buyPro({
-          checkout: (plan, months) => relayClient.purchaseCheckout(this.email || 'anon', plan, months),
+          months,
+          checkout: (plan, m) => relayClient.purchaseCheckout(this.email || 'anon', plan, m, this.currentLocale),
           verify: (id) => relayClient.purchaseVerify(this.email || 'anon', id),
           open: (url) => this.openExternalLink(url),
           sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

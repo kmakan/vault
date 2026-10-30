@@ -179,25 +179,42 @@ console.log('4. buyPro');
 {
   const calls = [];
   const toasts = [];
-  const deps = (checkoutRes, verifyRes) => ({
-    checkout: async (plan, months) => { calls.push(['checkout', plan, months]); return checkoutRes; },
-    verify: async (id) => { calls.push(['verify', id]); return verifyRes; },
-    refresh: async () => { calls.push(['refresh']); },
-    toast: (m) => toasts.push(m),
-    tr: tl,
-  });
+  const deps = (checkoutRes, verifyRes, months) => {
+    const d = {
+      checkout: async (plan, m) => { calls.push(['checkout', plan, m]); return checkoutRes; },
+      verify: async (id) => { calls.push(['verify', id]); return verifyRes; },
+      refresh: async () => { calls.push(['refresh']); },
+      toast: (m) => toasts.push(m),
+      tr: tl,
+    };
+    if (months !== undefined) d.months = months;
+    return d;
+  };
 
-  // Успех: чекаут → верификация → обновление состояния → тост.
+  // Успех: чекаут → верификация → обновление состояния → тост. Год по явным
+  // 12 месяцам (выбор человека доходит до кассы как есть).
   let res = await P.buyPro(deps(
     { checkout_id: 'co_1' },
     { token: 'v2', plan: 'pro', paid_until: NOW + 365 * DAY },
+    12,
   ));
   check('успех: ok=true', res.ok === true, res);
-  check('успех: запрошен pro на 12 месяцев',
+  check('успех: запрошен pro на выбранные 12 месяцев',
     calls[0][0] === 'checkout' && calls[0][1] === 'pro' && calls[0][2] === 12, calls);
   check('успех: верификация по checkout_id', calls[1][0] === 'verify' && calls[1][1] === 'co_1', calls);
   check('успех: состояние перечитано', calls.some((c) => c[0] === 'refresh'), calls);
   check('успех: тост об активации', toasts.length === 1 && toasts[0] === 'Pro активирован', toasts);
+
+  // Дефолт периода — МЕСЯЦ (дешёвый вход), а не год. Убивает мутацию
+  // «PRO_DEFAULT_MONTHS=12».
+  calls.length = 0; toasts.length = 0;
+  await P.buyPro(deps({ checkout_id: 'co_m' }, { token: 'v2', plan: 'pro', paid_until: NOW + 30 * DAY }));
+  check('дефолт периода: месяц (calls[0].months === 1)', calls[0][2] === 1, calls);
+
+  // Выбранный срок (6 мес) проходит сквозь buyPro к кассе без подмены.
+  calls.length = 0; toasts.length = 0;
+  await P.buyPro(deps({ checkout_id: 'co_6' }, { token: 'v2', plan: 'pro', paid_until: NOW + 180 * DAY }, 6));
+  check('выбранный период 6 мес доходит до кассы', calls[0][2] === 6, calls);
 
   // Ошибка чекаута: верификация не вызывается, пользователь видит причину.
   calls.length = 0; toasts.length = 0;
