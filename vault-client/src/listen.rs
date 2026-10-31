@@ -223,6 +223,18 @@ async fn tick(
     }
 
     let mut contacts_dirty = false;
+    // Peer-ключи хранятся в ДВУХ местах: книга контактов (`contacts.json`) и
+    // хранилище ключей (`keys/peer_keys.json`), куда пишет Desktop. Живой
+    // случай 31.10: настоящий ключ телефона был записан только во втором — под
+    // адресом-алиасом `vault-msg@ya.ru`, — и слушатель, смотревший лишь в
+    // контакты, не мог его даже попробовать.
+    let stored_keys =
+        vault_core::key_store::load_peer_keys_at(&crate::crypto::keys_dir()).unwrap_or_default();
+    tracing::debug!(
+        "listen: peer keys — {} из contacts.json, {} из keys/peer_keys.json",
+        contact_book.all().len(),
+        stored_keys.len()
+    );
     tracing::debug!("listen: tick: {} message(s) to process", messages.len());
     for m in &messages {
         // Безусловный след каждого письма: ветки ошибок ниже логируются, а
@@ -246,35 +258,42 @@ async fn tick(
             continue;
         }
         // peer-ключ отправителя — для PQ-ветки decrypt_vault (как /read).
-        let contact = contact_book.get(&m.from);
-        if let Some(c) = contact {
-            if !c.public_key.is_empty() {
-                let _ = crypto.set_peer_key_pq(&c.public_key, c.pq_public_key.as_deref());
-            }
-        }
-            let mut decrypted = decrypt_envelope(crypto, &m.body);
-        if matches!(&decrypted, Ok(None) | Err(_)) {
+        // Ключ берётся НЕ строго по строке `From`: у человека несколько ящиков,
+        // и ТЕКУЩИЙ ключ его аккаунта может лежать за адресом-алиасом (31.10:
+        // письма koanmak@ya.ru были зашифрованы ключом, записанным за
+        // vault-msg@ya.ru, и молча отбраковывались как «AAD auth failed»).
+        // Порядок перебора решает ядро, книга — `peer_book` (оба места записи).
+        let book = peer_book(contact_book, &stored_keys);
+        let candidates = vault_core::identity::peer_key_candidates(&m.from, &book);
+        let mut decrypted = decrypt_with_candidates(crypto, &candidates, &m.from, &m.body);
+        if decrypted.value.is_none() {
             // Полный фетч по uid (BODY.PEEK[TEXT]<0.512> режет PQ1 >1КБ).
             let folder = folder_of.get(&m.id).map(|s| s.as_str()).unwrap_or("INBOX");
             if let Ok(full) = client.fetch_message_body(&m.id, folder).await {
-                decrypted = decrypt_envelope(crypto, &full);
+                decrypted = decrypt_with_candidates(crypto, &candidates, &m.from, &full);
             }
         }
-        if let Err(reason) = &decrypted {
-            if relay::is_virtual_id(&m.id) {
-                // relay-конверты не ретраятся (destructive poll), поэтому
-                // единственный способ увидеть причину провала — залогировать.
-                tracing::warn!("rl-{} from={} decrypt failed: {}", m.id, m.from, reason);
-            } else {
-                // retry каждый тик (контакт/ключ могли появиться позже) — debug,
-                // не warn: чужие письма давали бы шквал повторов.
-                tracing::debug!(
-                    "uid={} from={} decrypt deferred: {}",
-                    m.id, m.from, reason
-                );
+        if let Some(addr) = &decrypted.foreign_key_address {
+            tracing::warn!(
+                "uid={} from={} расшифровано ключом, записанным за {addr} — в книге у этого человека два адреса (или ключ отправителя устарел)",
+                m.id,
+                m.from
+            );
+        }
+        if decrypted.value.is_none() {
+            if let Some(reason) = &decrypted.last_error {
+                if relay::is_virtual_id(&m.id) {
+                    // relay-конверты не ретраятся (destructive poll), поэтому
+                    // единственный способ увидеть причину провала — залогировать.
+                    tracing::warn!("rl-{} from={} decrypt failed: {}", m.id, m.from, reason);
+                } else {
+                    // retry каждый тик (контакт/ключ могли появиться позже) — debug,
+                    // не warn: чужие письма давали бы шквал повторов.
+                    tracing::debug!("uid={} from={} decrypt deferred: {}", m.id, m.from, reason);
+                }
             }
         }
-        let Ok(Some((id, value))) = decrypted else {
+        let Some((id, value)) = decrypted.value else {
             tracing::debug!(
                 "listen: uid={} from={} skipped after decrypt (no vault/text)",
                 m.id,
@@ -398,6 +417,89 @@ async fn tick(
     if contacts_dirty {
         let _ = contact_book.save_default();
     }
+}
+
+/// Книга ключей для перебора: контакты **плюс** хранилище peer-ключей.
+/// Записей два места (Desktop пишет в `keys/peer_keys.json`, онбординг бота —
+/// в `contacts.json`), поэтому и чтений два: смотреть только контакты — значит
+/// не видеть ключ, который лежит во втором. Дедуп по публичному ключу и порядок
+/// делает ядро (`peer_key_candidates`), здесь только сборка.
+fn peer_book<'a>(
+    contact_book: &'a ContactBook,
+    stored_keys: &'a [vault_core::StoredPeerKey],
+) -> Vec<vault_core::identity::PeerKey<'a>> {
+    let mut book: Vec<vault_core::identity::PeerKey> = contact_book
+        .all()
+        .iter()
+        .map(|c| vault_core::identity::PeerKey {
+            address: c.email.as_str(),
+            public_key: c.public_key.as_str(),
+            pq_ek: c.pq_public_key.as_deref(),
+        })
+        .collect();
+    book.extend(stored_keys.iter().map(|k| vault_core::identity::PeerKey {
+        address: k.email.as_str(),
+        public_key: k.public_key.as_str(),
+        pq_ek: k.pq_public_key.as_deref(),
+    }));
+    book
+}
+
+/// Результат расшифрования одного письма с перебором кандидатов.
+struct Decrypted {
+    /// Конверт, если он расшифровался и узнаваем.
+    value: Option<(String, Value)>,
+    /// Адрес, за которым в книге лежит подошедший ключ, — когда это НЕ адрес
+    /// отправителя. Именно это и есть диагноз «у человека два ящика».
+    foreign_key_address: Option<String>,
+    /// Почему не вышло (последняя ошибка AEAD — её видно в deferred-логе).
+    last_error: Option<String>,
+}
+
+/// Перебор ключей: письмо пробуют под каждым кандидатом ядра, пока AEAD не
+/// сойдётся. Кандидатов подбирает `vault_core::identity::peer_key_candidates`
+/// (ключ отправителя первым, остальные — детерминированно), здесь только
+/// применение: состояние `crypto` остаётся на победившем ключе, поэтому
+/// последующий ответ шифруется тем же ключом, которым пришло письмо.
+fn decrypt_with_candidates(
+    crypto: &mut CryptoClient,
+    candidates: &[vault_core::identity::PeerKey<'_>],
+    sender: &str,
+    body: &str,
+) -> Decrypted {
+    let mut out = Decrypted {
+        value: None,
+        foreign_key_address: None,
+        last_error: None,
+    };
+    for k in candidates {
+        let _ = crypto.set_peer_key_pq(k.public_key, k.pq_ek);
+        match decrypt_envelope(crypto, body) {
+            Ok(Some(value)) => {
+                if !vault_core::identity::same_address(k.address, sender) {
+                    out.foreign_key_address = Some(k.address.to_string());
+                }
+                out.value = Some(value);
+                return out;
+            }
+            // Расшифровалось, но это не vault-конверт: ключ верный, искать
+            // дальше бессмысленно.
+            Ok(None) => return out,
+            Err(e) => out.last_error = Some(format!("{e:#}")),
+        }
+    }
+    if candidates.is_empty() {
+        // Кандидатов нет (письмо от незнакомца, которого ещё нет в книге) —
+        // прежний путь: одна попытка на том ключе, что уже стоит в crypto.
+        out.value = match decrypt_envelope(crypto, body) {
+            Ok(v) => v,
+            Err(e) => {
+                out.last_error = Some(format!("{e:#}"));
+                None
+            }
+        };
+    }
+    out
 }
 
 /// Расшифровать vault-конверт и разобрать JSON. Ok(None) — не наш/битый
@@ -551,3 +653,234 @@ fn emit(out: &mut std::io::Stdout, v: &Value) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vault_core::identity::{peer_key_candidates, PeerKey};
+
+    fn key<'a>(address: &'a str, public_key: &'a str) -> PeerKey<'a> {
+        PeerKey {
+            address,
+            public_key,
+            pq_ek: None,
+        }
+    }
+
+    /// Живой случай 31.10: письмо пришло с `koanmak@ya.ru`, а настоящий ключ
+    /// его автора бот записал за `vault-msg@ya.ru` (второй ящик того же
+    /// аккаунта). Под устаревшим ключом AEAD отказывает, и слушатель молча
+    /// отбрасывал письмо — вместе с relay-токеном внутри.
+    #[test]
+    fn letter_is_decrypted_by_the_key_stored_under_another_mailbox() {
+        let mut bot = CryptoClient::new();
+        let (bot_pub, bot_priv) = bot.generate_keypair();
+        let mut stale_phone = CryptoClient::new();
+        let (stale_pub, _) = stale_phone.generate_keypair();
+        let mut real_phone = CryptoClient::new();
+        let (real_pub, real_priv) = real_phone.generate_keypair();
+
+        let mut sender = CryptoClient::new();
+        sender.import_private_key(&real_priv).unwrap();
+        sender.set_peer_key(&bot_pub).unwrap();
+        let body = sender
+            .encrypt_vault(r#"{"vault":1,"id":"fp-real","text":"привет"}"#)
+            .unwrap();
+
+        let book = [key("koanmak@ya.ru", &stale_pub), key("vault-msg@ya.ru", &real_pub)];
+        let candidates = peer_key_candidates("koanmak@ya.ru", &book);
+
+        let mut reader = CryptoClient::new();
+        reader.import_private_key(&bot_priv).unwrap();
+        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        assert!(got.value.is_some(), "письмо расшифровалось под вторым ключом");
+        assert_eq!(
+            got.foreign_key_address.as_deref(),
+            Some("vault-msg@ya.ru"),
+            "диагноз — чей ключ подошёл"
+        );
+    }
+
+    /// Подошёл ключ самого отправителя — диагноз «ключ из-под другого адреса»
+    /// обязан молчать, иначе предупреждение будет на каждое обычное письмо.
+    #[test]
+    fn own_key_success_is_not_reported_as_foreign() {
+        let mut bot = CryptoClient::new();
+        let (bot_pub, bot_priv) = bot.generate_keypair();
+        let mut phone = CryptoClient::new();
+        let (phone_pub, phone_priv) = phone.generate_keypair();
+        let mut other = CryptoClient::new();
+        let (other_pub, _) = other.generate_keypair();
+
+        let mut sender = CryptoClient::new();
+        sender.import_private_key(&phone_priv).unwrap();
+        sender.set_peer_key(&bot_pub).unwrap();
+        let body = sender.encrypt_vault(r#"{"vault":1,"id":"x","text":"а"}"#).unwrap();
+
+        let candidates = peer_key_candidates(
+            "koanmak@ya.ru",
+            &[key("koanmak@ya.ru", &phone_pub), key("other@ya.ru", &other_pub)],
+        );
+        let mut reader = CryptoClient::new();
+        reader.import_private_key(&bot_priv).unwrap();
+        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        assert!(got.value.is_some());
+        assert_eq!(got.foreign_key_address, None, "свой ключ — не повод шуметь");
+    }
+
+    /// Тело расшифровалось, но это НЕ vault-конверт: ключ верный, искать дальше
+    /// нечем. Если перебор не остановлен, лог показал бы «AAD auth failed»
+    /// вместо честного «не наш формат» — мутация `Ok(None) => {}` ловится здесь.
+    #[test]
+    fn non_vault_body_stops_the_search_without_a_stale_error() {
+        let mut bot = CryptoClient::new();
+        let (bot_pub, bot_priv) = bot.generate_keypair();
+        let mut phone = CryptoClient::new();
+        let (phone_pub, phone_priv) = phone.generate_keypair();
+        let mut stranger = CryptoClient::new();
+        let (stranger_pub, _) = stranger.generate_keypair();
+
+        let mut sender = CryptoClient::new();
+        sender.import_private_key(&phone_priv).unwrap();
+        sender.set_peer_key(&bot_pub).unwrap();
+        let body = sender.encrypt_vault("просто письмо, не конверт").unwrap();
+
+        let candidates = peer_key_candidates(
+            "koanmak@ya.ru",
+            &[key("koanmak@ya.ru", &phone_pub), key("zoho@ya.ru", &stranger_pub)],
+        );
+        let mut reader = CryptoClient::new();
+        reader.import_private_key(&bot_priv).unwrap();
+        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        assert!(got.value.is_none(), "не конверт — не событие");
+        assert_eq!(
+            got.last_error, None,
+            "верный ключ уже найден: вину вешать на следующий перебор нельзя"
+        );
+    }
+
+    /// Кандидатов нет — письма от человека, которого ещё нет в книге. Прежний
+    /// путь обязан остаться: одна попытка текущим ключом, иначе первому
+    ///(contact-инвайту) неоткуда будет расшифроваться.
+    #[test]
+    fn empty_book_falls_back_to_the_current_key() {
+        let mut bot = CryptoClient::new();
+        let (bot_pub, bot_priv) = bot.generate_keypair();
+        let mut phone = CryptoClient::new();
+        let (_phone_pub, phone_priv) = phone.generate_keypair();
+
+        let mut sender = CryptoClient::new();
+        sender.import_private_key(&phone_priv).unwrap();
+        sender.set_peer_key(&bot_pub).unwrap();
+        let body = sender.encrypt_vault(r#"{"vault":1,"id":"x","text":"а"}"#).unwrap();
+
+        let mut reader = CryptoClient::new();
+        reader.import_private_key(&bot_priv).unwrap();
+        reader
+            .set_peer_key(&hex_public_of(&phone_priv))
+            .expect("ключ собеседника известен из заголовка конверта");
+        let got = decrypt_with_candidates(&mut reader, &[], "novice@ya.ru", &body);
+        assert!(got.value.is_some(), "пустая книга не отменяет прежнюю попытку");
+    }
+
+    /// Публичный ключ из приватного — то, что делает получатель PQ-конверта,
+    /// читая `sender_ek` из заголовка.
+    fn hex_public_of(private_hex: &str) -> String {
+        let mut tmp = CryptoClient::new();
+        tmp.import_private_key(private_hex).unwrap();
+        tmp.public_key_hex().expect("ключ импортирован")
+    }
+
+    /// Тот же набор без второго ключа в книге — прежний отказ, а не тихий
+    /// пропуск: причину обязан видеть deferred-лог.
+    #[test]
+    fn wrong_key_alone_still_refuses_to_decrypt() {
+        let mut bot = CryptoClient::new();
+        let (bot_pub, bot_priv) = bot.generate_keypair();
+        let mut real_phone = CryptoClient::new();
+        let (_real_pub, real_priv) = real_phone.generate_keypair();
+        let mut stale_phone = CryptoClient::new();
+        let (stale_pub, _) = stale_phone.generate_keypair();
+
+        let mut sender = CryptoClient::new();
+        sender.import_private_key(&real_priv).unwrap();
+        sender.set_peer_key(&bot_pub).unwrap();
+        let body = sender.encrypt_vault(r#"{"vault":1,"id":"x","text":"а"}"#).unwrap();
+
+        let candidates = peer_key_candidates("koanmak@ya.ru", &[key("koanmak@ya.ru", &stale_pub)]);
+        let mut reader = CryptoClient::new();
+        reader.import_private_key(&bot_priv).unwrap();
+        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        assert!(got.value.is_none());
+        assert!(got.last_error.is_some(), "причина отказа остаётся видимой");
+        assert_eq!(got.foreign_key_address, None);
+    }
+
+    /// Книга слушателя собирается из ДВУХ мест записи: `contacts.json` и
+    /// `keys/peer_keys.json` (туда пишет Desktop). Записей два — чтений тоже
+    /// должно быть два, иначе ключ, записанный не в контакты, недостижим.
+    #[test]
+    fn peer_book_merges_the_contact_book_with_the_key_store() {
+        let mut book = ContactBook::new();
+        book.add(Contact::new("koanmak@ya.ru", "Анна", "aaaa"));
+        let stored = [vault_core::StoredPeerKey {
+            email: "vault-msg@ya.ru".to_string(),
+            public_key: "bbbb".to_string(),
+            label: None,
+            added_at: String::new(),
+            pq_public_key: Some("pq-ek".to_string()),
+        }];
+
+        let merged = peer_book(&book, &stored);
+        assert_eq!(merged.len(), 2, "оба места записи");
+        assert_eq!(merged[0].address, "koanmak@ya.ru");
+        assert_eq!(merged[1].address, "vault-msg@ya.ru");
+        assert_eq!(
+            merged[1].pq_ek.as_deref(),
+            Some("pq-ek"),
+            "PQ-ключ из хранилища не теряется"
+        );
+    }
+
+    /// Живое состояние 31.10: настоящий ключ телефона лежал ТОЛЬКО в
+    /// `keys/peer_keys.json` под адресом-алиасом, а `contacts.json` держал
+    /// устаревший. Пока слушатель читал одну книгу, письмо умирало на AEAD.
+    #[test]
+    fn letter_is_decrypted_by_a_key_that_lives_only_in_the_key_store() {
+        let mut bot = CryptoClient::new();
+        let (bot_pub, bot_priv) = bot.generate_keypair();
+        let mut stale_phone = CryptoClient::new();
+        let (stale_pub, _) = stale_phone.generate_keypair();
+        let mut real_phone = CryptoClient::new();
+        let (real_pub, real_priv) = real_phone.generate_keypair();
+
+        let mut sender = CryptoClient::new();
+        sender.import_private_key(&real_priv).unwrap();
+        sender.set_peer_key(&bot_pub).unwrap();
+        let body = sender
+            .encrypt_vault(r#"{"vault":1,"id":"fp-real","text":"привет"}"#)
+            .unwrap();
+
+        let mut book = ContactBook::new();
+        book.add(Contact::new("koanmak@ya.ru", "Анна", &stale_pub));
+        let stored = [vault_core::StoredPeerKey {
+            email: "vault-msg@ya.ru".to_string(),
+            public_key: real_pub,
+            label: None,
+            added_at: String::new(),
+            pq_public_key: None,
+        }];
+
+        let candidates = peer_key_candidates("koanmak@ya.ru", &peer_book(&book, &stored));
+        let mut reader = CryptoClient::new();
+        reader.import_private_key(&bot_priv).unwrap();
+        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        assert!(got.value.is_some(), "ключ из хранилища тоже пробуется");
+        assert_eq!(
+            got.foreign_key_address.as_deref(),
+            Some("vault-msg@ya.ru"),
+            "и это видно в логе как диагноз"
+        );
+    }
+}
+

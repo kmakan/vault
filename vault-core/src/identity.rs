@@ -437,6 +437,65 @@ pub fn same_public_key(a: &str, b: &str) -> bool {
     !a.is_empty() && a == b
 }
 
+/// Сколько ключей перебирает слушатель, когда ключ отправителя не подошёл.
+/// Ограничение — про цену тика (перебор идёт по каждому письму тика), а не про
+/// протокол: неподходящий ключ отбрасывает AEAD-проверка.
+pub const PEER_KEY_CANDIDATES_MAX: usize = 8;
+
+/// Ключ собеседника в форме, удобной для перебора: адрес нужен затем, чтобы
+/// сказать, ЧЕЙ это ключ, когда расшифрование удалось.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerKey<'a> {
+    pub address: &'a str,
+    pub public_key: &'a str,
+    pub pq_ek: Option<&'a str>,
+}
+
+/// Порядок перебора ключей при расшифровании письма от `sender`.
+///
+/// ЗАЧЕМ. У человека несколько ящиков: письмо приходит с основного адреса, а
+/// ТЕКУЩИЙ ключ этого человека слушатель записал под адресом-алиасом (31.10:
+/// письмо `From: koanmak@ya.ru` зашифровано ключом, лежавшим за
+/// `vault-msg@ya.ru`, и слушатель молча отбраковывал его как «AAD auth
+/// failed»). Гибридный `PQ1`-конверт это маскировал: там ключ сообщения задаёт
+/// KEM получателя, и кривая отправителя в шифре не участвует. Сломалось ровно
+/// тогда, когда отправитель ушёл на legacy-форму.
+///
+/// ПРАВИЛО. Первым пробуется ключ самого отправителя (обычный путь — ничего не
+/// меняется), затем ключи остальных контактов: детерминированно по адресу
+/// (перебор не должен зависеть от порядка перечитывания книги), без пустых
+/// ключей и без повторов одного и того же ключа. Ответ даёт AEAD: под этим
+/// ключом письмо расшифровывается или нет, поэтому «подошёл чужой ключ» — это
+/// не подделка, а просто неверный ключ в книге. Перебор ТОЛЬКО читает книгу:
+/// ничего не записывает и не переносит.
+pub fn peer_key_candidates<'a>(sender: &str, known: &[PeerKey<'a>]) -> Vec<PeerKey<'a>> {
+    let mut ordered: Vec<PeerKey<'a>> = known
+        .iter()
+        .filter(|k| !k.public_key.trim().is_empty())
+        .cloned()
+        .collect();
+    ordered.sort_by(|a, b| {
+        let rank = |addr: &str| if same_address(addr, sender) { 0u8 } else { 1u8 };
+        rank(a.address)
+            .cmp(&rank(b.address))
+            .then_with(|| normalize(a.address).cmp(&normalize(b.address)))
+    });
+    let mut out: Vec<PeerKey<'a>> = Vec::new();
+    for k in ordered {
+        if out.len() >= PEER_KEY_CANDIDATES_MAX {
+            break;
+        }
+        if out
+            .iter()
+            .any(|seen| same_public_key(seen.public_key, k.public_key))
+        {
+            continue;
+        }
+        out.push(k);
+    }
+    out
+}
+
 /// Публичный ключ, записанный В ПОЛЕ отпечатка (след старой добивки).
 /// Some — только если строка и есть полный ключ: 64 hex-символа. Короткий
 /// отпечаток (`xx:…:****`) ключом не является: сравнивать его с ключом
@@ -765,7 +824,80 @@ mod tests {
         );
     }
 
-        #[test]
+    fn pk<'a>(address: &'a str, key: &'a str) -> PeerKey<'a> {
+        PeerKey {
+            address,
+            public_key: key,
+            pq_ek: None,
+        }
+    }
+
+    #[test]
+    fn peer_key_candidates_try_the_senders_own_key_first() {
+        let book = [pk("bob@ya.ru", "b"), pk("anna@ya.ru", "a"), pk("cz@ya.ru", "c")];
+        let got = peer_key_candidates("anna@ya.ru", &book);
+        assert_eq!(got.first().map(|k| k.address), Some("anna@ya.ru"));
+        assert_eq!(got.len(), 3, "остальные ключи не выбрасываются — они и есть лечение");
+    }
+
+    #[test]
+    fn peer_key_candidates_ignore_case_of_the_senders_address() {
+        // «aaa@ya.ru» по алфавиту раньше «anna@ya.ru»: если сравнение адреса
+        // сделать строкой (регистр и обрамление не нормализованы), совпадения
+        // нет, ранг у всех одинаковый и победит алфавит — первый кандидат
+        // окажется чужим ключом.
+        let book = [
+            pk("bob@ya.ru", "b"),
+            pk("Anna@YA.ru", "a"),
+            pk("aaa@ya.ru", "z"),
+        ];
+        let got = peer_key_candidates("  anna@ya.ru ", &book);
+        assert_eq!(got.first().map(|k| k.address), Some("Anna@YA.ru"));
+    }
+
+    #[test]
+    fn peer_key_candidates_order_the_rest_by_address_not_by_book_order() {
+        // Тот же набор, перечитанный в обратном порядке, обязан дать тот же
+        // перебор: иначе победитель зависел бы от порядка хранения книги.
+        let forward = [pk("a@ya.ru", "k1"), pk("b@ya.ru", "k2"), pk("c@ya.ru", "k3")];
+        let backward = [pk("c@ya.ru", "k3"), pk("b@ya.ru", "k2"), pk("a@ya.ru", "k1")];
+        let senders = ["z@ya.ru", "z@ya.ru"];
+        assert_eq!(
+            peer_key_candidates(&senders[0], &forward),
+            peer_key_candidates(&senders[1], &backward)
+        );
+    }
+
+    #[test]
+    fn peer_key_candidates_tried_once_per_key_and_never_with_an_empty_one() {
+        let book = [
+            pk("old@ya.ru", ""),
+            pk("me@ya.ru", "same"),
+            pk("alias@ya.ru", "SAME"),
+            pk("other@ya.ru", "  "),
+        ];
+        let got = peer_key_candidates("nobody@ya.ru", &book);
+        assert_eq!(
+            got.iter().map(|k| k.address).collect::<Vec<_>>(),
+            vec!["alias@ya.ru"],
+            "пустой ключ не кандидат, а один и тот же ключ под двумя адресами пробуется один раз — берётся первый по алфавиту, чтобы выбор не зависел от порядка книги"
+        );
+    }
+
+    #[test]
+    fn peer_key_candidates_are_bounded() {
+        let keys: Vec<String> = (0..20).map(|i| format!("k{i:02}")).collect();
+        let book: Vec<PeerKey> = (0..20)
+            .map(|i| pk("x@ya.ru", keys[i].as_str()))
+            .collect();
+        // Все адреса одинаковые → сортировка стабильна, но перебор ограничен.
+        assert_eq!(
+            peer_key_candidates("nobody@ya.ru", &book).len(),
+            PEER_KEY_CANDIDATES_MAX
+        );
+    }
+
+    #[test]
     fn public_key_from_trace_takes_only_full_hex_key() {
         let key = "ab".repeat(32);
         assert_eq!(public_key_from_trace(&key.to_uppercase()).as_deref(), Some(&key[..]));

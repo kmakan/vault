@@ -21,7 +21,7 @@ pub const NONCE_LEN: usize = 24;
 /// RAW-резолв директории ключей CLI (~/.vault/keys, fallback `.vault/keys`).
 /// Формат `keypair.json` совместим с Desktop (StoredKeyPair) — общий
 /// загрузчик/сохранялка теперь живёт в `vault_core::key_store`.
-fn keys_dir() -> PathBuf {
+pub fn keys_dir() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".vault/keys"))
         .unwrap_or_else(|| PathBuf::from(".vault/keys"))
