@@ -264,13 +264,12 @@ async fn tick(
         // vault-msg@ya.ru, и молча отбраковывались как «AAD auth failed»).
         // Порядок перебора решает ядро, книга — `peer_book` (оба места записи).
         let book = peer_book(contact_book, &stored_keys);
-        let candidates = vault_core::identity::peer_key_candidates(&m.from, &book);
-        let mut decrypted = decrypt_with_candidates(crypto, &candidates, &m.from, &m.body);
+        let mut decrypted = decrypt_with_candidates(crypto, &book, &m.from, &m.body);
         if decrypted.value.is_none() {
             // Полный фетч по uid (BODY.PEEK[TEXT]<0.512> режет PQ1 >1КБ).
             let folder = folder_of.get(&m.id).map(|s| s.as_str()).unwrap_or("INBOX");
             if let Ok(full) = client.fetch_message_body(&m.id, folder).await {
-                decrypted = decrypt_with_candidates(crypto, &candidates, &m.from, &full);
+                decrypted = decrypt_with_candidates(crypto, &book, &m.from, &full);
             }
         }
         if let Some(addr) = &decrypted.foreign_key_address {
@@ -457,49 +456,60 @@ struct Decrypted {
 }
 
 /// Перебор ключей: письмо пробуют под каждым кандидатом ядра, пока AEAD не
-/// сойдётся. Кандидатов подбирает `vault_core::identity::peer_key_candidates`
-/// (ключ отправителя первым, остальные — детерминированно), здесь только
-/// применение: состояние `crypto` остаётся на победившем ключе, поэтому
-/// последующий ответ шифруется тем же ключом, которым пришло письмо.
+/// сойдётся. Само решение (порядок, остановка, различимый отказ) — в
+/// `vault_core::identity::decrypt_with_peer_keys`; здесь только применение:
+/// состояние `crypto` остаётся на победившем ключе, поэтому последующий ответ
+/// шифруется тем же ключом, которым пришло письмо.
 fn decrypt_with_candidates(
     crypto: &mut CryptoClient,
-    candidates: &[vault_core::identity::PeerKey<'_>],
+    book: &[vault_core::identity::PeerKey<'_>],
     sender: &str,
     body: &str,
 ) -> Decrypted {
-    let mut out = Decrypted {
-        value: None,
-        foreign_key_address: None,
-        last_error: None,
-    };
-    for k in candidates {
+    let opened = vault_core::identity::decrypt_with_peer_keys(sender, book, |k| {
         let _ = crypto.set_peer_key_pq(k.public_key, k.pq_ek);
-        match decrypt_envelope(crypto, body) {
-            Ok(Some(value)) => {
-                if !vault_core::identity::same_address(k.address, sender) {
-                    out.foreign_key_address = Some(k.address.to_string());
+        decrypt_envelope(crypto, body)
+    });
+    match opened {
+        vault_core::identity::PeerLetter::Opened {
+            value,
+            key_address,
+            from_own_address,
+            ..
+        } => Decrypted {
+            value: Some(value),
+            foreign_key_address: (!from_own_address).then_some(key_address),
+            last_error: None,
+        },
+        // Открылось верным ключом, но это не vault-конверт: искать дальше
+        // бессмысленно, а вину вешать на перебор — нельзя.
+        vault_core::identity::PeerLetter::NotOurLetter { .. } => Decrypted {
+            value: None,
+            foreign_key_address: None,
+            last_error: None,
+        },
+        vault_core::identity::PeerLetter::NoKey { last_error, .. } => Decrypted {
+            value: None,
+            foreign_key_address: None,
+            last_error,
+        },
+        // Книги нет вовсе — прежний путь: одна попытка текущим ключом, иначе
+        // первому contact-инвайту неоткуда будет расшифроваться.
+        vault_core::identity::PeerLetter::EmptyBook => Decrypted {
+            value: match decrypt_envelope(crypto, body) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Decrypted {
+                        value: None,
+                        foreign_key_address: None,
+                        last_error: Some(format!("{e:#}")),
+                    }
                 }
-                out.value = Some(value);
-                return out;
-            }
-            // Расшифровалось, но это не vault-конверт: ключ верный, искать
-            // дальше бессмысленно.
-            Ok(None) => return out,
-            Err(e) => out.last_error = Some(format!("{e:#}")),
-        }
+            },
+            foreign_key_address: None,
+            last_error: None,
+        },
     }
-    if candidates.is_empty() {
-        // Кандидатов нет (письмо от незнакомца, которого ещё нет в книге) —
-        // прежний путь: одна попытка на том ключе, что уже стоит в crypto.
-        out.value = match decrypt_envelope(crypto, body) {
-            Ok(v) => v,
-            Err(e) => {
-                out.last_error = Some(format!("{e:#}"));
-                None
-            }
-        };
-    }
-    out
 }
 
 /// Расшифровать vault-конверт и разобрать JSON. Ok(None) — не наш/битый
@@ -657,7 +667,7 @@ fn emit(out: &mut std::io::Stdout, v: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vault_core::identity::{peer_key_candidates, PeerKey};
+    use vault_core::identity::PeerKey;
 
     fn key<'a>(address: &'a str, public_key: &'a str) -> PeerKey<'a> {
         PeerKey {
@@ -688,11 +698,10 @@ mod tests {
             .unwrap();
 
         let book = [key("koanmak@ya.ru", &stale_pub), key("vault-msg@ya.ru", &real_pub)];
-        let candidates = peer_key_candidates("koanmak@ya.ru", &book);
 
         let mut reader = CryptoClient::new();
         reader.import_private_key(&bot_priv).unwrap();
-        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        let got = decrypt_with_candidates(&mut reader, &book, "koanmak@ya.ru", &body);
         assert!(got.value.is_some(), "письмо расшифровалось под вторым ключом");
         assert_eq!(
             got.foreign_key_address.as_deref(),
@@ -717,13 +726,10 @@ mod tests {
         sender.set_peer_key(&bot_pub).unwrap();
         let body = sender.encrypt_vault(r#"{"vault":1,"id":"x","text":"а"}"#).unwrap();
 
-        let candidates = peer_key_candidates(
-            "koanmak@ya.ru",
-            &[key("koanmak@ya.ru", &phone_pub), key("other@ya.ru", &other_pub)],
-        );
+        let book = [key("koanmak@ya.ru", &phone_pub), key("other@ya.ru", &other_pub)];
         let mut reader = CryptoClient::new();
         reader.import_private_key(&bot_priv).unwrap();
-        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        let got = decrypt_with_candidates(&mut reader, &book, "koanmak@ya.ru", &body);
         assert!(got.value.is_some());
         assert_eq!(got.foreign_key_address, None, "свой ключ — не повод шуметь");
     }
@@ -745,13 +751,10 @@ mod tests {
         sender.set_peer_key(&bot_pub).unwrap();
         let body = sender.encrypt_vault("просто письмо, не конверт").unwrap();
 
-        let candidates = peer_key_candidates(
-            "koanmak@ya.ru",
-            &[key("koanmak@ya.ru", &phone_pub), key("zoho@ya.ru", &stranger_pub)],
-        );
+        let book = [key("koanmak@ya.ru", &phone_pub), key("zoho@ya.ru", &stranger_pub)];
         let mut reader = CryptoClient::new();
         reader.import_private_key(&bot_priv).unwrap();
-        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        let got = decrypt_with_candidates(&mut reader, &book, "koanmak@ya.ru", &body);
         assert!(got.value.is_none(), "не конверт — не событие");
         assert_eq!(
             got.last_error, None,
@@ -807,10 +810,10 @@ mod tests {
         sender.set_peer_key(&bot_pub).unwrap();
         let body = sender.encrypt_vault(r#"{"vault":1,"id":"x","text":"а"}"#).unwrap();
 
-        let candidates = peer_key_candidates("koanmak@ya.ru", &[key("koanmak@ya.ru", &stale_pub)]);
+        let book = [key("koanmak@ya.ru", &stale_pub)];
         let mut reader = CryptoClient::new();
         reader.import_private_key(&bot_priv).unwrap();
-        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        let got = decrypt_with_candidates(&mut reader, &book, "koanmak@ya.ru", &body);
         assert!(got.value.is_none());
         assert!(got.last_error.is_some(), "причина отказа остаётся видимой");
         assert_eq!(got.foreign_key_address, None);
@@ -871,10 +874,14 @@ mod tests {
             pq_public_key: None,
         }];
 
-        let candidates = peer_key_candidates("koanmak@ya.ru", &peer_book(&book, &stored));
         let mut reader = CryptoClient::new();
         reader.import_private_key(&bot_priv).unwrap();
-        let got = decrypt_with_candidates(&mut reader, &candidates, "koanmak@ya.ru", &body);
+        let got = decrypt_with_candidates(
+            &mut reader,
+            &peer_book(&book, &stored),
+            "koanmak@ya.ru",
+            &body,
+        );
         assert!(got.value.is_some(), "ключ из хранилища тоже пробуется");
         assert_eq!(
             got.foreign_key_address.as_deref(),

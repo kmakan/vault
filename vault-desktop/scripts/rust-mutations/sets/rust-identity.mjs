@@ -304,5 +304,31 @@ export default {
     { name: 'потолок = 1 (второй ящик того же человека снова остаётся незашифрованным)',
       pattern: 'pub const PEER_KEY_CANDIDATES_MAX: usize = 8;',
       replacement: 'pub const PEER_KEY_CANDIDATES_MAX: usize = 1;' },
+    // ── decrypt_with_peer_keys: КАК перебор применяется и когда он
+    // останавливается. Здесь класс — стоп-условие и различимый исход, а не
+    // порядок: порядок собран выше, но применить его можно так, что письмо
+    // всё равно потеряется (перебрать один ключ, не остановиться на верном,
+    // отдать успех без адреса-владельца).
+    { name: 'перебор сведён к первому кандидату (живой дефект 31.10 повторяется дословно: ключ из-под другого адреса не пробуется)',
+      pattern: '    for key in candidates {',
+      replacement: '    for key in candidates.iter().take(1).cloned() {' },
+    { name: '«ключ отправителя» считается наоборот (каждое обычное письмо попадает в диагноз «чужой ящик»)',
+      pattern: '                    from_own_address: same_address(key.address, sender),',
+      replacement: '                    from_own_address: !same_address(key.address, sender),' },
+    { name: 'в исход пишется адрес отправителя вместо адреса подошедшего ключа (лечить «второй ящик» становится нечем)',
+      pattern: '                    key_address: key.address.to_string(),',
+      replacement: '                    key_address: sender.to_string(),' },
+    { name: 'открывшееся НЕ наше письмо не останавливает перебор (вину получает следующий ключ: «AAD» вместо «не наш формат»)',
+      pattern: '            Ok(None) => return PeerLetter::NotOurLetter { key_address: key.address.to_string() },',
+      replacement: '            Ok(None) => continue,' },
+    { name: 'доказанная пустота книги не отличается от «ни один ключ не подошёл» (первому письму от незнакомца нечем расшифроваться)',
+      pattern: '        return PeerLetter::EmptyBook;',
+      replacement: '        return PeerLetter::NoKey { tried: 0, last_error: None };' },
+    { name: 'пустая книга больше не проверяется (исход EmptyBook недостижим)',
+      pattern: '    if candidates.is_empty() {',
+      replacement: '    if false {' },
+    { name: 'причина отказа перебора стирается (deferred-лог скажет «не расшифровалось» без причины)',
+      pattern: '            Err(e) => last_error = Some(e.to_string()),',
+      replacement: '            Err(_e) => last_error = None,' },
   ],
 };

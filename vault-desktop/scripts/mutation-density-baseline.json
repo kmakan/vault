@@ -44,7 +44,7 @@
     "vault-client/src/vault/thread.rs": 7,
     "vault-client/src/vault/timings.rs": 21,
     "vault-core/src/crypto_pq.rs": 25,
-    "vault-core/src/identity.rs": 77,
+    "vault-core/src/identity.rs": 84,
     "vault-core/src/key_store.rs": 10,
     "vault-core/src/relay.rs": 22,
     "vault-core/src/settings.rs": 9,

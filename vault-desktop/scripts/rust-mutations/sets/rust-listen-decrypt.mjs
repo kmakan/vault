@@ -1,5 +1,5 @@
-// Набор мутаций: rust-listen-decrypt — каким ключом слушатель расшифровывает
-// входящее письмо и что он об этом говорит.
+// Набор мутаций: rust-listen-decrypt — как слушатель применяет ключ книги к
+// входящему письму и что он об этом говорит.
 //
 // ЗАЧЕМ. «Ключ собеседника» раньше выбирался строго по строке `From`, и это
 // молча ломало доставку: у человека несколько ящиков, письмо приходит с
@@ -10,10 +10,12 @@
 // маскировал (там ключ сообщения задаёт KEM получателя), поэтому дефект
 // проявился ровно тогда, когда отправитель ушёл на legacy-форму.
 //
-// Что меряется здесь, а не в `rust-identity`: применение порядка. Перебор обязан
-// (1) остановиться на первом совпадении, (2) не соврать в диагнозе «чей ключ
-// подошёл», (3) оставить прежнюю одиночную попытку, когда кандидатов нет вовсе
-// (первое письмо от незнакомца), (4) не свестись снова к одному ключу.
+// ГРАНИЦА С `rust-identity`. Сам перебор (порядок, стоп-условие, четыре исхода)
+// с 31.10 живёт в ядре — `vault_core::identity::decrypt_with_peer_keys` — и
+// меряется набором `rust-identity`. Здесь остаётся ПРИМЕНЕНИЕ: книга из двух
+// мест записи и перевод исхода в то, что слушатель скажет и запомнит. Обе части
+// нужны: решение без применения теряет письмо, применение без решения —
+// перебирает одним ключом.
 export default {
   id: 'rust-listen-decrypt',
   crate: 'vault-client',
@@ -21,22 +23,22 @@ export default {
   file: 'vault-client/src/listen.rs',
   smoke: 'cargo test -p vault-client',
   mutations: [
-    { name: 'перебор сведён к первому кандидату (дефект дословно: ключ из-под другого адреса не пробуется)',
-      pattern: '    for k in candidates {',
-      replacement: '    for k in candidates.iter().take(1) {' },
-    { name: 'диагноз «чужой адрес» инвертирован (шум на каждое обычное письмо и молчание на настоящем случае)',
-      pattern: '                if !vault_core::identity::same_address(k.address, sender) {',
-      replacement: '                if vault_core::identity::same_address(k.address, sender) {' },
-    { name: 'в диагноз пишется адрес отправителя вместо адреса подошедшего ключа (лечить становится нечем)',
-      pattern: '                    out.foreign_key_address = Some(k.address.to_string());',
-      replacement: '                    out.foreign_key_address = Some(sender.to_string());' },
-    { name: 'расшифрованное не-письмо не останавливает перебор (вину получает следующий ключ: «AAD» вместо «не наш формат»)',
-      pattern: '            Ok(None) => return out,',
-      replacement: '            Ok(None) => {}' },
-    { name: 'попытка при пустой книге убрана (первому письму от незнакомца неоткуда расшифроваться)',
-      pattern: '    if candidates.is_empty() {',
-      replacement: '    if false {',
-    },
+    // ── Применение исхода перебора: что слушатель сообщит ──
+    { name: 'диагноз «чей ключ подошёл» теряется (письмо прочитано, а «у человека второй ящик» никто не увидит)',
+      pattern: '            foreign_key_address: (!from_own_address).then_some(key_address),',
+      replacement: '            foreign_key_address: None,' },
+    { name: 'чужим объявляется каждый подошедший ключ, включая ключ отправителя (шум в логе на каждое обычное письмо)',
+      pattern: '            foreign_key_address: (!from_own_address).then_some(key_address),',
+      replacement: '            foreign_key_address: Some(key_address),' },
+    { name: 'верный ключ, открывший НЕ конверт, записывается как отказ расшифровки (диагноз подменяется: «AAD» вместо «не наш формат»)',
+      pattern: '        vault_core::identity::PeerLetter::NotOurLetter { .. } => Decrypted {\n            value: None,\n            foreign_key_address: None,\n            last_error: None,\n        },',
+      replacement: '        vault_core::identity::PeerLetter::NotOurLetter { .. } => Decrypted {\n            value: None,\n            foreign_key_address: None,\n            last_error: Some("не наш формат".to_string()),\n        },' },
+    { name: 'причина отказа перебора не доезжает до deferred-лога (письмо пропадает без следа)',
+      pattern: '            last_error,\n        },\n        // Книги нет вовсе',
+      replacement: '            last_error: None,\n        },\n        // Книги нет вовсе' },
+    { name: 'пустая книга отменяет прежнюю одиночную попытку (первому contact-инвайту неоткуда расшифроваться)',
+      pattern: '                Ok(v) => v,',
+      replacement: '                Ok(_) => None,' },
     // ── Книга: ДВА места записи обязаны быть двумя местами чтения ──
     { name: 'хранилище peer-ключей не читается (живой провал 31.10: ключ телефона лежал только в keys/peer_keys.json)',
       pattern: '    book.extend(stored_keys.iter().map(|k| vault_core::identity::PeerKey {\n        address: k.email.as_str(),\n        public_key: k.public_key.as_str(),\n        pq_ek: k.pq_public_key.as_deref(),\n    }));',

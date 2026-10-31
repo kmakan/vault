@@ -496,6 +496,84 @@ pub fn peer_key_candidates<'a>(sender: &str, known: &[PeerKey<'a>]) -> Vec<PeerK
     out
 }
 
+/// Исход перебора ключей собеседника. Четыре разных «нет» вместо одного
+/// молчания: «ключа нет в книге», «ни один не подошёл», «письмо расшифровалось
+/// чужим ключом, но это не наш конверт» и успех — на вызывающей стороне
+/// решают по-разному (первое тихо пропускает, второе ретраит, третье забудет).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerLetter<T> {
+    /// Конверт открыт. `key_address` — ЗА ЧЕМ ключ лежал в книге, а не адрес
+    /// отправителя: расхождение и есть «у человека второй ящик».
+    Opened {
+        value: T,
+        key_address: String,
+        /// Ключ записан за адресом отправителя (обычный путь, ренейм не нужен).
+        from_own_address: bool,
+    },
+    /// Тело открылось этим ключом, но содержимое — не наш конверт.
+    /// Искать дальше бессмысленно: другой ключ это же тело не откроет.
+    NotOurLetter { key_address: String },
+    /// Были кандидаты, ни один не открыл. `tried` и `last_error` — диагноз.
+    NoKey {
+        tried: usize,
+        last_error: Option<String>,
+    },
+    /// Открывать нечем: в книге нет ни одного непустого ключа.
+    EmptyBook,
+}
+
+/// Открыть письмо тем ключом книги, который его открывает.
+///
+/// ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ. Порядок и стоп-условия — протокольное решение
+/// (какой ключ вероятнее, когда прекращать перебор, что считать «не нашим
+/// письмом»). 31.10 слушатель бота терял письма, потому что это решение жило
+/// в его цикле вместе с применением ключа: порядок нельзя было проверить
+/// отдельно от `crypto`, а тест проверял только «письмо прочиталось или нет».
+/// Здесь решение отделено от шифра: вызывающий даёт книгу и одно действие —
+/// «попробуй этот ключ».
+///
+/// ОСТАТОК (честно, чтобы не выглядело сделанным). У монитора сервиса
+/// (`monitor_state::decrypt_order`) и у фронта (`features/incoming.js`) пока
+/// свои копии порядка, и они НЕ совпадают с этой: монитор пробует ещё и свой
+/// ключ, фронт сначала матчит конверт по ключу из заголовка. Поэтому свести их
+/// — отдельный шаг (каждой копии нужен свой вход), а не «ещё один вызов».
+/// Здесь закрыт путь слушателя; копии перечислены в ADR-005.
+///
+/// `attempt` возвращает `Ok(None)`, когда тело ОТКРЫЛОСЬ, но это не наш
+/// конверт: перебор обязан остановиться на верном ключе, а не идти гадать
+/// дальше и приписать отказ следующему ключу.
+pub fn decrypt_with_peer_keys<'a, T, E, F>(
+    sender: &str,
+    book: &[PeerKey<'a>],
+    mut attempt: F,
+) -> PeerLetter<T>
+where
+    E: std::fmt::Display,
+    F: FnMut(PeerKey<'a>) -> Result<Option<T>, E>,
+{
+    let candidates = peer_key_candidates(sender, book);
+    if candidates.is_empty() {
+        return PeerLetter::EmptyBook;
+    }
+    let mut last_error: Option<String> = None;
+    let mut tried: usize = 0;
+    for key in candidates {
+        tried += 1;
+        match attempt(key) {
+            Ok(Some(value)) => {
+                return PeerLetter::Opened {
+                    value,
+                    from_own_address: same_address(key.address, sender),
+                    key_address: key.address.to_string(),
+                }
+            }
+            Ok(None) => return PeerLetter::NotOurLetter { key_address: key.address.to_string() },
+            Err(e) => last_error = Some(e.to_string()),
+        }
+    }
+    PeerLetter::NoKey { tried, last_error }
+}
+
 /// Публичный ключ, записанный В ПОЛЕ отпечатка (след старой добивки).
 /// Some — только если строка и есть полный ключ: 64 hex-символа. Короткий
 /// отпечаток (`xx:…:****`) ключом не является: сравнивать его с ключом
@@ -895,6 +973,86 @@ mod tests {
             peer_key_candidates("nobody@ya.ru", &book).len(),
             PEER_KEY_CANDIDATES_MAX
         );
+    }
+
+    #[test]
+    fn peer_letter_opened_reports_the_address_the_key_lives_under() {
+        // Живой случай 31.10: письмо от koanmak@ya.ru открылось ключом,
+        // записанным за vault-msg@ya.ru. Успех без адреса-владельца — это
+        // «письмо прочитано», но не «это смена почты»: фронт по этому полю
+        // решает, делать ли ренейм.
+        let book = [pk("vault-msg@ya.ru", "real"), pk("other@ya.ru", "junk")];
+        let got = decrypt_with_peer_keys("koanmak@ya.ru", &book, |k| -> Result<Option<String>, String> {
+            if k.public_key == "real" {
+                Ok(Some(k.public_key.to_string()))
+            } else {
+                Err("AAD".to_string())
+            }
+        });
+        match got {
+            PeerLetter::Opened { value, key_address, from_own_address } => {
+                assert_eq!(value, "real", "открыл ключ, записанный за адресом-алиасом");
+                assert_eq!(key_address, "vault-msg@ya.ru");
+                assert!(!from_own_address, "ключ за чужим адресом — это не обычный путь");
+            }
+            other => panic!("ожидался Opened, получено {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_letter_success_on_the_senders_own_key_is_not_foreign() {
+        let book = [pk("Anna@YA.ru", "a"), pk("bob@ya.ru", "b")];
+        let got = decrypt_with_peer_keys("anna@ya.ru", &book, |k| -> Result<Option<String>, String> {
+            Ok(Some(k.public_key.to_string()))
+        });
+        match got {
+            PeerLetter::Opened { key_address, from_own_address, value, .. } => {
+                assert!(from_own_address, "адрес в книге тот же человек в другой регистрацией — не чужой ящик");
+                assert_eq!(key_address, "Anna@YA.ru");
+                assert_eq!(value, "a", "первым пробуется ключ самого отправителя");
+            }
+            other => panic!("ожидался Opened, получено {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_letter_stops_on_a_key_that_opened_a_foreign_letter() {
+        // Тело открылось — значит ключ верный, а письмо чужое (не vault-конверт).
+        // Идти дальше было бы «угадыванием» чужим ключом и подменой диагноза.
+        let book = [pk("a@ya.ru", "k1"), pk("b@ya.ru", "k2")];
+        let mut tried: Vec<String> = Vec::new();
+        let got = decrypt_with_peer_keys("nobody@ya.ru", &book, |k| {
+            tried.push(k.public_key.to_string());
+            Ok::<Option<String>, String>(None)
+        });
+        assert_eq!(got, PeerLetter::NotOurLetter { key_address: "a@ya.ru".to_string() });
+        assert_eq!(tried, vec!["k1".to_string()], "перебор остановлен на верном ключе");
+    }
+
+    #[test]
+    fn peer_letter_no_key_counts_attempts_and_keeps_the_last_error() {
+        let book = [pk("a@ya.ru", "k1"), pk("b@ya.ru", "k2")];
+        let got = decrypt_with_peer_keys("nobody@ya.ru", &book, |k| {
+            Err::<Option<String>, String>(format!("AAD under {}", k.address))
+        });
+        match got {
+            PeerLetter::NoKey { tried, last_error } => {
+                assert_eq!(tried, 2, "испытуемых ключей столько, сколько кандидатов в книге");
+                assert_eq!(last_error.as_deref(), Some("AAD under b@ya.ru"));
+            }
+            other => panic!("ожидался NoKey, получено {other:?}"),
+        }
+    }
+
+    #[test]
+    fn peer_letter_empty_book_never_attempts() {
+        let mut attempts = 0;
+        let got = decrypt_with_peer_keys("nobody@ya.ru", &[], |k| {
+            attempts += 1;
+            Ok::<Option<String>, String>(Some(k.public_key.to_string()))
+        });
+        assert_eq!(got, PeerLetter::EmptyBook);
+        assert_eq!(attempts, 0, "книга без ключей — не повод что-то расшифровывать «вслепую»");
     }
 
     #[test]
