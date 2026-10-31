@@ -7,11 +7,12 @@
 
 Запуск (systemd-таймер, 09:00 MSK = 06:00 UTC):
     EnvironmentFile=/home/maksim/vault-relay/env               # VAULT_RELAY_ADMIN_KEY
-    EnvironmentFile=-/home/maksim/vault-relay/accounting.env   # SMTP и адрес
+    EnvironmentFile=-/home/maksim/vault-relay/accounting.env   # ntfy / SMTP
 
 Переменные (все, кроме ключа релея, необязательные):
     VAULT_ACCOUNTING_RELAY_URL   http://127.0.0.1:8091
     VAULT_ACCOUNTING_DIGEST_FILE файл с последней сводкой (для чтения по SSH)
+    VAULT_ACCOUNTING_NTFY_URL    полный URL topic — включает пуш через ntfy
     VAULT_ACCOUNTING_MAIL_TO     получатель(и) через запятую — включает письмо
     VAULT_ACCOUNTING_MAIL_FROM   отправитель (по умолчанию SMTP_USER)
     VAULT_ACCOUNTING_SMTP_HOST   smtp.yandex.ru
@@ -19,8 +20,10 @@
     VAULT_ACCOUNTING_SMTP_USER
     VAULT_ACCOUNTING_SMTP_PASS   пароль приложения, НЕ основной пароль
 
-Без SMTP-настроек сводка всё равно пишется в файл и stdout (journald):
-письмо — удобство, а не единственный канал. Секреты не печатаются никогда.
+Сводка всегда пишется в файл и stdout (journald). Доставка — ntfy (HTTPS,
+работает при закрытых SMTP-портах) и/или письмо. Если канал настроен, но
+не сработал, скрипт сообщает об этом; успех хотя бы одного канала — успех.
+Секреты не печатаются никогда.
 """
 
 import json
@@ -171,6 +174,16 @@ def send_mail(subject, body, cfg):
             pass
 
 
+def send_ntfy(url, title, body):
+    req = urllib.request.Request(url, data=body.encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "text/plain; charset=utf-8")
+    req.add_header("Title", title)
+    req.add_header("Tags", "moneybag")
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        if not 200 <= resp.status < 300:
+            raise RuntimeError("ntfy ответил {}".format(resp.status))
+
+
 def main(argv):
     dry_run = "--dry-run" in argv
     admin_key = env("VAULT_RELAY_ADMIN_KEY")
@@ -201,44 +214,54 @@ def main(argv):
     to = [a.strip() for a in env("VAULT_ACCOUNTING_MAIL_TO").split(",") if a.strip()]
     user = env("VAULT_ACCOUNTING_SMTP_USER")
     password = env("VAULT_ACCOUNTING_SMTP_PASS")
-    missing = []
-    if not to:
-        missing.append("VAULT_ACCOUNTING_MAIL_TO")
-    if not user:
-        missing.append("VAULT_ACCOUNTING_SMTP_USER")
-    if not password:
-        missing.append("VAULT_ACCOUNTING_SMTP_PASS")
-    if missing:
+    ntfy_url = env("VAULT_ACCOUNTING_NTFY_URL")
+    mail_ready = bool(to and user and password)
+
+    if not ntfy_url and not mail_ready:
         print(
-            "accounting-digest: письмо не отправлено — не заданы {}".format(
-                ", ".join(missing)
-            )
+            "accounting-digest: сводка в файле; доставка не настроена "
+            "(нет VAULT_ACCOUNTING_NTFY_URL и SMTP-переменных)"
         )
         return 0
     if dry_run:
-        print("accounting-digest: --dry-run, письмо не отправлялось")
+        print("accounting-digest: --dry-run, доставка не выполнялась")
         return 0
 
-    subject = "Vault — учёт на {}: доход {}, без чека {}".format(
-        report.get("as_of", "?"),
-        report.get("income_text", "—"),
-        int(report.get("unaccounted", 0)),
-    )
-    cfg = {
-        "mail_to": to,
-        "mail_from": env("VAULT_ACCOUNTING_MAIL_FROM", user),
-        "smtp_host": env("VAULT_ACCOUNTING_SMTP_HOST", "smtp.yandex.ru"),
-        "smtp_port": int(env("VAULT_ACCOUNTING_SMTP_PORT", "465")),
-        "smtp_user": user,
-        "smtp_pass": password,
-    }
-    try:
-        send_mail(subject, body, cfg)
-    except Exception as exc:
-        print("accounting-digest: письмо не ушло: {}".format(exc), file=sys.stderr)
-        return 1
-    print("accounting-digest: письмо отправлено: {}".format(", ".join(to)))
-    return 0
+    sent = 0
+    if ntfy_url:
+        try:
+            send_ntfy(ntfy_url, "Vault accounting digest", body)
+            sent += 1
+            print("accounting-digest: сводка отправлена в ntfy")
+        except Exception as exc:
+            print(
+                "accounting-digest: ntfy не ответил: {}".format(exc),
+                file=sys.stderr,
+            )
+    if mail_ready:
+        subject = "Vault — учёт на {}: доход {}, без чека {}".format(
+            report.get("as_of", "?"),
+            report.get("income_text", "—"),
+            int(report.get("unaccounted", 0)),
+        )
+        cfg = {
+            "mail_to": to,
+            "mail_from": env("VAULT_ACCOUNTING_MAIL_FROM", user),
+            "smtp_host": env("VAULT_ACCOUNTING_SMTP_HOST", "smtp.yandex.ru"),
+            "smtp_port": int(env("VAULT_ACCOUNTING_SMTP_PORT", "465")),
+            "smtp_user": user,
+            "smtp_pass": password,
+        }
+        try:
+            send_mail(subject, body, cfg)
+            sent += 1
+            print("accounting-digest: письмо отправлено: {}".format(", ".join(to)))
+        except Exception as exc:
+            print(
+                "accounting-digest: письмо не ушло: {}".format(exc),
+                file=sys.stderr,
+            )
+    return 0 if sent else 1
 
 
 if __name__ == "__main__":
