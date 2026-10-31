@@ -134,10 +134,10 @@ pub async fn run(config: Config, interval_secs: u64) -> Result<()> {
                 if cmd.get("action").and_then(|v| v.as_str()) == Some("quit") {
                     return Ok(());
                 }
-                handle_command(&cmd, &mut crypto, &contact_book, &mut client, &mut relay_state).await;
+                handle_command(&cmd, &mut crypto, &contact_book, &mut client, &mut relay_state, &mut out).await;
             }
             _ = tokio::time::sleep(interval) => {
-                tick(&mut client, &mut crypto, &mut contact_book, &relay_state, &mut seen, &mut seen_order, &mut out, &email).await;
+                tick(&mut client, &mut crypto, &mut contact_book, &mut relay_state, &mut seen, &mut seen_order, &mut out, &email).await;
                 // Дедуп на диске: переживаем рестарты без переотправки на бэклог.
                 if let Some(dir) = seen_file.parent() {
                     let _ = std::fs::create_dir_all(dir);
@@ -157,7 +157,7 @@ async fn tick(
     client: &mut EmailClient,
     crypto: &mut CryptoClient,
     contact_book: &mut ContactBook,
-    relay_state: &RelayState,
+    relay_state: &mut RelayState,
     seen: &mut HashSet<String>,
     seen_order: &mut Vec<String>,
     out: &mut std::io::Stdout,
@@ -189,18 +189,31 @@ async fn tick(
     }
     // Relay — мгновенный канал (destructive-поллинг, как /inbox REPL).
     if relay_state.enabled && !relay_state.my_token.is_empty() {
-        if let Ok(envs) = relay::poll(&relay_state.my_token) {
-            for env in envs {
-                messages.push(crate::api::email::EmailMessage {
-                    id: relay::envelope_id(&env.id),
-                    from: env.from,
-                    to: me.to_string(),
-                    subject: String::new(),
-                    body: env.body,
-                    date: String::new(),
-                    is_read: false,
-                });
+        match relay::poll_checked(&relay_state.my_token) {
+            relay::PollOutcome::Envelopes(envs) => {
+                for env in envs {
+                    messages.push(crate::api::email::EmailMessage {
+                        id: relay::envelope_id(&env.id),
+                        from: env.from,
+                        to: me.to_string(),
+                        subject: String::new(),
+                        body: env.body,
+                        date: String::new(),
+                        is_read: false,
+                    });
+                }
             }
+            // 402 = НАШ адрес мёртв: без перерегистрации очередь не доживёт
+            // никогда (register выше вызывается только при пустом токене).
+            relay::PollOutcome::Expired => match relay::register(&crypto.fingerprint()) {
+                Ok(tok) => {
+                    tracing::info!("relay: свой токен протух — выдан новый");
+                    relay_state.my_token = tok;
+                    let _ = relay_state.save();
+                }
+                Err(e) => tracing::warn!("relay re-register failed: {e}"),
+            },
+            relay::PollOutcome::Failed(e) => tracing::debug!("relay poll failed: {e}"),
         }
     }
 
@@ -277,6 +290,31 @@ async fn tick(
                 .map(|o| o.keys().collect::<Vec<_>>())
                 .unwrap_or_default()
         );
+        // Автоонбординг: конверт несёт pubkey/pq/tok отправителя — сохраняем.
+        // ДО дедупа: relay-токен получателя живёт 30 дней, а письмо с новым
+        // токеном почти всегда уже в seen — после `continue` токен не
+        // обновлялся никогда, и publish держал 402 (подписка истекла).
+        if let Some(peer_key) = value.get("key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            let pq = value.get("pq").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+            let tok = value.get("tok").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+            let mut c = contact_book
+                .get(&m.from)
+                .cloned()
+                .unwrap_or_else(|| Contact::new(&m.from, "", peer_key));
+            c.public_key = peer_key.to_string();
+            if pq.is_some() {
+                c.pq_public_key = pq.map(|s| s.to_string());
+            }
+            contact_book.add(c);
+            contacts_dirty = true;
+            if let Some(tok) = tok {
+                let lc = m.from.to_lowercase();
+                if relay_state.peers.get(&lc) != Some(&tok.to_string()) {
+                    relay_state.peers.insert(lc, tok.to_string());
+                    let _ = relay_state.save();
+                }
+            }
+        }
         // Дедуп кросс-канальный: env.id первичен (релей+почта = одно событие).
         let key = if id.is_empty() {
             format!("uid:{}", m.id)
@@ -311,30 +349,6 @@ async fn tick(
                 continue; // служебные (receipt/edit/react/call) боту в MVP не нужны
             }
         };
-        // Автоонбординг: конверт несёт pubkey/pq/tok отправителя — сохраняем.
-        if let Some(peer_key) = value.get("key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-            let pq = value.get("pq").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
-            let tok = value.get("tok").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
-            let mut c = contact_book
-                .get(&m.from)
-                .cloned()
-                .unwrap_or_else(|| Contact::new(&m.from, "", peer_key));
-            c.public_key = peer_key.to_string();
-            if pq.is_some() {
-                c.pq_public_key = pq.map(|s| s.to_string());
-            }
-            contact_book.add(c);
-            contacts_dirty = true;
-            if let Some(tok) = tok {
-                // relay.peers — state, но пишем в файл релея (тот же ключ lowercase)
-                let mut r = RelayState::load();
-                let lc = m.from.to_lowercase();
-                if r.peers.get(&lc) != Some(&tok.to_string()) {
-                    r.peers.insert(lc, tok.to_string());
-                    let _ = r.save();
-                }
-            }
-        }
         // Self-копии (mail.ru складывает From==To в INBOX/ToMyself) —
         // это исходящий трафик самого аккаунта. Без фильтра бот отвечает
         // на свои же ответы → бесконечная петля. Форма адреса — ядро
@@ -403,30 +417,68 @@ fn decrypt_envelope(crypto: &CryptoClient, body: &str) -> anyhow::Result<Option<
 
 /// Команда send из stdin: E2E на pubkey контакта (гибрид PQ если есть) +
 /// письмо (stealth, пустая тема) + relay-дубль.
+///
+/// Исход — всегда ack-событие в stdout (`{"type":"ack","corr":…}`): без него
+/// мост отвечает «ok» сразу после постановки команды в пайп и сводка учёта
+/// считалась отправленной, даже когда письмо не уходило никогда.
 async fn handle_command(
     cmd: &Value,
     crypto: &mut CryptoClient,
     contact_book: &ContactBook,
     client: &mut EmailClient,
     relay_state: &mut RelayState,
+    out: &mut std::io::Stdout,
 ) {
-    let Some(to) = cmd.get("to").and_then(|v| v.as_str()) else {
-        tracing::warn!("send without to");
-        return;
-    };
+    let corr = cmd
+        .get("corr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let to = cmd.get("to").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    match send_command(cmd, crypto, contact_book, client, relay_state).await {
+        Ok((env_id, relay)) => {
+            tracing::info!("send accepted: to={to} env={env_id} relay={relay}");
+            emit(
+                out,
+                &serde_json::json!({"type":"ack","corr":corr,"ok":true,"env":env_id,"relay":relay}),
+            );
+        }
+        Err(e) => {
+            tracing::warn!("send failed: to={to}: {e}");
+            emit(
+                out,
+                &serde_json::json!({"type":"ack","corr":corr,"ok":false,"error":e}),
+            );
+        }
+    }
+}
+
+/// Один шаг отправки: контакт → E2E → письмо → relay-дубль. Ошибка — строка
+/// для ack; relay-отказ ошибкой НЕ считается (email — источник истины).
+async fn send_command(
+    cmd: &Value,
+    crypto: &mut CryptoClient,
+    contact_book: &ContactBook,
+    client: &mut EmailClient,
+    relay_state: &mut RelayState,
+) -> Result<(String, String), String> {
+    let to = cmd
+        .get("to")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "send without to".to_string())?;
     let text = cmd.get("text").and_then(|v| v.as_str()).unwrap_or("");
-    let Some(contact) = contact_book.get(to) else {
-        tracing::warn!("send to unknown contact {to}");
-        return;
-    };
+    if text.is_empty() {
+        return Err("send without text".to_string());
+    }
+    let contact = contact_book
+        .get(to)
+        .ok_or_else(|| format!("unknown contact {to}"))?;
     if contact.public_key.is_empty() {
-        tracing::warn!("no pubkey for {to}");
-        return;
+        return Err(format!("no pubkey for {to}"));
     }
-    if let Err(e) = crypto.set_peer_key_pq(&contact.public_key, contact.pq_public_key.as_deref()) {
-        tracing::warn!("set peer key failed: {e}");
-        return;
-    }
+    crypto
+        .set_peer_key_pq(&contact.public_key, contact.pq_public_key.as_deref())
+        .map_err(|e| format!("set peer key failed: {e}"))?;
     let envelope = serde_json::json!({
         "vault": 1,
         "id": uuid::Uuid::new_v4().to_string(),
@@ -442,20 +494,32 @@ async fn handle_command(
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0),
     });
-    let encrypted = match crypto.encrypt_vault(&envelope.to_string()) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!("encrypt failed: {e}");
-            return;
-        }
-    };
-    if let Err(e) = client.send_email(to, "", &encrypted).await {
-        tracing::warn!("smtp to {to} failed: {e}");
-        return; // relay без письма не шлём: email — источник истины
+    let encrypted = crypto
+        .encrypt_vault(&envelope.to_string())
+        .map_err(|e| format!("encrypt failed: {e}"))?;
+    // Без таймаутов lettre зависает на SMTP навсегда, а вместе с ней и весь
+    // цикл слушателя: select! не доходит ни до команды, ни до тика.
+    let smtp = std::time::Duration::from_secs(90);
+    match tokio::time::timeout(smtp, client.send_email(to, "", &encrypted)).await {
+        Err(_) => return Err(format!("smtp timeout after {}s", smtp.as_secs())),
+        Ok(Err(e)) => return Err(format!("smtp to {to} failed: {e}")),
+        Ok(Ok(())) => {}
     }
-    let env_id = envelope.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let from = cmd.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let _ = relay::publish(relay_state, to, &env_id, &encrypted, &from, &crypto.fingerprint());
+    let env_id = envelope
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let from = cmd
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let relay = relay::publish(relay_state, to, &env_id, &encrypted, &from, &crypto.fingerprint());
+    if let relay::PubOutcome::Error(e) = &relay {
+        tracing::warn!("relay publish failed for {to}: {e}");
+    }
+    Ok((env_id, format!("{relay:?}")))
 }
 
 fn emit(out: &mut std::io::Stdout, v: &Value) {

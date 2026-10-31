@@ -191,6 +191,8 @@ pub enum PubOutcome {
     NoMyToken,
     NoPeerToken,
     DailyLimit,
+    /// Адрес получателя протух (402): peer забыт, ждём новый конверт от него.
+    PeerExpired,
     Error(String),
 }
 
@@ -251,7 +253,18 @@ pub fn publish(
                     PubOutcome::Error("HTTP 429 rate limit".into())
                 }
             }
-            other => PubOutcome::Error(format!("HTTP {other}")),
+            other => {
+                if vault_core::relay::is_subscription_expired(other, &res.body) {
+                    // Адрес получателя мёртв: держать его в peers = молчаливый
+                    // 402 на каждой отправке. Забываем — слушатель выучит новый
+                    // токен из первого же входящего конверта (автоонбординг).
+                    state.peers.remove(&chat_id.to_lowercase());
+                    let _ = state.save();
+                    PubOutcome::PeerExpired
+                } else {
+                    PubOutcome::Error(format!("HTTP {other} {}", res.body))
+                }
+            }
         },
         Err(e) => PubOutcome::Error(e.to_string()),
     }
@@ -281,6 +294,34 @@ pub struct RelayEnvelope {
 /// GET /relay/poll?wait=0 с Authorization: VaultRelay <myToken> —
 /// destructive read: забранное удаляется из очереди. 204 = очередь пуста.
 pub fn poll(my_token: &str) -> Result<Vec<RelayEnvelope>> {
+    let res = poll_http(my_token)?;
+    parse_poll_envelopes(&res)
+}
+
+/// То же, но с различением протухания адреса: 402 от релея значит, что мёртв
+/// НАШ read-токен и очередь не доживёт до следующего тика. Повтор запроса
+/// бессмысленен — лечится только перерегистрацией.
+pub enum PollOutcome {
+    Envelopes(Vec<RelayEnvelope>),
+    Expired,
+    Failed(String),
+}
+
+pub fn poll_checked(my_token: &str) -> PollOutcome {
+    let res = match poll_http(my_token) {
+        Ok(res) => res,
+        Err(e) => return PollOutcome::Failed(format!("{e:#}")),
+    };
+    if vault_core::relay::is_subscription_expired(res.status, &res.body) {
+        return PollOutcome::Expired;
+    }
+    match parse_poll_envelopes(&res) {
+        Ok(envs) => PollOutcome::Envelopes(envs),
+        Err(e) => PollOutcome::Failed(format!("{e:#}")),
+    }
+}
+
+fn poll_http(my_token: &str) -> Result<HttpResponse> {
     // Микро-GET поверх того же TLS-стека (код выше — POST; GET не несёт тела).
     let (host, path) = parse_url(&format!("{DEFAULT_RELAY_URL}/poll?wait=0"))?;
     let tls = native_tls::TlsConnector::new().context("TLS connector")?;
@@ -299,7 +340,10 @@ pub fn poll(my_token: &str) -> Result<Vec<RelayEnvelope>> {
     tls.write_all(req.as_bytes()).context("write request")?;
     let mut raw = String::new();
     tls.read_to_string(&mut raw).context("read response")?;
-    let res = parse_http_response(&raw)?;
+    parse_http_response(&raw)
+}
+
+fn parse_poll_envelopes(res: &HttpResponse) -> Result<Vec<RelayEnvelope>> {
     if res.status == 204 || res.body.is_empty() {
         tracing::debug!("relay poll: empty (204)");
         return Ok(Vec::new());

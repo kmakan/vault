@@ -46,7 +46,7 @@
     "vault-core/src/crypto_pq.rs": 25,
     "vault-core/src/identity.rs": 70,
     "vault-core/src/key_store.rs": 10,
-    "vault-core/src/relay.rs": 12,
+    "vault-core/src/relay.rs": 16,
     "vault-core/src/settings.rs": 9,
     "vault-core/src/transport.rs": 11,
     "vault-desktop/src-tauri/src/audio.rs": 18,

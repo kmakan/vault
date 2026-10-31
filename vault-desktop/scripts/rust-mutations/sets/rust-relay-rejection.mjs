@@ -1,11 +1,17 @@
-// Набор мутаций: rust-relay-rejection — чем был 429 релея.
+// Набор мутаций: rust-relay-rejection — чем отказ релея отличается от другого
+// отказа (429 ДВА и 402).
 //
 // ЗАЧЕМ. Сервер отвечает 429 и за суточную квоту издателя, и за вспышку
 // запросов; для клиента это противоположные решения (молчать до полуночи UTC
 // против «повтори сейчас»). Пока различия не было, пачка сигналов звонка
-// (setup + ICE-кандидаты, те же 10 rps) глушила ускорение на сутки. Правило
-// читает ответ СЕРВЕРА, значит оно в ядре (ADR-005), и меряется здесь, а не
-// двусторонней константой во фронте.
+// (setup + ICE-кандидаты, те же 10 rps) глушила ускорение на сутки.
+// Третья ветка — 402: адрес очереди протух, и это единственный отказ, который
+// не лечится ни повтором, ни молчанием (перерегистрация своего / забывание
+// чужого). Различать 402 по ОДНОМУ статусу нельзя: те же 402 отдают платёжные
+// ответы (`not_paid_yet`, `plan_expired`), где от клиента ждут денег, а не
+// нового адреса.
+// Правило читает ответ СЕРВЕРА, значит оно в ядре (ADR-005), и меряется здесь,
+// а не двусторонней константой во фронте.
 export default {
   id: 'rust-relay-rejection',
   crate: 'vault-core',
@@ -50,5 +56,17 @@ export default {
     { name: 'поле сериализуется не в camelCase (мост отдаёт retry_after, JS ждёт retryAfter)',
       pattern: '#[serde(rename_all = "camelCase")]\npub struct Rejection {',
       replacement: 'pub struct Rejection {' },
+    { name: 'протухание определяется только по тексту (любой 401/403 со словом «expired» стал бы перерегистрацией)',
+      pattern: '    status == HTTP_SUBSCRIPTION_EXPIRED && body.contains(SUBSCRIPTION_EXPIRED_MARK)',
+      replacement: '    body.contains(SUBSCRIPTION_EXPIRED_MARK)' },
+    { name: 'протухание определяется только по коду (402 «bad recipient token» вёл бы к ложной перерегистрации)',
+      pattern: '    status == HTTP_SUBSCRIPTION_EXPIRED && body.contains(SUBSCRIPTION_EXPIRED_MARK)',
+      replacement: '    status == HTTP_SUBSCRIPTION_EXPIRED' },
+    { name: 'порог 402 сдвинут (настоящее протухание очереди не узнаётся никогда)',
+      pattern: 'pub const HTTP_SUBSCRIPTION_EXPIRED: u16 = 402;',
+      replacement: 'pub const HTTP_SUBSCRIPTION_EXPIRED: u16 = 403;' },
+    { name: 'маркер текста изменён (poll/pub 402 перестают распознаваться)',
+      pattern: 'const SUBSCRIPTION_EXPIRED_MARK: &str = "subscription expired";',
+      replacement: 'const SUBSCRIPTION_EXPIRED_MARK: &str = "queue expired";' },
   ],
 };

@@ -71,6 +71,21 @@ pub fn pub_rejection(status: u16, body: &str) -> Rejection {
     }
 }
 
+/// 402 — адрес очереди протух. `POST /relay/pub` отвечает «recipient
+/// subscription expired», `GET /relay/poll` — «subscription expired».
+pub const HTTP_SUBSCRIPTION_EXPIRED: u16 = 402;
+
+/// Общее у обоих ответов: у одного слова «recipient» перед ним.
+const SUBSCRIPTION_EXPIRED_MARK: &str = "subscription expired";
+
+/// Из всех отказов релея это единственный, который НЕ лечится повтором
+/// запроса: свой токен меняют перерегистрацией, чужой адрес забывают и ждут
+/// нового конверта от собеседника. Решение о протоколе живёт здесь, а не в
+/// двух клиентах по копии (ADR-005).
+pub fn is_subscription_expired(status: u16, body: &str) -> bool {
+    status == HTTP_SUBSCRIPTION_EXPIRED && body.contains(SUBSCRIPTION_EXPIRED_MARK)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +111,30 @@ mod tests {
                 retry_after: None
             }
         );
+    }
+
+    #[test]
+    fn expired_queue_address_is_recognised_for_both_calls() {
+        // 402 приходит и на pub (чужой адрес), и на poll (свой) — текст разный,
+        // решение одно: повторять запрос бессмысленно.
+        assert!(is_subscription_expired(
+            402,
+            "{\"error\":\"subscription expired\"}"
+        ));
+        assert!(is_subscription_expired(
+            402,
+            "{\"error\":\"recipient subscription expired\"}"
+        ));
+    }
+
+    #[test]
+    fn other_failures_are_not_expiry() {
+        // Отзыв и «чужой fp» лечатся по-другому и не должны уходить в ветку
+        // перерегистрации: 401/403 с похожим текстом — не протухание.
+        assert!(!is_subscription_expired(401, "{\"error\":\"token revoked\"}"));
+        assert!(!is_subscription_expired(403, "{\"error\":\"subscription expired\"}"));
+        assert!(!is_subscription_expired(402, "{\"error\":\"bad recipient token\"}"));
+        assert!(!is_subscription_expired(200, ""));
     }
 
     #[test]
