@@ -8,7 +8,9 @@
 
 
 use axum::{
-    extract::{connect_info::ConnectInfo, Json, Path, Query, State, WebSocketUpgrade, ws::Message},
+    extract::{
+        connect_info::ConnectInfo, Form, Json, Path, Query, State, WebSocketUpgrade, ws::Message,
+    },
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Json as AxumJson, Response},
     routing::{get, post},
@@ -20,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use vault_relay::accounting;
 use vault_relay::channel_keys;
 use vault_relay::fcm::FcmSender;
 use vault_relay::persist::{self, FpToken, PersistedState};
@@ -134,6 +137,13 @@ pub struct AppState {
     /// Отозванные токены (hash): токен stateless, поэтому отзыв — денлист,
     /// который проверяется на каждом чтении/публикации. Персист обязателен.
     pub revoked_tokens: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Реестр учёта (чеки, уплаченный налог) — отдельный файл от state.json:
+    /// порча бухгалтерии не должна ронять протокол.
+    pub accounting: std::sync::Mutex<accounting::Ledger>,
+    /// Куда писать реестр учёта (None — учёт не сохраняется, только тесты).
+    pub accounting_path: Option<std::path::PathBuf>,
+    /// CSRF-токен форм страницы учёта (на процесс; страница только localhost).
+    pub accounting_csrf: String,
     /// t_b8f44bdf: принимать ли «заявку» уже имеющегося токена (`keep` в
     /// /relay/register) — клиент связывает fp → токен ДО протухания, чтобы
     /// адрес очереди не сменился. Kill-switch `VAULT_RELAY_KEEP_CLAIM=0`
@@ -187,6 +197,19 @@ impl AppState {
                     std::collections::BTreeSet::new(),
                 ),
             };
+        let accounting_path = std::env::var("VAULT_RELAY_ACCOUNTING")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                state_path
+                    .as_ref()
+                    .map(|p| p.with_file_name("vault-relay-accounting.json"))
+            });
+        let accounting_ledger = match &accounting_path {
+            Some(p) => accounting::Ledger::load(p),
+            None => accounting::Ledger::default(),
+        };
         let require_sig = std::env::var("VAULT_RELAY_REQUIRE_SIG")
             .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
             .unwrap_or(false);
@@ -221,6 +244,9 @@ impl AppState {
             fp_tokens: std::sync::Mutex::new(fp_tokens),
             tester_codes: std::sync::Mutex::new(tester_codes),
             revoked_tokens: std::sync::Mutex::new(revoked_tokens),
+            accounting: std::sync::Mutex::new(accounting_ledger),
+            accounting_path,
+            accounting_csrf: hex::encode(rand::random::<[u8; 16]>()),
             keep_claim: std::sync::atomic::AtomicBool::new(
                 std::env::var("VAULT_RELAY_KEEP_CLAIM")
                     .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
@@ -358,6 +384,17 @@ impl AppState {
         );
         if let Err(e) = st.save_atomic(path) {
             tracing::error!(path = %path.display(), error = %e, "state: save failed");
+        }
+    }
+
+    /// Атомарно записать реестр учёта (чеки и налог) — свой файл, свой
+    /// мьютекс. Ошибка не фатальна для ответа, но логируется громко:
+    /// потерянная отметка о чеке — это штраф 20% суммы расчёта.
+    pub fn save_accounting(&self) {
+        let Some(path) = &self.accounting_path else { return };
+        let snapshot = self.accounting.lock().expect("accounting lock").clone();
+        if let Err(e) = snapshot.save_atomic(path) {
+            tracing::error!(path = %path.display(), error = %e, "accounting: save failed");
         }
     }
 
@@ -2119,6 +2156,229 @@ async fn admin_revoke(
         .into_response()
 }
 
+// ───────────────────────── Админ: учёт оплат и налог ─────────────────────
+//
+// Учёт живёт на релее, потому что индивидуальные платежи не видны в
+// выписке карты (ЮKassa перечисляет сводными выплатами). Источник сумм —
+// API провайдера; чеки и уплаченный налог — реестр релея (accounting.rs),
+// который заполняется отметками со страницы. Страница открывается только с
+// localhost (nginx /admin не проксирует), вход — та же секретная строка
+// VAULT_RELAY_ADMIN_KEY: браузеру она приходит как Basic-пароль.
+
+/// Сравнение постоянного времени (длина + XOR по всем байтам).
+fn ct_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
+/// Доступ к странице учёта: заголовок `x-admin-key` (curl, сводка) ИЛИ
+/// HTTP Basic, где пароль — тот же админ-ключ (браузер; имя любое).
+fn admin_web_ok(app: &AppState, headers: &HeaderMap) -> bool {
+    if admin_ok(app, headers) {
+        return true;
+    }
+    let expected = match app.admin_key.as_deref() {
+        Some(k) => k,
+        None => return false,
+    };
+    let Some(raw) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(b64) = raw.strip_prefix("Basic ") else {
+        return false;
+    };
+    use base64::Engine;
+    let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) else {
+        return false;
+    };
+    let Ok(text) = String::from_utf8(decoded) else {
+        return false;
+    };
+    let Some((_, pass)) = text.split_once(':') else {
+        return false;
+    };
+    ct_eq(pass, expected)
+}
+
+/// 401 с Basic-челленджем: браузер сам покажет окно ввода ключа.
+fn basic_401() -> Response {
+    let mut r = err(StatusCode::UNAUTHORIZED, "admin auth required");
+    r.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("Basic realm=\"vault-admin\", charset=\"UTF-8\""),
+    );
+    r
+}
+
+/// Свежий отчёт: строки платежей от провайдера + реестр чеков и налога.
+/// Ошибка провайдера не отменяет страницу — реестр показывается с пометкой,
+/// что суммы сейчас неполные (пустой отчёт выглядел бы как «доход 0»).
+async fn accounting_report(app: &AppState) -> (accounting::Report, Option<String>) {
+    let ledger = app.accounting.lock().expect("accounting lock").clone();
+    let (rows, error) = match app.payment.as_ref() {
+        Some(p) => match p.list_payments(100).await {
+            Ok(rows) => (rows, None),
+            Err(e) => (Vec::new(), Some(e.to_string())),
+        },
+        None => (Vec::new(), Some("платежи выключены (нет ключей)".to_string())),
+    };
+    (accounting::build_report(&rows, &ledger, now()), error)
+}
+
+/// GET /admin/accounting — страница учёта (браузер, Basic-пароль = ключ).
+async fn admin_accounting_page(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if app.admin_key.is_none() {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    if !admin_web_ok(&app, &headers) {
+        return basic_401();
+    }
+    let (report, error) = accounting_report(&app).await;
+    let mut resp = Html(accounting::page_html(
+        &report,
+        &app.accounting_csrf,
+        error.as_deref(),
+    ))
+    .into_response();
+    let h = resp.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert(
+        header::HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    h.insert(
+        header::HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
+        ),
+    );
+    resp
+}
+
+/// GET /admin/payments — тот же отчёт JSON (curl, ежедневная сводка).
+async fn admin_accounting_json(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !admin_web_ok(&app, &headers) {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    let (report, error) = accounting_report(&app).await;
+    let mut v = match serde_json::to_value(&report) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("report: {e}")),
+    };
+    v["error"] = serde_json::json!(error);
+    let mut resp = (StatusCode::OK, AxumJson(v)).into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
+}
+
+#[derive(Deserialize)]
+pub struct ReceiptForm {
+    csrf: String,
+    payment_id: String,
+}
+
+/// POST /admin/receipt — «чек в "Мой налог" сформирован» для платежа.
+/// Отмечаем только подтверждённый провайдером платёж: иначе реестр
+/// разойдётся с деньгами, а штраф считается по деньгам.
+async fn admin_receipt_mark(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(form): Form<ReceiptForm>,
+) -> Response {
+    if !admin_web_ok(&app, &headers) {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    if !ct_eq(&form.csrf, &app.accounting_csrf) {
+        return err(StatusCode::FORBIDDEN, "bad csrf");
+    }
+    let id = form.payment_id.trim();
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "bad payment id");
+    }
+    let rows = match app.payment.as_ref() {
+        Some(p) => match p.list_payments(100).await {
+            Ok(rows) => rows,
+            Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("yookassa: {e}")),
+        },
+        None => return err(StatusCode::SERVICE_UNAVAILABLE, "payments disabled"),
+    };
+    let Some(row) = rows.iter().find(|r| r.id == id) else {
+        return err(StatusCode::NOT_FOUND, "payment not found");
+    };
+    if row.status != "succeeded" {
+        return err(StatusCode::CONFLICT, "payment is not succeeded");
+    }
+    {
+        let mut ledger = app.accounting.lock().expect("accounting lock");
+        ledger.receipts.insert(id.to_string(), now());
+    }
+    app.save_accounting();
+    see_other_accounting()
+}
+
+#[derive(Deserialize)]
+pub struct TaxForm {
+    csrf: String,
+    month: String,
+}
+
+/// POST /admin/tax-paid — «налог за месяц уплачен» (срок — 28-е).
+async fn admin_tax_paid_mark(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(form): Form<TaxForm>,
+) -> Response {
+    if !admin_web_ok(&app, &headers) {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    if !ct_eq(&form.csrf, &app.accounting_csrf) {
+        return err(StatusCode::FORBIDDEN, "bad csrf");
+    }
+    let month = form.month.trim();
+    if !accounting::valid_month(month) {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "bad month");
+    }
+    // Отмечаем только месяц с доходом: «уплачено» у месяца, которого нет в
+    // отчёте, скрыло бы реальный долг, если платежи придут позже.
+    let (report, error) = accounting_report(&app).await;
+    if let Some(e) = error {
+        return err(StatusCode::BAD_GATEWAY, &format!("yookassa: {e}"));
+    }
+    if !report.months.iter().any(|m| m.key == month) {
+        return err(StatusCode::NOT_FOUND, "month has no income");
+    }
+    {
+        let mut ledger = app.accounting.lock().expect("accounting lock");
+        ledger.tax_paid.insert(month.to_string(), now());
+    }
+    app.save_accounting();
+    see_other_accounting()
+}
+
+/// После формы — назад на страницу учёта (303: браузер перезапросит её GET).
+fn see_other_accounting() -> Response {
+    let mut r = StatusCode::SEE_OTHER.into_response();
+    r.headers_mut()
+        .insert(header::LOCATION, HeaderValue::from_static("/admin/accounting"));
+    r
+}
+
 // ───────────────────────── Платёжные роуты (шаг 4–5 плана) ──────────────
 //
 // Сервер сам спрашивает платёжного провайдера, доверяя клиенту только в
@@ -2806,6 +3066,11 @@ async fn main() {
         .route("/admin/test-code", post(admin_test_code_create))
         .route("/admin/test-codes", get(admin_test_codes_list))
         .route("/admin/revoke", post(admin_revoke))
+        // Учёт оплат и налог НПД: страница (браузер, Basic) и JSON (curl).
+        .route("/admin/accounting", get(admin_accounting_page))
+        .route("/admin/payments", get(admin_accounting_json))
+        .route("/admin/receipt", post(admin_receipt_mark))
+        .route("/admin/tax-paid", post(admin_tax_paid_mark))
         .layer(cors_layer())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
@@ -5359,5 +5624,283 @@ mod tests {
             );
         }
         assert!(app.daily_pub.lock().unwrap().is_empty());
+    }
+
+    // ── Учёт оплат: страница, JSON и отметки ──
+
+    /// Провайдер-заглушка: список платежей фиксирован, сессии не создаёт.
+    struct RowsProvider(Vec<vault_relay::payments::PaymentRow>);
+
+    impl vault_relay::payments::PaymentProvider for RowsProvider {
+        fn name(&self) -> &str {
+            "rows"
+        }
+        fn create_checkout<'a>(
+            &'a self,
+            _req: &'a vault_relay::payments::CheckoutRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            vault_relay::payments::Checkout,
+                            vault_relay::payments::PaymentError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move { Err(vault_relay::payments::PaymentError::Unavailable) })
+        }
+        fn verify<'a>(
+            &'a self,
+            _checkout: &'a vault_relay::payments::Checkout,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            vault_relay::payments::PaymentStatus,
+                            vault_relay::payments::PaymentError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move { Err(vault_relay::payments::PaymentError::Unavailable) })
+        }
+        fn list_payments<'a>(
+            &'a self,
+            _limit: u32,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            Vec<vault_relay::payments::PaymentRow>,
+                            vault_relay::payments::PaymentError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let rows = self.0.clone();
+            Box::pin(async move { Ok(rows) })
+        }
+    }
+
+    fn pay_row(id: &str, status: &str) -> vault_relay::payments::PaymentRow {
+        vault_relay::payments::PaymentRow {
+            id: id.to_string(),
+            status: status.to_string(),
+            paid: status == "succeeded",
+            created_at: "2026-10-31T06:45:44.123Z".to_string(),
+            amount: vault_relay::payments::PaymentAmount {
+                value: "149.00".to_string(),
+                currency: "RUB".to_string(),
+            },
+            description: "Доступ к тарифу Pro (Vault) на 1 месяц".to_string(),
+            test: false,
+        }
+    }
+
+    fn accounting_app(
+        admin: Option<&str>,
+        provider: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
+    ) -> Arc<AppState> {
+        Arc::new(AppState::new(
+            Store::new(),
+            keys(),
+            true,
+            String::new(),
+            None,
+            admin.map(str::to_string),
+            0,
+            None,
+            None,
+            provider,
+        ))
+    }
+
+    fn admin_hdr() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-admin-key", "s3cret".parse().expect("hdr"));
+        h
+    }
+
+    /// Без VAULT_RELAY_ADMIN_KEY учётных роутов не существует (404).
+    #[tokio::test]
+    async fn accounting_hidden_without_admin_key() {
+        let app = accounting_app(None, None);
+        assert_eq!(
+            admin_accounting_page(State(app.clone()), HeaderMap::new())
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            admin_accounting_json(State(app), HeaderMap::new())
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Страница: браузер получает Basic-челлендж, ключ = пароль; в ответе
+    /// отчёт и запрет кэширования (страница показывает доходы).
+    #[tokio::test]
+    async fn accounting_page_basic_password_and_headers() {
+        use base64::Engine;
+        let provider: Arc<dyn vault_relay::payments::PaymentProvider> =
+            Arc::new(RowsProvider(vec![pay_row("pay_ok", "succeeded")]));
+        let app = accounting_app(Some("s3cret"), Some(provider));
+        let mut bad = HeaderMap::new();
+        let b64 = base64::engine::general_purpose::STANDARD.encode("admin:wrong");
+        bad.insert(header::AUTHORIZATION, format!("Basic {b64}").parse().expect("hdr"));
+        let resp = admin_accounting_page(State(app.clone()), bad).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            resp.headers().contains_key(header::WWW_AUTHENTICATE),
+            "без челленджа браузер не спросит пароль"
+        );
+        let mut good = HeaderMap::new();
+        let b64 = base64::engine::general_purpose::STANDARD.encode("admin:s3cret");
+        good.insert(header::AUTHORIZATION, format!("Basic {b64}").parse().expect("hdr"));
+        let resp = admin_accounting_page(State(app), good).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert!(resp.headers().contains_key("content-security-policy"));
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("Учёт оплат"), "страница отчёта");
+        assert!(body.contains("pay_ok"), "строка платежа на странице");
+    }
+
+    /// JSON-отчёт: доход, «без чека» и налог по вычету — те же числа, что
+    /// увидит человек на странице.
+    #[tokio::test]
+    async fn accounting_json_counts_unaccounted_and_tax() {
+        let provider: Arc<dyn vault_relay::payments::PaymentProvider> = Arc::new(RowsProvider(
+            vec![pay_row("pay_ok", "succeeded"), pay_row("pay_pending", "pending")],
+        ));
+        let app = accounting_app(Some("s3cret"), Some(provider));
+        let resp = admin_accounting_json(State(app), admin_hdr()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(v["income_kopecks"], 14_900);
+        assert_eq!(v["unaccounted"], 1, "оплата без чека — в отдельный счётчик");
+        assert_eq!(v["pending"], 1);
+        assert_eq!(v["tax_kopecks"], 447, "149 ₽ × 4% − вычет 1% = 4,47 ₽");
+        assert!(v["error"].is_null(), "провайдер ответил — ошибки нет");
+    }
+
+    /// Провайдер не ответил — отчёт честно говорит об этом, а не показывает
+    /// «доход 0» (по нему владелец решил бы, что платить нечего).
+    #[tokio::test]
+    async fn accounting_json_reports_provider_problem() {
+        let app = accounting_app(Some("s3cret"), None);
+        let resp = admin_accounting_json(State(app), admin_hdr()).await;
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("выключены"),
+            "учёт обязан сказать, почему пуст"
+        );
+    }
+
+    /// Отметка чека: форма без csrf не работает, чек — только у
+    /// подтверждённой оплаты, успех возвращает на страницу (303).
+    #[tokio::test]
+    async fn receipt_mark_checks_csrf_and_payment_state() {
+        let provider: Arc<dyn vault_relay::payments::PaymentProvider> = Arc::new(RowsProvider(
+            vec![pay_row("pay_ok", "succeeded"), pay_row("pay_pending", "pending")],
+        ));
+        let app = accounting_app(Some("s3cret"), Some(provider));
+        let csrf = app.accounting_csrf.clone();
+        let h = admin_hdr();
+        let bad = admin_receipt_mark(
+            State(app.clone()),
+            h.clone(),
+            Form(ReceiptForm { csrf: "wrong".into(), payment_id: "pay_ok".into() }),
+        )
+        .await;
+        assert_eq!(bad.status(), StatusCode::FORBIDDEN, "без csrf форма не работает");
+        let pending = admin_receipt_mark(
+            State(app.clone()),
+            h.clone(),
+            Form(ReceiptForm { csrf: csrf.clone(), payment_id: "pay_pending".into() }),
+        )
+        .await;
+        assert_eq!(
+            pending.status(),
+            StatusCode::CONFLICT,
+            "чек — только у подтверждённой оплаты"
+        );
+        let unknown = admin_receipt_mark(
+            State(app.clone()),
+            h.clone(),
+            Form(ReceiptForm { csrf: csrf.clone(), payment_id: "pay_missing".into() }),
+        )
+        .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+        let ok = admin_receipt_mark(
+            State(app.clone()),
+            h,
+            Form(ReceiptForm { csrf, payment_id: "pay_ok".into() }),
+        )
+        .await;
+        assert_eq!(ok.status(), StatusCode::SEE_OTHER);
+        assert_eq!(ok.headers().get(header::LOCATION).unwrap(), "/admin/accounting");
+        assert!(app.accounting.lock().unwrap().receipts.contains_key("pay_ok"));
+    }
+
+    /// Отметка налога: месяц проверяется календарём и наличием дохода.
+    #[tokio::test]
+    async fn tax_mark_only_for_month_with_income() {
+        let provider: Arc<dyn vault_relay::payments::PaymentProvider> =
+            Arc::new(RowsProvider(vec![pay_row("pay_ok", "succeeded")]));
+        let app = accounting_app(Some("s3cret"), Some(provider));
+        let csrf = app.accounting_csrf.clone();
+        let h = admin_hdr();
+        let bad_csrf = admin_tax_paid_mark(
+            State(app.clone()),
+            h.clone(),
+            Form(TaxForm { csrf: "wrong".into(), month: "2026-10".into() }),
+        )
+        .await;
+        assert_eq!(bad_csrf.status(), StatusCode::FORBIDDEN);
+        let bad = admin_tax_paid_mark(
+            State(app.clone()),
+            h.clone(),
+            Form(TaxForm { csrf: csrf.clone(), month: "2026-13".into() }),
+        )
+        .await;
+        assert_eq!(bad.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let empty = admin_tax_paid_mark(
+            State(app.clone()),
+            h.clone(),
+            Form(TaxForm { csrf: csrf.clone(), month: "2020-01".into() }),
+        )
+        .await;
+        assert_eq!(
+            empty.status(),
+            StatusCode::NOT_FOUND,
+            "месяц без дохода не отмечаем"
+        );
+        let ok = admin_tax_paid_mark(
+            State(app.clone()),
+            h,
+            Form(TaxForm { csrf, month: "2026-10".into() }),
+        )
+        .await;
+        assert_eq!(ok.status(), StatusCode::SEE_OTHER);
+        assert!(app.accounting.lock().unwrap().tax_paid.contains_key("2026-10"));
     }
 }

@@ -104,6 +104,46 @@ pub enum PaymentStatus {
     Failed(String),
 }
 
+/// Строка списка платежей провайдера (ЮKassa `GET /payments`).
+///
+/// Источник истины для учёта денег: банковская выписка показывает только
+/// сводную выплату, а каждый платёж виден здесь. Сумма — строкой, как её
+/// отдаёт ЮKassa; разбор в копейки — в `accounting`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaymentRow {
+    pub id: String,
+    pub status: String,
+    #[serde(default)]
+    pub paid: bool,
+    pub created_at: String,
+    pub amount: PaymentAmount,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub test: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaymentAmount {
+    pub value: String,
+    pub currency: String,
+}
+
+/// Разбор ответа `GET /payments`: список строк, кривые записи отбрасываются.
+///
+/// Отсутствие `items` — ошибка провайдера, а не «платежей нет»: пустой учёт
+/// при живой кассе опаснее честной ошибки (владелец решил бы, что доход 0).
+pub fn parse_payments_list(body: &serde_json::Value) -> Result<Vec<PaymentRow>, PaymentError> {
+    let items = body
+        .get("items")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| PaymentError::Rejected("yookassa: no items in list".into()))?;
+    Ok(items
+        .iter()
+        .filter_map(|it| serde_json::from_value::<PaymentRow>(it.clone()).ok())
+        .collect())
+}
+
 /// Платёжный провайдер.
 ///
 /// Реализация отвечает на два вопроса: «создай сессию оплаты» и «оплачено ли».
@@ -124,6 +164,15 @@ pub trait PaymentProvider: Send + Sync {
         &'a self,
         checkout: &'a Checkout,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<PaymentStatus, PaymentError>> + Send + 'a>>;
+    /// Список платежей для учёта (свежие первыми). По умолчанию — недоступно:
+    /// тестовый провайдер денег не принимает, и выдумывать ему список нельзя.
+    fn list_payments<'a>(
+        &'a self,
+        limit: u32,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<PaymentRow>, PaymentError>> + Send + 'a>> {
+        let _ = limit;
+        Box::pin(async move { Err(PaymentError::Unavailable) })
+    }
 }
 
 /// Тестовый провайдер: оплата подтверждается МГНОВЕННО.
@@ -516,6 +565,27 @@ impl PaymentProvider for YkProvider {
         }
         })
     }
+
+    fn list_payments<'a>(
+        &'a self,
+        limit: u32,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<PaymentRow>, PaymentError>> + Send + 'a>>
+    {
+        let limit = limit.clamp(1, 100);
+        let url = format!("{}/payments?limit={}", self.api_base, limit);
+        let http = &*self.http;
+        Box::pin(async move {
+            let (status, resp) = http
+                .send("GET", &url, &self.shop_id, &self.secret, None, None)
+                .await
+                .map_err(PaymentError::Rejected)?;
+            match status {
+                200 => parse_payments_list(&resp),
+                401 | 403 | 404 => Err(PaymentError::Unavailable),
+                other => Err(PaymentError::Rejected(format!("yookassa list: HTTP {other}"))),
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -669,6 +739,25 @@ mod tests {
         (p, fake)
     }
 
+    /// Заглушка под list_payments: ответы только на GET (POST не нужен).
+    fn yk_get(
+        replies: Vec<(u16, serde_json::Value)>,
+    ) -> (YkProvider, std::sync::Arc<FakeYkHttp>) {
+        let fake = std::sync::Arc::new(FakeYkHttp {
+            post_reply: Mutex::new(None),
+            get_replies: Mutex::new(VecDeque::from(replies)),
+            pub_calls: Mutex::new(Vec::new()),
+        });
+        let p = YkProvider::with_http(
+            "shop".into(),
+            "secret".into(),
+            "https://api.example.test/v3".into(),
+            "https://relay.example.test".into(),
+            fake.clone(),
+        );
+        (p, fake)
+    }
+
     #[tokio::test]
     async fn yk_create_checkout_posts_amount_and_keeps_payment_ref() {
         let (p, calls) = yk(vec![(
@@ -706,6 +795,67 @@ mod tests {
             "https://relay.example.test/pay-return/",
             "возврат — на публичный URL релея"
         );
+    }
+
+    #[tokio::test]
+    async fn yk_list_payments_reads_items_and_skips_broken_rows() {
+        let (p, calls) = yk_get(vec![(
+            200,
+            serde_json::json!({
+                "items": [
+                    {
+                        "id": "pay_1",
+                        "status": "succeeded",
+                        "paid": true,
+                        "created_at": "2026-10-31T06:45:44.123Z",
+                        "amount": { "value": "149.00", "currency": "RUB" },
+                        "description": "Vault pro: 1 мес",
+                        "test": false,
+                    },
+                    {
+                        "id": "pay_2",
+                        "status": "pending",
+                        "paid": false,
+                        "created_at": "2026-10-31T06:47:53.187Z",
+                        "amount": { "value": "149.00", "currency": "RUB" },
+                        "description": "Vault pro: 1 мес",
+                    },
+                    { "id": "broken_without_amount", "status": "canceled" },
+                ],
+            }),
+        )]);
+        let rows = p.list_payments(50).await.expect("список платежей");
+        assert_eq!(rows.len(), 2, "кривая запись отброшена, остальные прочитаны");
+        assert_eq!(rows[0].id, "pay_1");
+        assert!(rows[0].paid);
+        assert_eq!(rows[0].amount.value, "149.00");
+        assert_eq!(rows[1].status, "pending");
+        let (method, url, _, _) = &calls.pub_calls.lock().unwrap()[0];
+        assert_eq!(method, "GET");
+        assert_eq!(url, "https://api.example.test/v3/payments?limit=50");
+    }
+
+    #[tokio::test]
+    async fn yk_list_payments_without_items_is_error_not_empty() {
+        let (p, _) = yk_get(vec![(200, serde_json::json!({ "type": "list" }))]);
+        assert!(
+            matches!(p.list_payments(10).await, Err(PaymentError::Rejected(_))),
+            "пустой учёт при живой кассе опаснее ошибки"
+        );
+        let (p401, _) = yk_get(vec![(401, serde_json::json!({}))]);
+        assert_eq!(
+            p401.list_payments(10).await,
+            Err(PaymentError::Unavailable),
+            "неверные ключи — не «платежей нет»"
+        );
+    }
+
+    #[tokio::test]
+    async fn yk_list_limit_is_clamped() {
+        let (p, calls) = yk_get(vec![(200, serde_json::json!({ "items": [] }))]);
+        let _ = p.list_payments(5000).await;
+        let (_, url, _, _) = &calls.pub_calls.lock().unwrap()[0];
+        assert_eq!(url, "https://api.example.test/v3/payments?limit=100");
     }
 
     #[tokio::test]

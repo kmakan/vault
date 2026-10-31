@@ -93,5 +93,16 @@ export default {
     { name: 'витрина предлагает срок, который нельзя купить (год подменён)',
       pattern: 'pub const PURCHASABLE_MONTHS: [u32; 5] = [1, 3, 6, 9, 12];',
       replacement: 'pub const PURCHASABLE_MONTHS: [u32; 5] = [1, 3, 6, 9, 3];' },
+    // Учёт: список платежей. «Платежей нет» и «провайдер не ответил» — разные
+    // вещи: первое скрывает доход от владельца, второе заставляет проверить.
+    { name: 'ответ без items читается как «платежей нет» (доход молча обнуляется)',
+      pattern: '    let items = body\n        .get("items")\n        .and_then(|v| v.as_array())\n        .ok_or_else(|| PaymentError::Rejected("yookassa: no items in list".into()))?;',
+      replacement: '    let empty = Vec::new();\n    let items = body\n        .get("items")\n        .and_then(|v| v.as_array())\n        .unwrap_or(&empty);' },
+    { name: '401/403 на списке платежей выдаются за отказ, а не за непригодные ключи',
+      pattern: '                401 | 403 | 404 => Err(PaymentError::Unavailable),',
+      replacement: '                401 | 403 | 404 => Err(PaymentError::Rejected("ключ не принят".into())),' },
+    { name: 'limit списка не ограничен (запрос 5000 в API провайдера)',
+      pattern: '        let limit = limit.clamp(1, 100);',
+      replacement: '        let limit = limit;' },
   ],
 };

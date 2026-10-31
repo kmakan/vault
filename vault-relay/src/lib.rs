@@ -1,5 +1,6 @@
 //! vault-relay library: модули, общие для сервера и CLI-генератора токенов.
 
+pub mod accounting;
 pub mod channel_keys;
 pub mod payments;
 pub mod fcm;
