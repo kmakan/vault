@@ -34,9 +34,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::crypto::decrypt_vault_cmd;
 use crate::email::{EmailClient, EmailConfig, IdleOutcome};
 use crate::key_store;
+use crate::letter_keys;
+use vault_client::vault::contacts::ContactBook;
 
 // ───────────── Логи в logcat (headless-процесс не имеет stderr) ─────────────
 // eprintln! в сервис-процессе (без Tauri) уходит в /dev/null: stderr там
@@ -60,7 +61,7 @@ const IDLE_TICK: Duration = Duration::from_secs(7);
 // его пробы, которые с хоста не видны, если всё осталось под `cfg(android)`.
 // Здесь остаются только JNI, IMAP-цикл и показ уведомлений.
 use crate::monitor_state::{
-    call_get_state, call_set_state, calls_load, calls_save, decrypt_order, derived_public_hex,
+    call_get_state, call_set_state, calls_load, calls_save, derived_public_hex,
     group_invite_notice, ingest, is_group_invite, is_vault_envelope, key_fingerprint_prefix,
     missed_call_notice, monitor_db_path, notice_for, pending_list, pending_save, remove_pending,
     retry_effect, seen_push, unknown_sender, PendingEntry, RetryEffect,
@@ -501,18 +502,32 @@ async fn run_loop(stop: Arc<AtomicBool>) {
             return;
         }
     };
-    // 3) Контакты ($HOME/.vault/keys/peer_keys.json): email → публичный ключ.
-    let peers: HashMap<String, String> = match key_store::load_peer_keys() {
-        Ok(list) => peer_map(&list),
-        Err(_) => HashMap::new(),
+    // 3) Контакты: `keys/peer_keys.json` (Desktop) **плюс**
+    //    `contacts.json` (онбординг бота). Читать одно место — не видеть
+    //    ключ, который лежит в другом; это и была причина «в открытом
+    //    приложении письмо есть, а уведомления нет».
+    let stored = key_store::load_peer_keys().unwrap_or_default();
+    let peers: HashMap<String, String> = peer_map(&stored);
+    let contacts = match ContactBook::load_default() {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("[svc-monitor] contacts.json не прочитан: {e}");
+            ContactBook::new()
+        }
     };
+    let book = letter_keys::book_from(&contacts, &stored);
     let Some(account) = identity::ledger_key(&creds.email) else {
         // Пустой адрес аккаунта — нечего ни мониторить, ни писать в БД:
         // пространство имён «ни от кого» позже совпадало бы с любым письмом.
         log::warn!("[svc-monitor] пустой адрес аккаунта — монитор не стартует");
         return;
     };
-    log::info!("[svc-monitor] peers loaded: {}", peers.len());
+    log::info!(
+        "[svc-monitor] keys loaded: peers={} book={} pq_seed={}",
+        peers.len(),
+        book.len(),
+        keypair.pq_private_key.is_some()
+    );
     // выведенный из
     // загруженного привата публичный ключ. Если он != ожидаемому (JS app
     // показывает тот же fingerprint в UI), монитор читает ЧУЖОЙ keypair.json
@@ -569,7 +584,9 @@ async fn run_loop(stop: Arc<AtomicBool>) {
         db: &db,
         account: &account,
         private_key: &keypair.private_key,
+        pq_seed: keypair.pq_private_key.as_deref(),
         peers: &peers,
+        book: &book,
     };
 
     loop {
@@ -658,7 +675,12 @@ struct Ctx<'a> {
     db: &'a Arc<Mutex<crate::storage::sqlite::Storage>>,
     account: &'a str,
     private_key: &'a str,
+    /// ML-KEM seed аккаунта: без него `PQ1`-письма не открываются вообще
+    /// (гибрид — форма по умолчанию у контакта с PQ-ключом).
+    pq_seed: Option<&'a str>,
     peers: &'a HashMap<String, String>,
+    /// Книга ключей (контакты + peer_keys) — перебор делает ядро.
+    book: &'a [letter_keys::OwnedPeerKey],
 }
 
 enum Outcome {
@@ -814,32 +836,42 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         };
     }
 
-    // Расшифровка: порядок перебора — в `monitor_state::decrypt_order`
-    // (ключ отправителя → self-ключ → остальные контакты). Правило живёт не
-    // здесь, потому что этот модуль с хоста не компилируется и проверить его
-    // мутациями нельзя; здесь только исполнение.
+    // Расшифровка: порядок и стоп-условия — в ядре
+    // (`identity::decrypt_with_peer_keys`), книга — два места записи, форма
+    // конверта (PQ1/legacy) — в `letter_keys`. Раньше здесь был свой
+    // `decrypt_order` по legacy-карте: `PQ1` не открывался ВООБЩЕ, то есть
+    // уведомления о гибридных письмах не приходили никогда, а письмо со
+    // второго ящика отбрасывалось как «незнакомый отправитель».
     let from_lc = e.from.clone();
-    let mut plain: Option<String> = None;
-    for candidate in decrypt_order(&ctx.peers, &from_lc) {
-        if let Ok(p) = decrypt_vault_cmd(&body_clean, ctx.private_key, candidate) {
-            plain = Some(p);
-            break;
+    let plain = match letter_keys::open_letter(
+        ctx.book,
+        &from_lc,
+        &body_clean,
+        ctx.private_key,
+        ctx.pq_seed,
+        None,
+    ) {
+        Ok(opened) => {
+            if !opened.from_own_address {
+                log::info!(
+                    "[svc-monitor] from={from_lc} открыто ключом, записанным за {} — второй ящик или устаревший ключ",
+                    opened.key_address
+                );
+            }
+            opened.plain
         }
-    }
-    let plain = match plain {
-        Some(p) => p,
-        None => {
+        Err(err) => {
             // base64 шифротекста, секрета не содержит. Бывает разово-битый
             // фетч: ретрай на следующем тике.
             if unknown_sender(&ctx.peers, &from_lc) {
-                log::info!("[svc-monitor] skip (sender not in peers): {from_lc}");
+                log::info!("[svc-monitor] skip (sender not in peers): {from_lc} err={err}");
                 // Отправитель не из контактов — ретраи бессмысленны.
                 return Outcome::Dead;
             }
             // определение источника порчи base64 (обрезка Gmail/фолдинг).
             let cleaned_len = body_clean.chars().filter(|c| !c.is_whitespace()).count();
             log::info!(
-                "[svc-monitor] decrypt failed (try {}): {from_lc} peer={}… bodylen={} cleanlen={} head={} tail={}",
+                "[svc-monitor] decrypt failed (try {}): {from_lc} err={err} peer={}… bodylen={} cleanlen={} head={} tail={}",
                 e.tries + 1,
                 ctx.peers.get(&from_lc).map(|k| k.chars().take(8).collect::<String>()).unwrap_or_default(),
                 body_clean.len(),

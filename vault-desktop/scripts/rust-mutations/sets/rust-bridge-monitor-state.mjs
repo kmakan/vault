@@ -20,10 +20,17 @@
 //     значение kind);
 //   * с 26.10 сюда же вынесены правила, которые раньше жили только под
 //     cfg(android) и потому не измерялись ничем: вывод публичного ключа для
-//     эхо-защиты, отпечаток ключа для лога, маркер «нашего» конверта, ПОРЯДОК
-//     перебора ключей при расшифровке, «отправитель не из контактов — не
-//     ретраить», лимит попыток, путь к monitor.db и правило текста уведомления
-//     (обычное письмо, group-invite, пропущенный звонок, SOS).
+//     эхо-защиты, отпечаток ключа для лога, маркер «нашего» конверта,
+//     «отправитель не из контактов — не ретраить», лимит попыток, путь к
+//     monitor.db и правило текста уведомления (обычное письмо, group-invite,
+//     пропущенный звонок, SOS).
+//   * с 31.10 ПОРЯДОК перебора ключей — больше не здесь: `decrypt_order`
+//     был копией правила «каким ключом открывать», и эта копия теряла письма
+//     со второго ящика. Решение сведено в ядро (`identity::peer_key_candidates`
+//     и `decrypt_with_peer_keys`; меры `rust-identity`, `rust-listen-decrypt`),
+//     исполнение в мосте — `letter_keys.rs` (мера `rust-bridge-letter-keys`).
+//     Отсюда мутации порядка сняты, а не перенесены: мерить одно правило
+//     дважды — плодить копию, которую гейт не защитит от расхождения.
 //
 // ЧТО ПРОБА НАШЛА СРАЗУ. Первый же прогон предъявил живой дефект перенесённого
 // кода: перевод алфавита был записан как `replace(['-', '_'], "+/")`, а паттерн
@@ -50,7 +57,7 @@
 //     живёт здесь функцией `retry_effect`, и потребитель (`drain_pending`)
 //     лишь спрашивает её — так ветка измеряется, а не проверяется приёмкой.
 //
-// ИМЕНА ПРОБ (смоук `monitor_state` обязан собрать все тридцать):
+// ИМЕНА ПРОБ (смоук `monitor_state` обязан собрать все двадцать девять):
 //   kv_rows_keep_the_names_written_by_the_older_build
 //   seen_roundtrip_reads_back_the_key_it_wrote
 //   seen_is_per_account
@@ -73,7 +80,6 @@
 //   unreadable_private_key_derives_nothing
 //   log_fingerprint_is_sixteen_chars_and_never_panics_on_short_input
 //   envelope_marker_is_the_integer_one_and_nothing_else
-//   decrypt_order_tries_sender_then_self_then_the_rest_without_the_sender
 //   sender_absent_from_contacts_never_retries
 //   three_failed_attempts_and_the_letter_is_dropped_for_good
 //   monitor_database_is_the_one_file_the_cursor_lives_in
@@ -245,29 +251,6 @@ export default {
     { name: 'наш конверт не распознаётся (ни одного уведомления при смахнутом приложении)',
       pattern: '    env.get("vault").and_then(|v| v.as_i64()) == Some(1)',
       replacement: '    env.get("vault").and_then(|v| v.as_i64()) == Some(2)' },
-
-    // ── порядок перебора ключей при расшифровке ──
-    { name: 'ключ отправителя не пробуется первым (письмо от контакта не расшифровывается)',
-      pattern: `    if let Some(key) = peers.get(from) {
-        order.push(Some(key.as_str()));
-    }`,
-      replacement: `    if let Some(key) = peers.get(from) {
-        let _ = key;
-    }` },
-    { name: 'свой ключ из перебора выпадает (письма себе больше не читаются)',
-      pattern: '    order.push(None);',
-      replacement: '    if false {\n        order.push(None);\n    }' },
-    { name: 'свой ключ пробуется первым, а не после ключа отправителя',
-      pattern: '    order.push(None);',
-      replacement: '    order.insert(0, None);' },
-    { name: 'страховой перебор повторяет ключ отправителя (двойная работа, порядок сбивается)',
-      pattern: `        if email == from {
-            continue;
-        }`,
-      replacement: '        if false {\n            continue;\n        }' },
-    { name: 'страховой перебор выключен (смена ключа у контакта = письмо навсегда нечитаемо)',
-      pattern: '    for (email, key) in peers {',
-      replacement: '    for (email, key) in peers.iter().take(0) {' },
 
     // ── «отправитель не из контактов» ──
     { name: 'неизвестный отправитель считается своим (письмо из spam крутится в ретраях)',

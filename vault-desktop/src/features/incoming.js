@@ -214,11 +214,37 @@ async function routeLetter(deps, m, from) {
   // классификатора). Фронт его только переносит в хвост countAndNotify.
   let fresh = false;
 
-  // 1:1 — расшифровка пир-ключом.
-  if (deps.peerKeys[from]) {
+  // 1:1 — расшифровка КНИГОЙ ключей (контакты + peer_keys), а не одной
+  // строкой `deps.peerKeys[from]`. 31.10: у человека второй ящик, ключ лежал
+  // за адресом-алиасом, и письмо молча пропадало (в чате, счётчике, пуше).
+  // Порядок перебора, дедуп и стоп-условия — в ядре
+  // (`identity::decrypt_with_peer_keys`); книга — в мосте
+  // (`letter_keys::load_book`). JS передаёт подсказку (что уже знает за From)
+  // и читает итог: чем открылось и за каким адресом лежал ключ.
+  let opened = null;
+  try {
+    opened = await crypto.decryptLetter(body, from,
+      (deps.peerKeys && deps.peerKeys[from]) || null,
+      deps.peerPqKeys && deps.peerPqKeys[from]);
+  } catch (e) {
+    // Тело прошло гвард isEncrypted, отправитель известен — значит это
+    // именно НАШ конверт, который не открылся ни подсказкой, ни книгой.
+    // Молчать здесь нельзя: на приёмке это неотличимо от «письмо не дошло».
+    if (deps.peerKeys[from]) {
+      console.warn('[incoming] envelope error', m.folder || 'INBOX', m.uid || m.id,
+        'from', from, '—', e && e.message || e);
+    }
+  }
+
+  if (opened && opened.from_own_address) {
     try {
-      crypto.setPeerPublicKey(deps.peerKeys[from], deps.peerPqKeys && deps.peerPqKeys[from]);
-      const plain = await crypto.decryptVault(body);
+      const plain = opened.plain;
+      // Ключ был в книге, но не в памяти модели (например, контакт записан
+      // только в contacts.json). Запоминаем за адресом отправителя: иначе
+      // чат не сможет ответить — отправка ищет peerKeys[activeChat].
+      if (!deps.peerKeys[from]) {
+        deps.setPeerKey(from, opened.key_public, opened.key_pq_ek || null);
+      }
       // Тип письма решает Rust (W1). undefined — мост упал: письмо не наше
       // дело в этом прогоне, но и «обработанным» оно не станет.
       const cls = await classifyPlain(plain, from, m.date || '');
@@ -309,49 +335,51 @@ async function routeLetter(deps, m, from) {
         }
       }
     } catch (e) {
-      // Тело прошло гвард isEncrypted, отправитель известен — значит это
-      // именно НАШ конверт, который не открылся ключом пира (AAD/KEK).
-      // Молчать здесь нельзя: на приёмке это неотличимо от «письмо не дошло»
-      // (живой случай 23.10.2026: тела call_* скачаны, роутер тих).
+      // Тело уже расшифровано (ошибку расшифровки мы залогировали выше), но
+      // разбор конверта упал. На приёмке это так же неотличимо от «письмо не
+      // дошло», поэтому пишем громко и с адресом/uid.
       console.warn('[incoming] envelope error', m.folder || 'INBOX', m.uid || m.id,
         'from', from, '—', e && e.message || e);
     }
-  } else if (crypto.isEncrypted(body)) {
-    // Смена почты: отправитель сменил адрес, но ключ тот же.
-    // Ключ под НОВЫМ email ещё не зарегистрирован — ищем его среди
-    // известных peerKeys (fingerprint-матчинг) и привязываем новый адрес.
+  } else if (opened) {
+    // Смена почты: письмо открылось ключом, записанным за ДРУГИМ адресом
+    // известного контакта. Ключ под новым адресом ещё не зарегистрирован —
+    // привязываем новый адрес к тому же ключу (fingerprint-матчинг).
+    // Раньше здесь был цикл по всем peerKeys с отдельной расшифровкой на
+    // каждый: та же ошибка «ключ по строке From», только помноженная на N.
+    const knownEmail = opened.key_address;
+    const plain = opened.plain;
     try {
-      let matched = null;
-      for (const [knownEmail, knownKey] of Object.entries(deps.peerKeys)) {
-        if (String(knownEmail).toLowerCase() === from) continue;
-        crypto.setPeerPublicKey(knownKey);
-        try {
-          const plain = await crypto.decryptVault(body);
-          // Тип письма — Rust (W1). ЗВОНОК под ещё не известным адресом:
-          // конверт расшифрован ключом пира, но это сигнал, а не письмо
-          // личности. Раньше сигнал отличался тем, что `parseCallSignal` его
-          // узнавал, а `parseEnvelope` нет; теперь это одно решение Rust.
-          // Сигнал, ушедший в ветку «смена почты», терялся (регресс 25dd18a).
-          const cls = await classifyPlain(plain, knownEmail, m.date || '');
-          if (cls === undefined) return null; // мост упал — письмо не трогаем
-          if (cls && cls.kind === 'call') {
-            // Адрес для state machine — ИЗВЕСТНЫЙ адрес пира (knownEmail),
-            // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
-            // ответные конверты идут на несуществующий SMTP-адрес.
-            console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
-            try { await deps.handleCallSignal(await deps.parseCallSignal(plain), knownEmail); }
-            catch (e) { console.warn('[call] signal failed:', e); }
-            return null;
-          }
-          const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-            ? await deps.parseEnvelope(plain)
-            : null;
-          // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
-          // НЕ «смена почты» собеседника.
-          if (env && env.key === knownKey && !(crypto.publicKey && env.key === crypto.publicKey)) {
-            matched = { knownEmail, plain, env, kind: cls.kind, fresh: cls.fresh === true }; break;
-          }
-        } catch (e) { /* не этим ключом */ }
+      // Тип письма — Rust (W1). ЗВОНОК под ещё не известным адресом:
+      // конверт расшифрован ключом пира, но это сигнал, а не письмо
+      // личности. Раньше сигнал отличался тем, что `parseCallSignal` его
+      // узнавал, а `parseEnvelope` нет; теперь это одно решение Rust.
+      // Сигнал, ушедший в ветку «смена почты», терялся (регресс 25dd18a).
+      const cls = await classifyPlain(plain, knownEmail, m.date || '');
+      if (cls === undefined) return null; // мост упал — письмо не трогаем
+      if (cls && cls.kind === 'call') {
+        // Адрес для state machine — ИЗВЕСТНЫЙ адрес пира (knownEmail),
+        // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
+        // ответные конверты идут на несуществующий SMTP-адрес.
+        console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
+        try { await deps.handleCallSignal(await deps.parseCallSignal(plain), knownEmail); }
+        catch (e) { console.warn('[call] signal failed:', e); }
+        return null;
+      }
+      const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
+        ? await deps.parseEnvelope(plain)
+        : null;
+      // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
+      // НЕ «смена почты» собеседника.
+      const echo = !!(env && crypto.publicKey && env.key === crypto.publicKey);
+      // Ключ, которым открылось, обязан совпасть с полем key конверта:
+      // иначе это не «смена адреса», а чужая или склеенная копия.
+      const matched = env && !echo && env.key === opened.key_public
+        ? { knownEmail, plain, env, kind: cls.kind, fresh: cls.fresh === true }
+        : null;
+      if (env && !matched && !echo) {
+        console.warn('[identity] письмо открыто ключом', knownEmail,
+          ', но поле key конверта другое — смену адреса не делаем');
       }
       if (matched) {
         fresh = matched.fresh === true;

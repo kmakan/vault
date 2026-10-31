@@ -173,7 +173,7 @@ export class CryptoClient {
     });
   }
 
-  async decryptVault(ciphertext) {
+  async decryptVault(ciphertext, opts = {}) {
     if (!this.privateKey) throw new Error('No private key. Call generateKeypair first.');
     return await invoke('decrypt_vault_message', {
       ciphertext,
@@ -181,7 +181,35 @@ export class CryptoClient {
       peerPublicKey: this.peerPublicKey,
       myPqSeed: this.pqSeed || null,
       senderPqEk: null,
+      // Ручной расшифровщик (CipherTool) отключает добирание книгой: человек
+      // выбрал контакт осознанно, и молчаливая подмена ключа вводила бы в
+      // заблуждение. Все приёмные пути книгу НЕ отключают.
+      bookFallback: opts.bookFallback !== false,
     });
+  }
+
+  // Открыть входящее письмо книгой ключей (контакты + peer_keys).
+  //
+  // Возвращает не строку, а итог: `plain`, `key_address` (ЗА КАКИМ адресом
+  // лежал подошедший ключ), `key_public`, `key_pq_ek`, `from_own_address`.
+  // Расхождение `key_address` с `From` — это второй ящик у человека, и
+  // вызывающая сторона обязана это увидеть, а не гадать по ошибке AEAD.
+  //
+  // Состояние клиента переводится на победивший ключ: последующий ответ
+  // шифруется тем же ключом, которым пришло письмо.
+  async decryptLetter(ciphertext, sender, hintPublicKey = null, hintPqEk = null) {
+    if (!this.privateKey) throw new Error('No private key. Call generateKeypair first.');
+    const opened = await invoke('decrypt_vault_letter', {
+      ciphertext,
+      privateKey: this.privateKey,
+      myPqSeed: this.pqSeed || null,
+      sender: sender || '',
+      hintPublicKey: hintPublicKey || null,
+      hintPqEk: hintPqEk || null,
+    });
+    this.peerPublicKey = opened.key_public || null;
+    this.peerPqEk = opened.key_pq_ek || null;
+    return opened;
   }
 
   async fingerprint() {

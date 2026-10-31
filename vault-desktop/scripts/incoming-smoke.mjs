@@ -115,6 +115,38 @@ const cryptoMock = {
     return st.plain;
   },
   decryptWithGroupKey: async () => globalThis.__state.groupPlain,
+  // Стенд книги ключей (мост `letter_keys::open_letter`). Подсказка идёт
+  // первой под адресом From, затем «книга» (st.book — собирается в makeDeps
+  // из deps.peerKeys, роль peer_keys.json/contacts.json). «Подошёл/не подошёл»
+  // решает стенд-шифр (тот же plainForKey), итог — чем и за каким адресом
+  // открылось, как у настоящего контракта.
+  decryptLetter: async (body, sender, hintPublicKey, hintPqEk) => {
+    const st = globalThis.__state;
+    const lc = (x) => String(x || '').toLowerCase();
+    const candidates = [];
+    if (hintPublicKey) {
+      candidates.push({ address: sender, public_key: hintPublicKey, pq_ek: hintPqEk || null });
+    }
+    for (const k of (st.book || [])) {
+      if (k.public_key && !candidates.some((c) => c.public_key === k.public_key)) {
+        candidates.push(k);
+      }
+    }
+    for (const c of candidates) {
+      cryptoMock.currentKey = c.public_key;
+      try {
+        const plain = await cryptoMock.decryptVault(body);
+        return {
+          plain,
+          key_address: c.address,
+          key_public: c.public_key,
+          key_pq_ek: c.pq_ek || null,
+          from_own_address: lc(c.address) === lc(sender),
+        };
+      } catch (e) { /* не этим ключом — следующий кандидат */ }
+    }
+    throw new Error('no key in the book opened the letter (стенд)');
+  },
 };
 const relayMock = {
   getSettings: async () => ({ relays: [], active: 0, peers: {} }),
@@ -272,7 +304,13 @@ function makeDeps(over = {}) {
     bounceReason: BounceFeature.bounceReason,
     ingestChannelEnvelope: (obj) => (obj && obj.post ? 'post' : null),
   };
-  return Object.assign(deps, over);
+  const merged = Object.assign(deps, over);
+  // Стенд диска моста: load_book() читает contacts.json + peer_keys.json;
+  // в смоуке роль книги играют известные ключи deps (адрес → ключ).
+  st.book = Object.entries(merged.peerKeys || {}).map(([address, public_key]) => ({
+    address, public_key, pq_ek: (merged.peerPqKeys || {})[address] || null,
+  }));
+  return merged;
 }
 
 const NOW = Date.now();

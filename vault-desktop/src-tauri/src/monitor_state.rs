@@ -258,34 +258,12 @@ pub(crate) fn is_vault_envelope(env: &serde_json::Value) -> bool {
     env.get("vault").and_then(|v| v.as_i64()) == Some(1)
 }
 
-/// Порядок перебора ключей при расшифровке входящего письма:
-/// ключ отправителя → свой ключ (письма себе шифруются своим) → остальные
-/// контакты, кроме уже пробованного отправителя. Страховой перебор —
-/// подстраховка для нестандартных сценариев (смена ключа у контакта).
-///
-/// Порядок был написан прямо в monitors-цикле; здесь он измеряется, потому что
-/// ошибка в нём — «письмо не расшифровывается, хотя ключ есть», то есть
-/// молчаливо пропавшее уведомление.
-pub(crate) fn decrypt_order<'a>(
-    peers: &'a std::collections::HashMap<String, String>,
-    from: &str,
-) -> Vec<Option<&'a str>> {
-    let mut order: Vec<Option<&'a str>> = Vec::with_capacity(peers.len() + 1);
-    if let Some(key) = peers.get(from) {
-        order.push(Some(key.as_str()));
-    }
-    order.push(None);
-    for (email, key) in peers {
-        if email == from {
-            continue;
-        }
-        order.push(Some(key.as_str()));
-    }
-    order
-}
-
 /// Отправителя нет среди контактов: расшифровка ему недоступна ни при какой
 /// удаче, и ретраи только крутят очередь.
+///
+/// Карта здесь — только `keys/peer_keys.json`: она отвечает на вопрос «этот
+/// адрес вообще известен?», а НЕ «каким ключом открывать» (это решает
+/// `letter_keys::open_letter` по книге из двух мест записи).
 pub(crate) fn unknown_sender(
     peers: &std::collections::HashMap<String, String>,
     from: &str,
@@ -861,39 +839,6 @@ mod tests {
         assert!(
             !is_vault_envelope(&serde_json::json!({"vault": 1.0})),
             "вещественный 1.0 не принимаем вслепую"
-        );
-    }
-
-    #[test]
-    fn decrypt_order_tries_sender_then_self_then_the_rest_without_the_sender() {
-        // Ошибка в порядке = «письмо не расшифровывается, хотя ключ есть»:
-        // уведомление молча пропадает, и на телефоне это не отличить от
-        // недоставленного письма.
-        let mut peers = std::collections::HashMap::new();
-        peers.insert(PEER.to_string(), "pk-peer".to_string());
-        peers.insert(OTHER.to_string(), "pk-other".to_string());
-        let order = decrypt_order(&peers, PEER);
-        assert_eq!(order.len(), 3, "ключ отправителя + свой + один остаток");
-        assert_eq!(order[0], Some("pk-peer"), "сначала ключ отправителя");
-        assert_eq!(order[1], None, "письма себе шифруются своим ключом");
-        assert_eq!(order[2], Some("pk-other"), "остаток — чужой ключ");
-        // Отправителя нет среди контактов: первым всё равно идёт свой ключ, но
-        // страховой перебор обязан попробовать ВСЕХ контактов — так ведёт себя
-        // письмо от контакта, у которого ключ сменился.
-        let stranger = decrypt_order(&peers, "guest@post.ru");
-        assert_eq!(stranger.len(), 3, "self-ключ плюс оба контакта");
-        assert_eq!(stranger[0], None, "незнакомцу первым идёт self-ключ");
-        let mut rest: Vec<&str> = stranger[1..].iter().map(|k| k.unwrap()).collect();
-        rest.sort_unstable();
-        assert_eq!(
-            rest,
-            vec!["pk-other", "pk-peer"],
-            "перебор покрывает оба известных ключа"
-        );
-        // Пустая карта контактов — тоже ровно одна попытка (self).
-        assert_eq!(
-            decrypt_order(&std::collections::HashMap::new(), PEER),
-            vec![None]
         );
     }
 

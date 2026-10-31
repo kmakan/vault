@@ -57,6 +57,11 @@ writeFileSync(MOCKS + '/api.js', [
   'const api = {',
   '  saveProfile: (...a) => { globalThis.__state.savedProfiles.push(a); },',
   '  fetchBodiesDbFirst: async () => ({}),',
+  '  identityLetterFresh: async () => globalThis.__state.identityFresh !== false,',
+  '  renamePeerIdentity: async (a, b) => { globalThis.__state.renamed.push([a, b]); },',
+  '  bumpIdentityRenameTs: async () => {},',
+  '  removeContact: () => {},',
+  '  deleteProfile: () => {},',
   '};',
   'export default api;',
   '',
@@ -66,6 +71,16 @@ writeFileSync(MOCKS + '/crypto.js', [
   '  isEncrypted: () => globalThis.__state.encrypted !== false,',
   '  setPeerPublicKey: () => {},',
   '  decryptVault: async () => globalThis.__state.plain,',
+  // Тот же контракт, что у настоящего адаптера: без ключа-подсказки и без
+  // записи в книге письмо НЕ открывается — иначе кейс «нет ключа пира»
+  // проходил бы по чужой ветке (урок первого смоука).
+  '  decryptLetter: async (body, sender, hint) => {',
+  '    const st = globalThis.__state;',
+  '    const keyPublic = st.keyPublic || hint;',
+  '    if (!keyPublic) throw new Error("no key in the book opened the letter");',
+  '    const keyAddress = st.keyAddress || sender;',
+  '    return { plain: st.plain, key_address: keyAddress, key_public: keyPublic, key_pq_ek: null, from_own_address: keyAddress === sender };',
+  '  },',
   '  decryptWithGroupKey: async () => globalThis.__state.plain,',
   '  publicKey: "MYKEY",',
   '};',
@@ -181,7 +196,7 @@ function makeDeps(over = {}) {
     migrateChatHistoryChain: async () => {},
     contactAliases: {},
     profiles: {},
-    setPeerKey: () => {},
+    setPeerKey: (...a) => { st.peerKeyWrites.push(a); },
     onMailBounce: async () => {},
     noteSeen: () => {},
     ...over,
@@ -213,23 +228,33 @@ const state = {
   callSignals: [],
   heartbeats: [],
   healed: [],
+  peerKeyWrites: [],
+  renamed: [],
+  keyAddress: null,
+  keyPublic: null,
+  identityFresh: true,
 };
 globalThis.__state = state;
 const { processIncoming } = await import(pathToFileURL(MODULE).href);
 
-async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, letterOver = {}, encrypted = true, expect }) {
+async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, letterOver = {}, encrypted = true, keyAddress = null, keyPublic = null, expect }) {
   console.log('\n' + name);
   // Свежий стенд на каждый кейс: иначе счётчики предыдущего кейса «доказывают» следующий.
   state.kind = kind;
   state.plain = plain;
   state.encrypted = encrypted;
   state.bridgeDown = bridgeDown;
+  state.keyAddress = keyAddress;
+  state.keyPublic = keyPublic;
   state.unread = {};
   state.notifs = [];
   state.savedProfiles = [];
   state.callSignals = [];
   state.heartbeats = [];
   state.healed = [];
+  state.peerKeyWrites = [];
+  state.renamed = [];
+  state.identityFresh = true;
   calls.length = 0;
   const deps = { ...makeDeps(ctxOver), ...DEPS };
   for (const k of Object.keys(deps.emailBodyCache)) delete deps.emailBodyCache[k];
@@ -319,6 +344,53 @@ await run('kind=message — письмо учтено и ушло в перси�
     ok('бейдж 1:1 вырос', globalThis.__state.unread['bob@x'] === 1);
     ok('персист vault_store_incoming_message вызван',
       calls.some(c => c.cmd === 'vault_store_incoming_message'));
+  },
+});
+
+// Ключ лежал в книге за ДРУГИМ адресом: раньше `peerKeys[From]` его не видел
+// и письмо молча пропадало. Теперь маршрутизатор обязан привязать новый адрес
+// к тому же ключу и учесть письмо.
+await run('второй ящик: письмо открылось ключом, записанным за алиасом', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  keyAddress: 'bob@old',
+  keyPublic: 'BOBKEY',
+  ctxOver: { peerKeys: { 'bob@x': 'STALE' } },
+  expect: () => {
+    ok('бейдж переехал на новый адрес', globalThis.__state.unread['bob@x'] === 1);
+    ok('личность переименована bob@old → bob@x',
+      globalThis.__state.renamed.some(([a, b]) => a === 'bob@old' && b === 'bob@x'));
+    ok('ключ записан за новым адресом',
+      globalThis.__state.peerKeyWrites.some(([e, k]) => e === 'bob@x' && k === 'BOBKEY'));
+  },
+});
+
+// Тот же дефект, но ключа в памяти модели нет вовсе (контакт пришёл из
+// contacts.json): письмо должно дойти и ключ должен остаться в модели, иначе
+// чат не сможет ответить.
+await run('ключ есть в книге, но не в памяти модели — письмо доходит', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  ctxOver: { peerKeys: {} },
+  keyPublic: 'BOBKEY',
+  expect: () => {
+    ok('бейдж вырос', globalThis.__state.unread['bob@x'] === 1);
+    ok('ключ записан за адресом отправителя',
+      globalThis.__state.peerKeyWrites.some(([e, k]) => e === 'bob@x' && k === 'BOBKEY'));
+  },
+});
+
+// Поле key конверта не совпало с ключом, которым открылось: это не «смена
+// адреса», ренейм делать нельзя (иначе один человек присвоит чужую личность).
+await run('чужой key в конверте — ренейм не запускается', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: '{"vault":1,"id":"m1","text":"привет","name":"Bob","key":"OTHERKEY"}',
+  keyAddress: 'bob@old',
+  keyPublic: 'BOBKEY',
+  ctxOver: { peerKeys: { 'bob@x': 'STALE' } },
+  expect: () => {
+    ok('ренейм не выполнен', globalThis.__state.renamed.length === 0);
+    ok('бейдж НЕ вырос', Object.keys(globalThis.__state.unread).length === 0);
   },
 });
 

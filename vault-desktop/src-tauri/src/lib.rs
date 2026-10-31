@@ -53,6 +53,9 @@ mod key_escrow_smoke;
 #[cfg(test)]
 mod body_decode_smoke;
 mod key_store;
+/// Открытие входящего письма одной книгой ключей (контакты + peer_keys).
+/// Решение «каким ключом» — в ядре, здесь чтение двух мест записи и PQ/legacy.
+mod letter_keys;
 mod media;
 // Справочник «адрес контакта → ключ». Потребитель (`service_monitor`) компилируется
 // только под Android, на хосте модуль нужен ради тестов самого обхода.
@@ -264,6 +267,15 @@ fn encrypt_vault_message(
     }
 }
 
+/// Открыть письмо для старого адаптера (`CryptoClient.decryptVault`).
+///
+/// Сигнатура сохранена: этим путём ходят все экраны, которые ещё берут ключ
+/// одной строкой `peerKeys[From]` (квитанции, вложения, история). Подсказка
+/// пробуется первой, но если она устарела — добираем книгой ключей: иначе
+/// письмо от человека со вторым ящиком пропадало бы в этих местах молча.
+/// `book_fallback=false` оставлен для ручного расшифровщика (CipherTool):
+/// там человек выбрал контакт осознанно, и подмена ключа вводила бы в
+/// заблуждение.
 #[tauri::command]
 fn decrypt_vault_message(
     ciphertext: String,
@@ -271,29 +283,69 @@ fn decrypt_vault_message(
     peer_public_key: Option<String>,
     my_pq_seed: Option<String>,
     sender_pq_ek: Option<String>,
+    book_fallback: Option<bool>,
 ) -> Result<String, String> {
-    // PQ: "PQ1:<kemct>|<sender_ek>|<wire>" — гибрид
-    // прочее — legacy X25519. Порядок фолбэка важен: гибрид не должен
-    // молча падать на legacy (иначе PQ-защита исчезает незаметно).
-    let trimmed = ciphertext.trim();
-    if let Some(rest) = trimmed.strip_prefix("PQ1:") {
-        let parts: Vec<&str> = rest.splitn(3, '|').collect();
-        if parts.len() == 3 {
-            let (kemct, _sender_ek, wire) = (parts[0], parts[1], parts[2]);
-            // my_pq_seed обязателен; peer (sender) X25519 ключ — из конверта
-            let peer_key = peer_public_key.as_deref();
-            let seed = my_pq_seed
-                .as_deref()
-                .ok_or_else(|| "PQ message but no PQ seed".to_string())?;
-            let peer = peer_key.ok_or_else(|| "PQ message but no sender key".to_string())?;
-            // Сохраняем ek отправителя для ответа (фронт вызовет save_peer_key)
-            let _ = sender_pq_ek;
-            return crypto_pq::hybrid_decrypt_vault(wire, &private_key, peer, seed, kemct)
-                .map_err(|e| e.to_string());
+    let hint = peer_public_key.as_deref().filter(|k| !k.trim().is_empty());
+    // Письмо СЕБЕ (peer=None) шифруется своим ключом: это не книга контактов,
+    // и путь должен остаться ровно прежним, иначе сломается эхо-профиль.
+    let Some(hint) = hint else {
+        if ciphertext.trim_start().starts_with("PQ1:") {
+            return Err("PQ message but no sender key".to_string());
         }
-    }
-    crypto::decrypt_vault_cmd(&ciphertext, &private_key, peer_public_key.as_deref())
-        .map_err(|e| e.to_string())
+        return crypto::decrypt_vault_cmd(&ciphertext, &private_key, None)
+            .map_err(|e| e.to_string());
+    };
+    let book = if book_fallback.unwrap_or(true) {
+        letter_keys::load_book()
+    } else {
+        Vec::new()
+    };
+    letter_keys::open_letter(
+        &book,
+        "",
+        &ciphertext,
+        &private_key,
+        my_pq_seed.as_deref(),
+        Some(letter_keys::KeyHint {
+            public_key: hint,
+            pq_ek: sender_pq_ek.as_deref(),
+        }),
+    )
+    .map(|opened| opened.plain)
+    .map_err(|e| e.to_string())
+}
+
+/// Открыть письмо и сказать, ЧЕМ оно открылось.
+///
+/// Этим путём идёт разбор входящих: адрес победившего ключа нужен, чтобы
+/// (а) отличить обычное письмо от письма со второго ящика, (б) записать
+/// ключ за новым адресом и (в) объяснить отказ в логе, а не молчанием.
+#[tauri::command]
+fn decrypt_vault_letter(
+    ciphertext: String,
+    private_key: String,
+    my_pq_seed: Option<String>,
+    sender: String,
+    hint_public_key: Option<String>,
+    hint_pq_ek: Option<String>,
+) -> Result<letter_keys::OpenedLetter, String> {
+    let book = letter_keys::load_book();
+    let hint = hint_public_key
+        .as_deref()
+        .filter(|k| !k.trim().is_empty())
+        .map(|k| letter_keys::KeyHint {
+            public_key: k,
+            pq_ek: hint_pq_ek.as_deref(),
+        });
+    letter_keys::open_letter(
+        &book,
+        &sender,
+        &ciphertext,
+        &private_key,
+        my_pq_seed.as_deref(),
+        hint,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2453,6 +2505,7 @@ pub fn run() {
             decrypt_message,
             encrypt_vault_message,
             decrypt_vault_message,
+            decrypt_vault_letter,
             set_app_icon,
             get_fingerprint,
             save_my_keypair,

@@ -283,7 +283,7 @@ export default {
 
       try {
         crypto.setPeerPublicKey(this.peerKeys[this.selectedContact]);
-        const result = await crypto.decryptVault(this.ciphertext);
+        const result = await crypto.decryptVault(this.ciphertext, { bookFallback: false });
         this.decryptedText = result;
         this.decryptError = '';
         // Вставленный шифротекст сохраняем — пользователь может сравнить
@@ -371,7 +371,7 @@ export default {
       try {
         const text = await file.text();
         crypto.setPeerPublicKey(this.peerKeys[this.selectedContact]);
-        const plaintext = await crypto.decryptVault(text.trim());
+        const plaintext = await crypto.decryptVault(text.trim(), { bookFallback: false });
         let obj = null;
         try { obj = JSON.parse(plaintext); } catch { /* не JSON */ }
         if (!obj || obj.vault_file !== 1 || !obj.data) {
