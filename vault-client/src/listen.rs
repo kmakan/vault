@@ -164,6 +164,11 @@ async fn tick(
     me: &str,
 ) {
     let mut messages = Vec::new();
+    // Один «сейчас» на тик: срок read-токена сравниваем с ним (см. онбординг).
+    let now_secs = std::time::UNIX_EPOCH
+        .elapsed()
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(0);
     let mut folder_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let folders = client.inbox_folders().await;
     tracing::debug!("listen: scanning folders: {:?}", folders);
@@ -309,7 +314,13 @@ async fn tick(
             contacts_dirty = true;
             if let Some(tok) = tok {
                 let lc = m.from.to_lowercase();
-                if relay_state.peers.get(&lc) != Some(&tok.to_string()) {
+                // Мёртвый адрес не заучиваем: заучивание идёт ПОСЛЕ забытия на
+                // 402, а почтовая история (последние 50 писем) каждый тик
+                // возвращала бы тот же протухший токен — «забыть» не работало
+                // бы никогда.
+                if vault_core::relay::is_token_dead(tok, now_secs) {
+                    tracing::debug!("relay: пропущен мёртвый адрес {lc}");
+                } else if relay_state.peers.get(&lc) != Some(&tok.to_string()) {
                     relay_state.peers.insert(lc, tok.to_string());
                     let _ = relay_state.save();
                 }

@@ -86,6 +86,42 @@ pub fn is_subscription_expired(status: u16, body: &str) -> bool {
     status == HTTP_SUBSCRIPTION_EXPIRED && body.contains(SUBSCRIPTION_EXPIRED_MARK)
 }
 
+/// Формы read-токена (см. `vault-relay/src/tokens.rs`): длина
+/// base64url-декодированных байтов.
+pub const TOKEN_V1_LEN: usize = 45;
+pub const TOKEN_V2_LEN: usize = 63;
+/// Смещение поля срока: v1 — `expiry(4)` после key_id(8)+scope(1),
+/// v2 — `paid_until(4)` после key_id+scope+ver+plan+sub+dev_nonce.
+const TOKEN_V1_EXP: usize = 9;
+const TOKEN_V2_EXP: usize = 27;
+
+/// До какой секунды токен остаётся адресом живой очереди. mac не проверяем —
+/// ключ сервера клиенту не положен; здесь нужен только срок. None — форма не
+/// распознана (новый формат, битая строка).
+pub fn token_expiry(token: &str) -> Option<u32> {
+    let raw = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        token.trim(),
+    )
+    .ok()?;
+    let off = match raw.len() {
+        TOKEN_V1_LEN => TOKEN_V1_EXP,
+        TOKEN_V2_LEN => TOKEN_V2_EXP,
+        _ => return None,
+    };
+    let four = raw.get(off..off + 4)?;
+    Some(u32::from_be_bytes(<[u8; 4]>::try_from(four).ok()?))
+}
+
+/// Мёртв ли адрес: повторная отправка на такой токен гарантированно получит
+/// 402, а заучивать его из истории почты опаснее, чем пропустить — мёртвый
+/// адрес в памяти клиента неотличим от живого, пока не придёт тот же 402.
+/// НЕИЗВЕСТНУЮ форму считаем ЖИВОЙ (fail-open): ошибка стоит одного лишнего
+/// 402 на отправку, ложное «мёртв» — потерянный канал у живого собеседника.
+pub fn is_token_dead(token: &str, now: u32) -> bool {
+    token_expiry(token).is_some_and(|exp| exp <= now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +171,37 @@ mod tests {
         assert!(!is_subscription_expired(403, "{\"error\":\"subscription expired\"}"));
         assert!(!is_subscription_expired(402, "{\"error\":\"bad recipient token\"}"));
         assert!(!is_subscription_expired(200, ""));
+    }
+
+    fn token(len: usize, exp_off: usize, expiry: u32) -> String {
+        use base64::Engine as _;
+        // 0xFF в mac-области обязательна: на нулевых байтах стандартный и
+        // url-safe алфавиты дают одинаковую строку, и подмена алфавита прошла
+        // бы незамеченной.
+        let mut raw = vec![0xFFu8; len];
+        raw[exp_off..exp_off + 4].copy_from_slice(&expiry.to_be_bytes());
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw)
+    }
+
+    #[test]
+    fn expiry_is_read_from_both_token_shapes() {
+        // v1: key_id(8) scope(1) expiry(4) mac(32); v2: … paid_until(4) mac(32).
+        assert_eq!(token_expiry(&token(45, 9, 1_800_000_000)), Some(1_800_000_000));
+        assert_eq!(token_expiry(&token(63, 27, 1_900_000_000)), Some(1_900_000_000));
+        // Просрочка = мёртвый адрес, ровный счёт «exp <= now»: в ту же секунду
+        // сервер уже отвечает 402, а не принимает токен.
+        assert!(is_token_dead(&token(45, 9, 100), 100));
+        assert!(!is_token_dead(&token(45, 9, 101), 100));
+    }
+
+    #[test]
+    fn unknown_token_shape_is_alive_not_dead() {
+        // Битая строка, другой формат, мусор: считать их мёртвыми — значит
+        // выбросить адрес живого собеседника.
+        assert_eq!(token_expiry(""), None);
+        assert_eq!(token_expiry("не токен!!"), None);
+        assert_eq!(token_expiry(&token(44, 9, 1)), None);
+        assert!(!is_token_dead(&token(50, 9, 1), 1_000));
     }
 
     #[test]
