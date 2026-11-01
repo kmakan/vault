@@ -1157,6 +1157,55 @@ export async function purchaseVerify(account, checkoutId) {
   }
 }
 
+// POST /relay/purchase/claim — получка подписки, купленной НА САЙТЕ. Оплата
+// живёт в браузере: сайт создаёт чекаут с нашим fp (код оплаты на экране Pro)
+// и проводит платёж; приложение знает только свой fp, поэтому предъявляет
+// fp + свой read-токен, а сервер сверяет живые невыданные сессии с
+// процессором. Если оплачено — приходит токен, и мы делаем ровно то же,
+// что после purchaseVerify: активация на устройстве, relay-list, proState,
+// tokenInfo. Без токена-доказательства сервер отвечает 403 — это не ошибка
+// покупки, а «дождись регистрации», молча возвращаем ошибку вызывающему.
+export async function purchaseClaim(account) {
+  try {
+    account = await accountNamespace(account);
+    const url = normalizeRelayUrl(DEFAULT_RELAY_URL);
+    const fp = await myFingerprint(account);
+    if (!url || !fp) return { error: 'no_fp' };
+    const before = await getSettings(account);
+    const ours = before.relays.find(x => x.url === DEFAULT_RELAY_URL);
+    const keep = (ours && ours.myToken) || '';
+    if (!keep) return { error: 'no_token' };
+    const res = await rfetch(url + '/purchase/claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fp, keep }),
+      connectTimeout: 10000,
+    });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) {
+      return { error: (body && body.error) || ('http_' + res.status), status: res.status, body };
+    }
+    if (body && body.token) {
+      const act = await activateToken(account, body.token);
+      if (act && act.error) {
+        return { error: act.error, status: act.status, body };
+      }
+      await setOurToken(account, url, body.token);
+      await saveProState(account, {
+        plan: body.plan || 'pro',
+        paid_until: body.paid_until || 0,
+        checkout_id: body.checkout_id || '',
+      });
+      await fetchTokenInfo(account, url);
+    }
+    return body || { error: 'empty_body' };
+  } catch (e) {
+    console.log('[relay] purchase/claim failed:', e && e.message || e);
+    return { error: 'network' };
+  }
+}
+
 // POST /relay/tokens/activate — привязать платный токен к этому устройству.
 export async function activateToken(account, token) {
   try {

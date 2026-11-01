@@ -2087,6 +2087,7 @@ export default {
       return {
         localState: () => relay.proState(this.email || 'anon'),
         info: () => relay.fetchTokenInfo(this.email || 'anon'),
+        claim: () => relay.purchaseClaim(this.email || 'anon'),
         setState: (v) => { this.relayStore.setProState(v); },
       };
     },

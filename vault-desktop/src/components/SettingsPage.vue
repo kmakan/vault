@@ -302,6 +302,18 @@
             {{ proBusy ? t('pro_buy_busy') : proActionLabel }}
           </button>
         </div>
+        <!-- Веб-канал: в сборке без покупок оплата на сайте. Код оплаты —
+             отпечаток аккаунта: с ним платёж привязывается к этому fp, а
+             приложение забирает подписку само (proRefresh → claim). -->
+        <div v-if="webPayHint && proPayCode" style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+          <div style="font-size:12px;opacity:.7">{{ t('pro_web_hint') }}</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <code style="font-size:11px;word-break:break-all;user-select:all">{{ proPayCode }}</code>
+            <button class="btn-secondary"
+                    style="padding:4px 10px;border-radius:6px;cursor:pointer;white-space:nowrap"
+                    @click="copyProPayCode">{{ t('pro_web_copy') }}</button>
+          </div>
+        </div>
       </div>
 
       <!-- M2.2/M2.4: Push-релеи. Модель доставки: пользователь САМ выбирает
@@ -465,6 +477,7 @@ import { openUrl as shellOpen } from '@tauri-apps/plugin-opener';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import * as relayClient from '../relay-client.js';
 import * as ProPlan from '../features/pro-plan.js';
+import { copyTextToClipboard } from '../clipboard.js';
 import { uiStore } from '../features/session-store.js';
 import AvatarUpload from './AvatarUpload.vue';
 import Icon from './Icon.vue';
@@ -513,6 +526,8 @@ export default {
       // сервер (плюс офлайн-грейс, когда сервер недоступен).
       proState: null,
       proBusy: false,
+      // fp аккаунта — «код оплаты» для веб-канала (покупка на сайте).
+      proPayCode: '',
       // Витрина тарифов — ОТ СЕРВЕРА (/relay/plans): [{plan, months, kopecks,
       // amount, currency}, …]. Клиент не хранит и не считает цены сам (ADR-005):
       // что отдаст реле, то и показываем; пусто — значит сеть не ответила, и
@@ -644,6 +659,11 @@ export default {
           this.proPlans = (pl && pl.plans) || [];
         }
       } catch (e) { /* без витрины — одиночная кнопка на месяц */ }
+      // Код оплаты для веб-канала — только там, где магазин разрешает
+      // показывать внешнюю оплату (RuStore); в Play-сборке блока нет.
+      if (this.webPayHint) {
+        try { this.proPayCode = await relayClient.myFingerprint(this.email || 'anon') || ''; } catch (e) { /* нет кода — нет блока */ }
+      }
     } catch (e) { /* ignore */ }
   },
   computed: {
@@ -659,6 +679,9 @@ export default {
     // (Play-сборка: флаг VITE_NO_PURCHASES=1). Статус подписки показываем
     // всегда: это то, что подтвердил сервер, а не предложение покупки.
     purchasesAllowed() { return ProPlan.purchasesAllowed(); },
+    // Код оплаты и подсказка про сайт — только в сборке, где магазин это
+    // допускает (RuStore — да, Play — нет: внешний платёж запрещён политикой).
+    webPayHint() { return ProPlan.webPayHintEnabled(); },
     proDetailsText() {
       return ProPlan.proDetailsText(this.proView, this.t, this.currentLocale);
     },
@@ -668,6 +691,10 @@ export default {
     // Перечитать состояние подписки: сперва локально (грейс держит и при
     // недоступном сервере), затем у сервера — он источник правды.
     async proRefresh() {
+      // Сначала молча забираем веб-покупку: если на сайте оплатили по нашему
+      // коду, сервер выдаёт токен, и состояние ниже уже будет «Pro активен».
+      // Ошибка получки не важна: экран покажет последнее подтверждённое.
+      try { await relayClient.purchaseClaim(this.email || 'anon'); } catch (e) { /* ignore */ }
       try {
         const st = await relayClient.proState(this.email || 'anon');
         this.proState = st;
@@ -706,6 +733,12 @@ export default {
       } finally {
         this.proBusy = false;
       }
+    },
+    // Копирование кода оплаты: фолбэк execCommand — внутри примитива
+    // clipboard.js (в WebView clipboard API бывает недоступен).
+    async copyProPayCode() {
+      const ok = await copyTextToClipboard(this.proPayCode);
+      uiStore.toast(ok ? this.t('pro_web_copied') : this.t('pro_web_copy_fail'));
     },
     // ── M2.2: релеи (список с фолбэком) ─────────────────────
     async relayRefreshPeersView() {

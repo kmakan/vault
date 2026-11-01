@@ -23,8 +23,10 @@ export default {
       pattern: "    await saveRelays(account, list);",
       replacement: "    void 0;" },
     { name: "старый токен не отправляется (keep всегда пуст)",
-      pattern: "    const keep = (ours && ours.myToken) || '';",
-      replacement: "    const keep = '';" },
+      // Якорь — строка запроса: та же строка keep есть в purchaseClaim,
+      // одиночное совпадение должно быть у перерегистрации, а не у получки.
+      pattern: "    const keep = (ours && ours.myToken) || '';\n    const r = await rfetch(DEFAULT_RELAY_URL + '/register', {",
+      replacement: "    const keep = '';\n    const r = await rfetch(DEFAULT_RELAY_URL + '/register', {" },
     { name: "наш релей не ставится первым в списке",
       pattern: "    list.unshift({ url: DEFAULT_RELAY_URL, myToken: d.token, label: 'Vault' });",
       replacement: "    list.push({ url: DEFAULT_RELAY_URL, myToken: d.token, label: 'Vault' });" },

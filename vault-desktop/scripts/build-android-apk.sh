@@ -54,7 +54,16 @@ AAPT="$HOME/Android/Sdk/build-tools/$(ls "$HOME/Android/Sdk/build-tools" | sort 
 # import.meta.env.VITE_NO_PURCHASES именно из окружения процесса.
 export VAULT_NO_PURCHASES="${VAULT_NO_PURCHASES:-1}"
 export VITE_NO_PURCHASES="$([ "${VAULT_NO_PURCHASES:-0}" = 1 ] && echo 1 || echo 0)"
-echo "покупки в сборке: $([ "$VITE_NO_PURCHASES" = 1 ] && echo "НЕТ (магазин/сайт-политика)" || echo "есть (прямой канал)") (режим $MODE, VITE_NO_PURCHASES=$VITE_NO_PURCHASES)"
+# VITE_WEB_PAY: показывать ли в сборке «код оплаты» (fp) с указанием на сайт.
+# RuStore внешнюю оплату цифровых товаров допускает (обязательна декларация
+# модератору), Google Play — запрещает любую навигацию к оплате вне своего
+# биллинга, поэтому в aab-режиме флаг выключен и экран молчит.
+if [ "$MODE" = aab ]; then
+  export VITE_WEB_PAY="${VITE_WEB_PAY:-0}"
+else
+  export VITE_WEB_PAY="${VITE_WEB_PAY:-1}"
+fi
+echo "покупки в сборке: $([ "$VITE_NO_PURCHASES" = 1 ] && echo "НЕТ (магазин/сайт-политика)" || echo "есть (прямой канал)") (режим $MODE, VITE_NO_PURCHASES=$VITE_NO_PURCHASES, VITE_WEB_PAY=$VITE_WEB_PAY)"
 
 case "$MODE" in
   apk)

@@ -52,6 +52,8 @@ const FIXTURE = JSON.parse(readFileSync(
 
 const net = [];
 let failVerify = false;
+let failClaim = false;
+let claimBody = null; // null → сервер отвечает «нет живых сессий» (no_pending)
 globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   net.push([u, opts.method || 'GET', opts.body || '']);
@@ -61,6 +63,12 @@ globalThis.fetch = async (url, opts = {}) => {
   if (u.includes('/purchase/verify')) {
     if (failVerify) return { ok: false, status: 402, json: async () => ({ error: 'not_paid_yet' }) };
     return { ok: true, status: 200, json: async () => ({ ...FIXTURE.verify_ok }) };
+  }
+  if (u.includes('/purchase/claim')) {
+    if (failClaim) {
+      return { ok: false, status: 403, json: async () => ({ error: 'valid read token bound to this fp required' }) };
+    }
+    return { ok: true, status: 200, json: async () => (claimBody ? { ...claimBody } : { status: 'no_pending' }) };
   }
   if (u.includes('/tokens/activate')) {
     return { ok: true, status: 200, json: async () => ({ ...FIXTURE.activate_ok }) };
@@ -266,6 +274,61 @@ console.log('9. истёкший Pro');
     daily_used: FIXTURE.tokens_info_ok.daily_used,
     daily_limit: FIXTURE.tokens_info_ok.daily_limit,
   }));
+}
+
+console.log('10. purchaseClaim — получка веб-покупки');
+{
+  // Без своего токена получка не должна дёргать сервер: его 403 — это не
+  // ошибка покупки, а «дождись регистрации», и молчать надо локально.
+  // (Мок моста хранит все аккаунты в одном kv — глушим токен прямо в списке.)
+  const savedList = kv.get('relay-list');
+  const list = JSON.parse(savedList || '[]');
+  list.forEach((x) => { x.myToken = ''; });
+  kv.set('relay-list', JSON.stringify(list));
+  net.length = 0;
+  const res = await R.purchaseClaim('me@x.ru');
+  check('без своего токена получка не идёт на сервер (дождись регистрации, не глупый 403)',
+    !!(res && res.error === 'no_token') && !net.some(([u]) => u.includes('/purchase/claim')), res);
+  kv.set('relay-list', savedList);
+}
+{
+  claimBody = { ...FIXTURE.verify_ok, token: 'tok-claim-new', checkout_id: 'co_site_9' };
+  // Сбрасываем состояние: устройства и лимиты знает только сервер, их обязан
+  // подтянуть fetchTokenInfo внутри получки.
+  kv.set('relay-pro-state', JSON.stringify({ plan: 'free', paid_until: 0 }));
+  net.length = 0;
+  const cl = await R.purchaseClaim('me@x.ru');
+  check('получка ушла с fp и keep-доказательством (свой текущий токен)',
+    net.some(([u, , b]) => u.includes('/purchase/claim')
+      && b.includes('fp-alice') && b.includes(FIXTURE.verify_ok.token)), net.map(([u]) => u));
+  check('токен из получки получен', !!(cl && cl.token === 'tok-claim-new'), cl);
+  check('токен из получки активирован на устройстве',
+    net.some(([u]) => u.includes('/tokens/activate')), net.map(([u]) => u));
+  const relays = await R.getRelays('me@x.ru');
+  const ours = relays.find((x) => x.url.includes('vault-msg.ru'));
+  check('новый токен записан в relay-list (получка не повторяется каждую загрузку)',
+    !!(ours && ours.myToken === 'tok-claim-new'), relays);
+  const st = await R.proState('me@x.ru');
+  check('состояние Pro записано из получки', st && st.plan === 'pro' && st.paid_until > 0, st);
+  check('получка подтянула устройства с сервера (fetchTokenInfo выполнен)',
+    st && st.devices === FIXTURE.tokens_info_ok.devices
+       && net.some(([u]) => u.includes('/tokens/info')), st);
+  claimBody = null;
+}
+{
+  // Очередь пуста: «нет получаемого» — не покупка, ничего не активируется.
+  net.length = 0;
+  const np = await R.purchaseClaim('me@x.ru');
+  check('no_pending: клиент ничего не активирует и не выдаёт это за успех',
+    !!(np && np.status === 'no_pending') && !net.some(([u]) => u.includes('/tokens/activate')), np);
+}
+{
+  net.length = 0;
+  failClaim = true;
+  const bad = await R.purchaseClaim('me@x.ru');
+  check('серверный отказ (403) не выдаётся за успех покупки',
+    !!(bad && bad.error && bad.status === 403), bad);
+  failClaim = false;
 }
 
 console.log('');

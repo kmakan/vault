@@ -397,6 +397,50 @@ console.log('7. purchasesAllowed');
   check('сборка без покупок: платёжная сессия НЕ создана', calls.length === 0, calls);
 }
 
+console.log('8. веб-канал: получка и подсказка кода');
+{
+  const order = [];
+  const st = await P.loadProState({
+    claim: async () => { order.push('claim'); },
+    info: async () => { order.push('info'); return { plan: 'pro', paid_until: 4102444800 }; },
+    localState: async () => { order.push('local'); return { plan: 'free' }; },
+    setState: () => {},
+  });
+  check('claim выполняется раньше серверного info',
+    order[0] === 'claim' && order[1] === 'info', order);
+  check('после получки состояние — с сервера (оплаченный Pro виден сразу)',
+    st && st.plan === 'pro', st);
+  let st2 = null;
+  let threw2 = null;
+  try {
+    st2 = await P.loadProState({
+      claim: async () => { throw new Error('boom'); },
+      info: async () => ({ plan: 'trial' }),
+      localState: async () => null,
+      setState: () => {},
+    });
+  } catch (e) { threw2 = e; }
+  check('отказ получки не прерывает загрузку состояния',
+    !threw2 && st2 && st2.plan === 'trial', threw2 || st2);
+  const st3 = await P.loadProState({
+    info: async () => ({ plan: 'free' }),
+    localState: async () => null,
+    setState: () => {},
+  });
+  check('загрузка без claim-примитива работает (старые вызывающие)',
+    st3 && st3.plan === 'free', st3);
+  // Подсказка кода — по каналу: Play (внешняя оплата запрещена политикой)
+  // не должен показывать ни кода, ни адреса сайта.
+  check('Play-сборка (покупок нет, WEB_PAY не задан): подсказки нет',
+    P.webPayHintEnabled({ VITE_NO_PURCHASES: '1' }) === false);
+  check('RuStore (покупок нет, WEB_PAY=1): подсказка есть',
+    P.webPayHintEnabled({ VITE_NO_PURCHASES: '1', VITE_WEB_PAY: '1' }) === true);
+  check('прямой канал (покупки есть): подсказка не нужна — есть кнопка',
+    P.webPayHintEnabled({ VITE_NO_PURCHASES: '0', VITE_WEB_PAY: '1' }) === false);
+  check('WEB_PAY=0 — подсказки нет (опечатка в конфиге не включает блок)',
+    P.webPayHintEnabled({ VITE_NO_PURCHASES: '1', VITE_WEB_PAY: '0' }) === false);
+}
+
 console.log('');
 console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

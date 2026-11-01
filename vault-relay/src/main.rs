@@ -90,6 +90,11 @@ pub struct AppState {
     pub checkouts: std::sync::Mutex<std::collections::HashMap<String, vault_relay::payments::Checkout>>,
     /// Попытки чекаута по fp: unix-сек последних попыток (лимитер ≤5/час).
     pub checkout_attempts: std::sync::Mutex<std::collections::HashMap<String, Vec<u64>>>,
+    /// Выданные чекауты: id тех, по которым подписка уже выпущена. Один платёж
+    /// обязан выдать ровно одну подписку — ни двойной verify, ни verify после
+    /// claim (веб-чекаут: оплачен сайтом, получен приложением) не должны
+    /// выдавать токен повторно. Живёт столько же, сколько сами чекауты (память).
+    pub redeemed: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Устройства подписки: id подписки → hash'ы её токенов (по одному на
     /// устройство). Персист: рестарт релея не обнуляет лимит устройств.
     pub sub_tokens: std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>,
@@ -240,6 +245,7 @@ impl AppState {
             crypto: None,
             checkouts: std::sync::Mutex::new(HashMap::new()),
             checkout_attempts: std::sync::Mutex::new(HashMap::new()),
+            redeemed: std::sync::Mutex::new(std::collections::HashSet::new()),
             sub_tokens: std::sync::Mutex::new(sub_tokens),
             last_seen: std::sync::Mutex::new(HashMap::new()),
             topic_ringtone: std::sync::Mutex::new(topic_ringtone),
@@ -314,7 +320,14 @@ impl AppState {
         let map = self.checkouts.lock().expect("checkouts lock");
         map.values()
             .find(|c| {
-                c.fp == fp && c.plan == plan && c.months == months && c.provider == provider && c.expires_at > now()
+                c.fp == fp
+                    && c.plan == plan
+                    && c.months == months
+                    && c.provider == provider
+                    && c.expires_at > now()
+                    // Выданный чекаут — не «та же покупка»: подписка по нему
+                    // уже выпущена, повторный клик обязан создать новый платёж.
+                    && !self.is_redeemed(&c.id)
             })
             .cloned()
     }
@@ -332,6 +345,47 @@ impl AppState {
             .lock()
             .expect("checkouts lock")
             .insert(c.id.clone(), c);
+    }
+
+    /// По этому чекауту уже выпущена подписка?
+    pub fn is_redeemed(&self, id: &str) -> bool {
+        self.redeemed
+            .lock()
+            .expect("redeemed lock")
+            .contains(id)
+    }
+
+    /// Отметить: чекаут выдан (зовёт только grant_paid_checkout — иначе
+    /// «выдано» могло бы отстать от фактически выпущенной подписки).
+    pub fn mark_redeemed(&self, id: &str) {
+        self.redeemed
+            .lock()
+            .expect("redeemed lock")
+            .insert(id.to_string());
+    }
+
+    /// Живые невыданные чекауты этого fp — очередь для claim. Crypto живёт и
+    /// после expires_at («деньги пришли» важнее локального таймера, то же
+    /// правило, что в verify), ₽-кассы отсекаются по сроку. Порядок: новые
+    /// раньше — покупатель вероятнее оплатил последнюю сессию.
+    pub fn pending_checkouts_for_fp(
+        &self,
+        fp: &str,
+        max: usize,
+    ) -> Vec<vault_relay::payments::Checkout> {
+        let map = self.checkouts.lock().expect("checkouts lock");
+        let mut v: Vec<vault_relay::payments::Checkout> = map
+            .values()
+            .filter(|c| {
+                c.fp == fp
+                    && !self.is_redeemed(&c.id)
+                    && (c.provider == "crypto" || c.expires_at > now())
+            })
+            .cloned()
+            .collect();
+        v.sort_by(|a, b| b.expires_at.cmp(&a.expires_at));
+        v.truncate(max);
+        v
     }
 
     /// Сколько устройств привязано к подписке (по sub, а не по токену).
@@ -2445,6 +2499,58 @@ fn payment_error_response(e: vault_relay::payments::PaymentError) -> Response {
     }
 }
 
+/// Провайдер ПО СОХРАНЁННОМУ чекауту, а не по запросу клиента: спросить
+/// «оплачен ли» можно только того процессора, который создавал счёт.
+/// Crypto-чекаут без настроенного crypto — недоступен, а не «нет».
+fn provider_for_checkout(
+    app: &Arc<AppState>,
+    checkout: &vault_relay::payments::Checkout,
+) -> Option<Arc<dyn vault_relay::payments::PaymentProvider>> {
+    if checkout.provider == "crypto" {
+        app.crypto
+            .clone()
+            .map(|c| c as Arc<dyn vault_relay::payments::PaymentProvider>)
+    } else {
+        app.payment.clone()
+    }
+}
+
+/// Выдать оплаченное: подписка + v2-токен + его topic. ОДНА функция для
+/// verify и claim: «оплачено» обязано превращаться в токен по одному и тому
+/// же правилу (срок, персист, отметка о выдаче), иначе веб-канал разъедется
+/// с внутриапповым. Отметку ставим здесь — единственный легальный путь
+/// пометить чекаут выданным.
+fn grant_paid_checkout(
+    app: &Arc<AppState>,
+    checkout: &vault_relay::payments::Checkout,
+) -> serde_json::Value {
+    // Подписка — ПЕРСИСТ (persist.rs): купленный Pro не должен
+    // теряться при рестарте релея. Токен — v2 (в нём план и срок).
+    let sub = app.next_subscription_id();
+    let paid_until = now() + (checkout.months as u64) * 30 * 86400;
+    app.save_subscription(sub, checkout.plan, &checkout.fp, paid_until);
+    let token = vault_relay::tokens::issue_v2(
+        &app.keys,
+        vault_relay::tokens::Scope::Read,
+        checkout.plan,
+        sub,
+        paid_until as u32,
+    );
+    // Адрес очереди (topic) — тот же hash, что и у любого read-токена.
+    let topic = vault_relay::parse(&app.keys, &token)
+        .map(|t| t.hash)
+        .unwrap_or_default();
+    app.mark_redeemed(&checkout.id);
+    serde_json::json!({
+        "token": token,
+        "topic": topic,
+        "plan": format!("{:?}", checkout.plan).to_lowercase(),
+        "paid_until": paid_until,
+        "sub": sub,
+        "checkout_id": checkout.id,
+    })
+}
+
 
 // ── Роуты токена подписки: активация на устройстве и остаток лимитов ────
 
@@ -2797,24 +2903,20 @@ async fn relay_purchase_verify(
     let Some(checkout) = app.get_checkout(&req.checkout_id) else {
         return err(StatusCode::GONE, "checkout expired");
     };
+    // Одна оплата — одна выдача: по этому чекауту токен уже выпущен
+    // (verify или claim веб-чекаута). Второй заход — ошибка клиента, не покупка.
+    if app.is_redeemed(&req.checkout_id) {
+        return err(StatusCode::CONFLICT, "already_redeemed");
+    }
     // Провайдер берётся ПО СОХРАНЁННОМУ чекауту, а не по запросу клиента:
     // спросить «оплачен ли» можно только того процессора, который создавал
     // счёт. Crypto-чекаут без настроенного crypto — недоступен, а не «нет».
-    let provider: Arc<dyn vault_relay::payments::PaymentProvider> = if checkout.provider == "crypto"
-    {
-        match app
-            .crypto
-            .clone()
-            .map(|c| c as Arc<dyn vault_relay::payments::PaymentProvider>)
-        {
-            Some(p) => p,
-            None => return err(StatusCode::PAYMENT_REQUIRED, "crypto checkout disabled"),
-        }
-    } else {
-        match app.payment.clone() {
-            Some(p) => p,
-            None => return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled"),
-        }
+    let Some(provider) = provider_for_checkout(&app, &checkout) else {
+        return if checkout.provider == "crypto" {
+            err(StatusCode::PAYMENT_REQUIRED, "crypto checkout disabled")
+        } else {
+            err(StatusCode::PAYMENT_REQUIRED, "checkout disabled")
+        };
     };
     // 409: fingerprint не совпадает — иначе оплаченный чекаут забрал бы чужой
     // аккаунт (а токен ушёл бы не тому, кто платил).
@@ -2829,33 +2931,8 @@ async fn relay_purchase_verify(
     }
     match provider.verify(&checkout).await {
         Ok(vault_relay::payments::PaymentStatus::Paid) => {
-            // Подписка — ПЕРСИСТ (persist.rs): купленный Pro не должен
-            // теряться при рестарте релея. Токен — v2 (в нём план и срок).
-            let sub = app.next_subscription_id();
-            let paid_until = now() + (checkout.months as u64) * 30 * 86400;
-            app.save_subscription(sub, checkout.plan, &checkout.fp, paid_until);
-            let token = vault_relay::tokens::issue_v2(
-                &app.keys,
-                vault_relay::tokens::Scope::Read,
-                checkout.plan,
-                sub,
-                paid_until as u32,
-            );
-            // Адрес очереди (topic) — тот же hash, что и у любого read-токена.
-            let topic = vault_relay::parse(&app.keys, &token)
-                .map(|t| t.hash)
-                .unwrap_or_default();
-            (
-                StatusCode::OK,
-                AxumJson(serde_json::json!({
-                    "token": token,
-                    "topic": topic,
-                    "plan": format!("{:?}", checkout.plan).to_lowercase(),
-                    "paid_until": paid_until,
-                    "sub": sub,
-                })),
-            )
-                .into_response()
+            let body = grant_paid_checkout(&app, &checkout);
+            (StatusCode::OK, AxumJson(body)).into_response()
         }
         Ok(vault_relay::payments::PaymentStatus::Pending) => {
             err(StatusCode::PAYMENT_REQUIRED, "not_paid_yet")
@@ -2866,6 +2943,77 @@ async fn relay_purchase_verify(
         ),
         Err(e) => payment_error_response(e),
     }
+}
+
+/// Запрос получки: fp + СВОЙ read-токен (доказательство, что fp принадлежит
+/// задавшему, и защита от опроса процессора чужим кодом).
+#[derive(Debug, Deserialize)]
+struct ClaimReq {
+    /// Fingerprint покупателя.
+    fp: String,
+    /// Свой read-токен (тот же смысл, что `keep` у /relay/register).
+    keep: String,
+}
+
+/// POST /relay/purchase/claim — приложение забирает подписку, купленную на сайте.
+///
+/// Покупка живёт в браузере: сайт создал чекаут и провёл оплату, а токен нужно
+/// именно приложению, которое знает только свой fp. Claim сверяет каждый живый
+/// невыданный чекаут fp с процессором (НЕ с IPN: отметка IPN лишь ускоряет
+/// ответ, право даёт опрос) и выдаёт оплаченное теми же правилам, что verify:
+/// один платёж — одна выдача. Без токена-доказательства отказываем, иначе по
+/// одному лишь чужому коду можно узнавать состояние покупок аккаунта и гонять
+/// запросы к процессору.
+async fn relay_purchase_claim(State(app): State<Arc<AppState>>, Json(req): Json<ClaimReq>) -> Response {
+    if app.payment.is_none() && app.crypto.is_none() {
+        return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled");
+    }
+    let Some(fp) = norm_fp(Some(&req.fp)) else {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "bad fp");
+    };
+    let keep = req.keep.trim().to_string();
+    let proved = vault_relay::parse(&app.keys, &keep)
+        .filter(|t| t.scope == Scope::Read && !t.is_expired() && !token_revoked(&app, &t.hash))
+        .filter(|t| check_token_binding(&app, &t.hash, &Some(fp.clone())))
+        .is_some();
+    if !proved {
+        return err(
+            StatusCode::FORBIDDEN,
+            "valid read token bound to this fp required",
+        );
+    }
+    let candidates = app.pending_checkouts_for_fp(&fp, 5);
+    if candidates.is_empty() {
+        return (
+            StatusCode::OK,
+            AxumJson(serde_json::json!({ "status": "no_pending" })),
+        )
+            .into_response();
+    }
+    for c in &candidates {
+        let Some(provider) = provider_for_checkout(&app, c) else {
+            continue; // процессор этого канала настроен позже — молча пропускаем
+        };
+        match provider.verify(c).await {
+            Ok(vault_relay::payments::PaymentStatus::Paid) => {
+                let body = grant_paid_checkout(&app, c);
+                tracing::info!(
+                    fp = %fp,
+                    checkout = %c.id,
+                    provider = %c.provider,
+                    "claim: paid checkout granted"
+                );
+                return (StatusCode::OK, AxumJson(body)).into_response();
+            }
+            // pending/failed/ошибка — пробуем следующую сессию этого fp.
+            _ => continue,
+        }
+    }
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "status": "not_paid", "pending": candidates.len() })),
+    )
+        .into_response()
 }
 
 /// POST /relay/purchase/ipn — подписанное уведомление крипто-процессора.
@@ -3185,6 +3333,8 @@ async fn main() {
         // Подписанное уведомление крипто-процессора (отмечает оплату, право
         // всё равно выдаёт verify с fp).
         .route("/relay/purchase/ipn", post(relay_purchase_ipn))
+        // Получка веб-покупки приложением (оплачено на сайте — токен в приложении).
+        .route("/relay/purchase/claim", post(relay_purchase_claim))
         // return_url провайдера (ЮKassa): человеку — страница, не 404.
         .route("/pay-return/:id", get(pay_return))
         .route("/relay/tokens/activate", post(relay_tokens_activate))
@@ -4943,6 +5093,235 @@ mod tests {
             relay_purchase_ipn(State(app_off), axum::http::HeaderMap::new(), axum::body::Bytes::from_static(b"{}"))
                 .await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Свой read-токен для fp: регистрация так же, как в живом приложении.
+    async fn register_token(app: &Arc<AppState>, fp: &str) -> String {
+        let body = json_of(
+            relay_register(
+                State(app.clone()),
+                ConnectInfo("127.0.0.1:4111".parse().expect("addr")),
+                Json(RegisterReq {
+                    promo: None,
+                    fp: Some(fp.to_string()),
+                    ringtone: None,
+                    keep: None,
+                }),
+            )
+            .await,
+        )
+        .await;
+        body["token"].as_str().expect("token").to_string()
+    }
+
+    /// Веб-покупка: сайт платит, приложение забирает токен по fp + своему
+    /// токену. Один платёж — одна выдача: повторный claim молчит, verify
+    /// после claim даёт 409.
+    #[tokio::test]
+    async fn claim_grants_site_checkout_and_pays_once() {
+        let app = pay_app_state_full(
+            keys(),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+            Some(crypto_stub()),
+        );
+        let keep = register_token(&app, "fp-site").await;
+        // Пустая очередь — «нечего получать», без похода к процессору.
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-site".into(),
+                    keep: keep.clone(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(cb["status"], "no_pending");
+        // Пустой fp — отказ формы, а не «нет покупок».
+        let resp = relay_purchase_claim(
+            State(app.clone()),
+            Json(ClaimReq {
+                fp: "  ".into(),
+                keep: keep.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let b = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 1, "fp-site", "card")),
+            )
+            .await,
+        )
+        .await;
+        let checkout_id = b["checkout_id"].as_str().expect("id").to_string();
+        // Без токена-доказательства — 403, к процессору не идём.
+        let resp = relay_purchase_claim(
+            State(app.clone()),
+            Json(ClaimReq {
+                fp: "fp-site".into(),
+                keep: "мусор".into(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // Чужой fp с нашим токеном — тоже 403: привязка «один токен = один fp».
+        let resp = relay_purchase_claim(
+            State(app.clone()),
+            Json(ClaimReq {
+                fp: "fp-чужой".into(),
+                keep: keep.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "токен привязан к своему fp");
+        // Test-провайдер оплачивает собственный чекаут — выдача по fp.
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-site".into(),
+                    keep: keep.clone(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let k2 = keys();
+        let t = vault_relay::parse(&k2, cb["token"].as_str().expect("выдан токен"))
+            .expect("разбирается");
+        assert_eq!(t.plan, vault_relay::tokens::Plan::Pro);
+        assert!(
+            app.active_subscription("fp-site").is_some(),
+            "подписка по fp активна"
+        );
+        // Выданный чекаут не считается «той же покупкой»: идемпотентность
+        // обязана мимо него проходить (повторный клик = новый платёж).
+        assert!(
+            app.find_checkout("fp-site", vault_relay::tokens::Plan::Pro, 1, "test")
+                .is_none(),
+            "выданный чекаут снят с идемпотентности"
+        );
+        // Повтор claim — нечего получать: выданный чекаут снят с очереди.
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-site".into(),
+                    keep: keep.clone(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(cb["status"], "no_pending");
+        // Verify после claim — 409: одна оплата, одна выдача.
+        let resp = relay_purchase_verify(
+            State(app.clone()),
+            Json(VerifyReq {
+                checkout_id: checkout_id.clone(),
+                fp: "fp-site".into(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        // Без настроенных процессоров claim — честное 402, а не «не оплачено».
+        let off = pay_app_state_full(keys(), None, None);
+        let resp = relay_purchase_claim(
+            State(off),
+            Json(ClaimReq {
+                fp: "fp-site".into(),
+                keep: keep.clone(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    /// Крипто-веб-покупка: до подтверждения процессором claim отвечает
+    /// «не оплачено» и прав не даёт; после подписанного IPN — выдаёт токен.
+    #[tokio::test]
+    async fn claim_crypto_waits_for_ipn_then_grants() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha512;
+        let k = keys();
+        let app = pay_app_state_full(ServerKeys::new([7u8; 32]), None, Some(crypto_stub()));
+        let keep = register_token(&app, "fp-web").await;
+        let b = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 3, "fp-web", "crypto")),
+            )
+            .await,
+        )
+        .await;
+        let checkout_id = b["checkout_id"].as_str().expect("id").to_string();
+        // Опрос процессора: инвойс есть, статуса нет — не оплачено.
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-web".into(),
+                    keep: keep.clone(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(cb["status"], "not_paid");
+        // Чекаут «просрочен» по локальному таймеру — crypto-сессию это НЕ
+        // снимает с очереди: сеть может подтвердить перевод позже.
+        {
+            let mut map = app.checkouts.lock().expect("checkouts lock");
+            map.get_mut(&checkout_id).expect("чекаут жив в памяти").expires_at = 1;
+        }
+        // IPN подтверждает получение — claim выдаёт Pro.
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "payment_status": "payment_sent",
+            "order_id": checkout_id,
+        }))
+        .expect("body");
+        let mut mac = Hmac::<Sha512>::new_from_slice(b"s3cret").expect("mac");
+        mac.update(&raw);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "x-signature",
+            hex::encode(mac.finalize().into_bytes()).parse().expect("hdr"),
+        );
+        assert_eq!(
+            relay_purchase_ipn(State(app.clone()), headers, axum::body::Bytes::from(raw))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-web".into(),
+                    keep: keep.clone(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let t = vault_relay::parse(&k, cb["token"].as_str().expect("токен")).expect("разбирается");
+        assert_eq!(t.plan, vault_relay::tokens::Plan::Pro);
+        // Выдано — второй claim ничего не ищет и повторно не выдаёт.
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-web".into(),
+                    keep,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(cb["status"], "no_pending");
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 {
   "why": "Контракт ответов платёжных роутов релея ↔ клиента Vault. Читают ОБЕ стороны: Rust-тесты релея (vault-relay/src/main.rs) и JS-смоук клиента (vault-desktop/scripts/relay-pro-smoke.mjs). Зачем: пока контракт проверялся с каждой стороны отдельно, расхождение (имя поля, тип, обязательность) проходило незамеченным — релей отдавал одно, клиент ждал другое, и обе проверки были зелёными. Общая фикстура превращает это в паритет: переименование поля ломает обе проверки сразу.",
-  "producer": "vault-relay/src/main.rs (relay_purchase_checkout / relay_purchase_verify / relay_tokens_info / relay_tokens_activate)",
-  "consumer": "vault-desktop/src/relay-client.js (purchaseCheckout / purchaseVerify / fetchTokenInfo / activateToken)",
+  "producer": "vault-relay/src/main.rs (relay_purchase_checkout / relay_purchase_verify / relay_purchase_claim / relay_tokens_info / relay_tokens_activate)",
+  "consumer": "vault-desktop/src/relay-client.js (purchaseCheckout / purchaseVerify / purchaseClaim / fetchTokenInfo / activateToken)",
   "checkout_ok": {
     "checkout_id": "co_test_1",
     "provider": "test",
@@ -13,7 +13,8 @@
     "topic": "<queue address hash>",
     "plan": "pro",
     "paid_until": 4102444800,
-    "sub": 1
+    "sub": 1,
+    "checkout_id": "co_<id>"
   },
   "tokens_info_ok": {
     "plan": "pro",
