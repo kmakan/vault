@@ -80,6 +80,10 @@ pub struct AppState {
     /// платёжные роуты отвечают 402 «checkout disabled», а не выдумывают
     /// успех.
     pub payment: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
+    /// Крипто-провайдер (не-рублёвая оплата через сайт). Отдельное поле
+    /// КОНКРЕТНЫМ типом: маршруту IPN нужны подписи и mark_paid, которых
+    /// нет в трейте, а downcast у `Arc<dyn …>` нет.
+    pub crypto: Option<Arc<vault_relay::payments::CryptoProvider>>,
     /// Незавершённые чекауты: id → сессия. In-memory по замыслу: рестарт релея
     /// обрывает незавершённую оплату (клиент начнёт заново) — но ВЫДАЧЕННЫЙ
     /// после оплаты токен и подписка переживают рестарт (persist.rs).
@@ -233,6 +237,7 @@ impl AppState {
             token_bindings: std::sync::Mutex::new(token_bindings),
             subscriptions: std::sync::Mutex::new(subscriptions),
             payment,
+            crypto: None,
             checkouts: std::sync::Mutex::new(HashMap::new()),
             checkout_attempts: std::sync::Mutex::new(HashMap::new()),
             sub_tokens: std::sync::Mutex::new(sub_tokens),
@@ -297,15 +302,20 @@ impl AppState {
 
     /// Незавершённый чекаут того же покупателя с тем же планом и сроком —
     /// идемпотентность: повторный клик «купить» не плодит сессии.
+    /// Провайдер — часть ключа: карта и крипта — разные платёжные сессии,
+    /// иначе переключение способа вернуло бы ссылку чужого способа.
     pub fn find_checkout(
         &self,
         fp: &str,
         plan: vault_relay::tokens::Plan,
         months: u32,
+        provider: &str,
     ) -> Option<vault_relay::payments::Checkout> {
         let map = self.checkouts.lock().expect("checkouts lock");
         map.values()
-            .find(|c| c.fp == fp && c.plan == plan && c.months == months && c.expires_at > now())
+            .find(|c| {
+                c.fp == fp && c.plan == plan && c.months == months && c.provider == provider && c.expires_at > now()
+            })
             .cloned()
     }
 
@@ -2397,6 +2407,12 @@ pub struct CheckoutReq {
     /// Язык платёжной страницы ("ru" | "en").
     #[serde(default)]
     lang: Option<String>,
+    /// Способ оплаты: "card" (дефолт — основной провайдер, ЮKassa) или
+    /// "crypto" (не-рублёвый канал через сайт). Неизвестный способ —
+    /// не «основной провайдер», а отказ: опечатка в методе не должна
+    /// тихо вести покупателя на чужую кассу.
+    #[serde(default)]
+    method: Option<String>,
 }
 
 /// Запрос на подтверждение оплаты.
@@ -2656,9 +2672,18 @@ async fn relay_turn(State(app): State<Arc<AppState>>, headers: HeaderMap) -> Res
 /// GET /relay/plans — витрина покупаемых тарифов. Цену считает сервер
 /// (payments::pro_catalog = та же таблица, что и касса чекаута), клиент ничего
 /// о цене не решает — только показывает. Публичный, без fp.
-async fn relay_plans() -> Response {
+/// Крипто-витрина отдаётся ВСЕГДА (цены — то же правило, что у кассы), а
+/// `enabled` говорит, настроен ли процессор: страница показывает способ или
+/// честно гасит его, не придумывая цену сама.
+async fn relay_plans(State(app): State<Arc<AppState>>) -> Response {
     AxumJson(serde_json::json!({
         "plans": vault_relay::payments::pro_catalog(),
+        "crypto": {
+            "enabled": app.crypto.is_some(),
+            "currency": "USD",
+            "assets": vault_relay::payments::CRYPTO_ASSETS,
+            "plans": vault_relay::payments::crypto_catalog(),
+        },
     }))
     .into_response()
 }
@@ -2668,9 +2693,33 @@ async fn relay_purchase_checkout(
     State(app): State<Arc<AppState>>,
     Json(req): Json<CheckoutReq>,
 ) -> Response {
+    // Способ оплаты: пусто/«card» — основная касса (₽), «crypto» —
+    // не-рублёвый канал сайта. Неизвестный способ — 422: опечатка в методе
+    // не должна тихо вести покупателя на чужую кассу.
+    let method = req
+        .method
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or("card");
     // 402: платежи выключены (нет ИП/ключей) — честно, а не «одобрить».
-    let Some(provider) = app.payment.clone() else {
-        return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled");
+    let provider: Arc<dyn vault_relay::payments::PaymentProvider> = match method {
+        "card" => match app.payment.clone() {
+            Some(p) => p,
+            None => return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled"),
+        },
+        "crypto" => match app
+            .crypto
+            .clone()
+            .map(|c| c as Arc<dyn vault_relay::payments::PaymentProvider>)
+        {
+            Some(p) => p,
+            None => return err(StatusCode::PAYMENT_REQUIRED, "crypto checkout disabled"),
+        },
+        other => {
+            let why = format!("bad method: {other}");
+            return err(StatusCode::UNPROCESSABLE_ENTITY, &why);
+        }
     };
     let Some(plan) = paid_plan(&req.plan) else {
         return err(StatusCode::UNPROCESSABLE_ENTITY, "bad plan/months");
@@ -2698,9 +2747,10 @@ async fn relay_purchase_checkout(
     if !app.checkout_rate_ok(&fp) {
         return err(StatusCode::TOO_MANY_REQUESTS, "rate limited");
     }
-    // ИДЕМПОТЕНТНОСТЬ: тот же fp + план + срок → тот же checkout_id
-    // (иначе повторный клик «купить» плодит платёжные сессии).
-    if let Some(existing) = app.find_checkout(&fp, plan, req.months) {
+    // ИДЕМПОТЕНТНОСТЬ: тот же fp + план + срок + провайдер → тот же
+    // checkout_id (иначе повторный клик «купить» плодит платёжные сессии,
+    // а смена способа не должна возвращать ссылку прошлого способа).
+    if let Some(existing) = app.find_checkout(&fp, plan, req.months, provider.name()) {
         return (
             StatusCode::OK,
             AxumJson(serde_json::json!({
@@ -2741,18 +2791,40 @@ async fn relay_purchase_verify(
     State(app): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
 ) -> Response {
-    let Some(provider) = app.payment.clone() else {
+    if app.payment.is_none() && app.crypto.is_none() {
         return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled");
-    };
+    }
     let Some(checkout) = app.get_checkout(&req.checkout_id) else {
         return err(StatusCode::GONE, "checkout expired");
+    };
+    // Провайдер берётся ПО СОХРАНЁННОМУ чекауту, а не по запросу клиента:
+    // спросить «оплачен ли» можно только того процессора, который создавал
+    // счёт. Crypto-чекаут без настроенного crypto — недоступен, а не «нет».
+    let provider: Arc<dyn vault_relay::payments::PaymentProvider> = if checkout.provider == "crypto"
+    {
+        match app
+            .crypto
+            .clone()
+            .map(|c| c as Arc<dyn vault_relay::payments::PaymentProvider>)
+        {
+            Some(p) => p,
+            None => return err(StatusCode::PAYMENT_REQUIRED, "crypto checkout disabled"),
+        }
+    } else {
+        match app.payment.clone() {
+            Some(p) => p,
+            None => return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled"),
+        }
     };
     // 409: fingerprint не совпадает — иначе оплаченный чекаут забрал бы чужой
     // аккаунт (а токен ушёл бы не тому, кто платил).
     if norm_fp(Some(&req.fp)).as_deref() != Some(checkout.fp.as_str()) {
         return err(StatusCode::CONFLICT, "fp_mismatch");
     }
-    if checkout.expires_at < now() {
+    // Для crypto окно в 30 минут — подсказка интерфейсу, а не отсечение
+    // права: сеть может подтвердить перевод позже, а «деньги пришли» для
+    // покупателя важнее локального таймера. Для ₽-кассы поведение прежнее.
+    if checkout.expires_at < now() && checkout.provider != "crypto" {
         return err(StatusCode::GONE, "checkout_expired");
     }
     match provider.verify(&checkout).await {
@@ -2796,6 +2868,47 @@ async fn relay_purchase_verify(
     }
 }
 
+/// POST /relay/purchase/ipn — подписанное уведомление крипто-процессора.
+///
+/// Ничего НЕ выдаёт: только отмечает платёж оплаченным у провайдера, чтобы
+/// `/relay/purchase/verify` подтвердил его без лишнего опроса. Право по-
+/// прежнему даёт только verify с проверкой fp — потеря отметки при рестарте
+/// безопасна (опрос процессора доживёт). Подпись — HMAC-SHA512 от СЫРОГО
+/// тела на общем секрете: сверяется до разбора JSON, негодная подпись — 403.
+async fn relay_purchase_ipn(
+    State(app): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    raw: axum::body::Bytes,
+) -> Response {
+    let Some(crypto) = app.crypto.clone() else {
+        return err(StatusCode::NOT_FOUND, "ipn disabled");
+    };
+    let sig = headers
+        .get("x-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if !crypto.ipn_signature_ok(&raw, sig) {
+        return err(StatusCode::FORBIDDEN, "bad signature");
+    }
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "bad payload");
+    };
+    let order_id = body.get("order_id").and_then(|v| v.as_str()).unwrap_or_default();
+    let status = body
+        .get("payment_status")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let Some(checkout) = app.get_checkout(order_id) else {
+        // Порядок от чужого процесса или уже выданный — не ошибка процессора:
+        // отвечаем «неизвестен» и молчим, подписанный спам прав не даёт.
+        return err(StatusCode::NOT_FOUND, "unknown order");
+    };
+    if checkout.provider == "crypto" && vault_relay::payments::CryptoProvider::ipn_paid_status(status)
+    {
+        crypto.mark_paid(&checkout.provider_ref);
+    }
+    StatusCode::OK.into_response()
+}
 
 /// Параметры страницы возврата: язык интерфейса платежа (`ru` по умолчанию).
 #[derive(Debug, Deserialize)]
@@ -2990,20 +3103,43 @@ async fn main() {
             persist::ENV_STATE_PATH
         ),
     }
-    // Платёжный провайдер. VAULT_RELAY_PAYMENTS=test — тестовый (оплата
+    // Платёжный провайдер. VAULT_RELAY_PAYMENTS — список через запятую:
+    // "test" | "yookassa" | "crypto" | "yookassa,crypto". Основная (₽) касса —
+    // первый элемент НЕ "crypto"; "crypto" — отдельное поле (IPN-маршруту
+    // нужен конкретный тип). VAULT_RELAY_PAYMENTS=test — тестовый (оплата
     // подтверждается мгновенно, для выдачи Pro-токенов без реальной оплаты).
     // yookassa — живой ЮKassa: собирается ТОЛЬКО с ключами
     // VAULT_RELAY_YOOKASSA_SHOPID/_SECRET_KEY и VAULT_RELAY_PUBLIC_URL;
-    // без них — заглушка «недоступно» и warn, а не полуживой магазин.
-    // Иное непустое значение — провайдер-заглушка «недоступно» (честный отказ,
-    // а не выдуманный успех). Пусто — платежи выключены: все платёжные роуты
-    // отвечают 402.
+    // crypto — живой крипто-канал: собирается ТОЛЬКО с
+    // VAULT_RELAY_CRYPTO_APIKEY и VAULT_RELAY_PUBLIC_URL (секрет IPN —
+    // VAULT_RELAY_CRYPTO_IPN_SECRET; без него приём уведомлений закрыт).
+    // Без ключей — заглушка «недоступно»/отсутствие канала и warn, а не
+    // полуживой магазин. Иное непустое имя — провайдер-заглушка «недоступно»
+    // (честный отказ, а не выдуманный успех). Пусто — платежи выключены:
+    // все платёжные роуты отвечают 402.
+    let payments_env: Vec<String> = std::env::var("VAULT_RELAY_PAYMENTS")
+        .ok()
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let crypto: Option<Arc<vault_relay::payments::CryptoProvider>> =
+        if payments_env.iter().any(|m| m == "crypto") {
+            match vault_relay::payments::CryptoProvider::from_env() {
+                Ok(p) => Some(Arc::new(p)),
+                Err(why) => {
+                    tracing::warn!("payments=crypto but provider not configured: {why}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
     let payment: Option<Arc<dyn vault_relay::payments::PaymentProvider>> =
-        match std::env::var("VAULT_RELAY_PAYMENTS")
-            .ok()
-            .as_deref()
-            .map(str::trim)
-        {
+        match payments_env.iter().find(|m| m.as_str() != "crypto").map(String::as_str) {
             Some("test") | Some("1") | Some("true") => {
                 Some(Arc::new(vault_relay::payments::TestProvider::new()) as Arc<dyn vault_relay::payments::PaymentProvider>)
             }
@@ -3016,13 +3152,13 @@ async fn main() {
                     ) as Arc<dyn vault_relay::payments::PaymentProvider>)
                 }
             },
-            Some(name) if !name.is_empty() => Some(Arc::new(
+            Some(name) => Some(Arc::new(
                 vault_relay::payments::UnavailableProvider::new(name),
             ) as Arc<dyn vault_relay::payments::PaymentProvider>),
-            _ => None,
+            None => None,
         };
-    let payments_on = payment.is_some();
-    let state = Arc::new(AppState::new(
+    let payments_on = payment.is_some() || crypto.is_some();
+    let mut app_state = AppState::new(
         Store::new(),
         ServerKeys::new(server_key),
         allow_anonymous_pub,
@@ -3033,7 +3169,9 @@ async fn main() {
         fcm,
         state_path,
         payment,
-    ));
+    );
+    app_state.crypto = crypto;
+    let state = Arc::new(app_state);
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}, free_daily_limit={free_daily_limit}, payments={payments_on}"
     );
@@ -3044,6 +3182,9 @@ async fn main() {
         .route("/relay/plans", get(relay_plans))
         .route("/relay/purchase/checkout", post(relay_purchase_checkout))
         .route("/relay/purchase/verify", post(relay_purchase_verify))
+        // Подписанное уведомление крипто-процессора (отмечает оплату, право
+        // всё равно выдаёт verify с fp).
+        .route("/relay/purchase/ipn", post(relay_purchase_ipn))
         // return_url провайдера (ЮKassa): человеку — страница, не 404.
         .route("/pay-return/:id", get(pay_return))
         .route("/relay/tokens/activate", post(relay_tokens_activate))
@@ -3170,7 +3311,16 @@ mod tests {
 
     /// AppState с платёжным провайдером (тестовым) — для роутов покупки.
     fn pay_app_state(k: ServerKeys, provider: Option<Arc<dyn vault_relay::payments::PaymentProvider>>) -> Arc<AppState> {
-        Arc::new(AppState::new(
+        pay_app_state_full(k, provider, None)
+    }
+
+    /// То же + крипто-канал: crypto — отдельное поле конкретным типом.
+    fn pay_app_state_full(
+        k: ServerKeys,
+        provider: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
+        crypto: Option<Arc<vault_relay::payments::CryptoProvider>>,
+    ) -> Arc<AppState> {
+        let mut s = AppState::new(
             Store::new(),
             k,
             true,
@@ -3181,7 +3331,9 @@ mod tests {
             None,
             None,
             provider,
-        ))
+        );
+        s.crypto = crypto;
+        Arc::new(s)
     }
 
     fn auth_headers(token: &str) -> HeaderMap {
@@ -4416,6 +4568,14 @@ mod tests {
             months,
             fp: fp.to_string(),
             lang: Some("ru".to_string()),
+            method: None,
+        }
+    }
+
+    fn checkout_req_method(plan: &str, months: u32, fp: &str, method: &str) -> CheckoutReq {
+        CheckoutReq {
+            method: Some(method.to_string()),
+            ..checkout_req(plan, months, fp)
         }
     }
 
@@ -4565,6 +4725,247 @@ mod tests {
         )
         .await;
         assert_eq!(vresp.status(), StatusCode::CONFLICT);
+    }
+
+    // ── Крипто-канал: dispatch по method, IPN, витрина /plans ──────────
+
+    /// Крипто-транспорт для роут-тестов: POST — фиксированный инвойс,
+    /// GET — тот же инвойс БЕЗ payment_status (значит Pending): оплаченным
+    /// платёж становится только по подписанному IPN — ровно та цепочка,
+    /// которую тест и проверяет.
+    struct StubCryptoHttp;
+
+    impl vault_relay::payments::CryptoHttp for StubCryptoHttp {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _url: &'a str,
+            _api_key: &'a str,
+            _json_body: Option<serde_json::Value>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<(u16, serde_json::Value), String>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async {
+                Ok((
+                    200,
+                    serde_json::json!({ "invoice_url": "https://invoice.test/9", "invoice_id": 9 }),
+                ))
+            })
+        }
+    }
+
+    fn crypto_stub() -> Arc<vault_relay::payments::CryptoProvider> {
+        Arc::new(vault_relay::payments::CryptoProvider::with_http(
+            "key".into(),
+            Some("s3cret".into()),
+            "https://api.test/v1".into(),
+            "https://relay.test".into(),
+            Arc::new(StubCryptoHttp),
+        ))
+    }
+
+    async fn json_of(resp: axum::response::Response) -> serde_json::Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .expect("body"),
+        )
+        .expect("json")
+    }
+
+    #[tokio::test]
+    async fn purchase_checkout_routes_by_method() {
+        let app = pay_app_state_full(
+            keys(),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+            Some(crypto_stub()),
+        );
+        // card — основная касса.
+        let b = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 1, "fp-card", "card")),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(b["provider"], "test", "card = основная касса");
+        // crypto — крипто-канал, ссылка инвойса процессора.
+        let b2 = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 1, "fp-crypto", "crypto")),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(b2["provider"], "crypto");
+        assert!(b2["payment_url"].as_str().unwrap().starts_with("https://invoice.test/"));
+        // Тот же fp/план/срок, но другой способ — НОВАЯ сессия: переключение
+        // способа не должно возвращать ссылку чужой кассы.
+        let b3 = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 1, "fp-card", "crypto")),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(b3["provider"], "crypto");
+        assert_ne!(b3["checkout_id"], b["checkout_id"]);
+        // Повтор того же способа — та же сессия (идемпотентность жива).
+        let b4 = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 1, "fp-card", "crypto")),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(b4["checkout_id"], b3["checkout_id"]);
+        // Без крипто-канала method=crypto — 402, а не тихий переход на ₽-касса.
+        let app_nocrypto = pay_app_state(keys(), Some(Arc::new(vault_relay::payments::TestProvider::new())));
+        let resp = relay_purchase_checkout(
+            State(app_nocrypto),
+            Json(checkout_req_method("pro", 1, "fp-x", "crypto")),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+        // Неизвестный способ — 422, а не «основной провайдер по умолчанию».
+        let resp = relay_purchase_checkout(
+            State(app),
+            Json(checkout_req_method("pro", 1, "fp-y", "paypal")),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn crypto_ipn_confirm_then_verify_issues_token() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha512;
+        let crypto = crypto_stub();
+        // ServerKeys не Clone — вторая пара с тем же материалом для проверки токена.
+        let k = ServerKeys::new([7u8; 32]);
+        let app = pay_app_state_full(ServerKeys::new([7u8; 32]), None, Some(crypto));
+        let b = json_of(
+            relay_purchase_checkout(
+                State(app.clone()),
+                Json(checkout_req_method("pro", 3, "fp-web", "crypto")),
+            )
+            .await,
+        )
+        .await;
+        let checkout_id = b["checkout_id"].as_str().expect("checkout_id").to_string();
+        // До подтверждения — «не оплачено» (опрос процессора ничего не нашёл).
+        let vresp = relay_purchase_verify(
+            State(app.clone()),
+            Json(VerifyReq {
+                checkout_id: checkout_id.clone(),
+                fp: "fp-web".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(vresp.status(), StatusCode::PAYMENT_REQUIRED);
+        // Подписанное уведомление процессора — 200 и отметка «оплачено».
+        let raw = serde_json::to_vec(&serde_json::json!({
+            "payment_status": "payment_received",
+            "order_id": checkout_id,
+        }))
+        .expect("ipn body");
+        let mut mac = Hmac::<Sha512>::new_from_slice(b"s3cret").expect("mac");
+        mac.update(&raw);
+        let sig = hex::encode(mac.finalize().into_bytes());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-signature", sig.parse().expect("hdr"));
+        let resp = relay_purchase_ipn(
+            State(app.clone()),
+            headers,
+            axum::body::Bytes::from(raw.clone()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        // verify после IPN — оплачен без нового опроса: токен выпущен.
+        let vbody = json_of(
+            relay_purchase_verify(
+                State(app.clone()),
+                Json(VerifyReq {
+                    checkout_id: checkout_id.clone(),
+                    fp: "fp-web".to_string(),
+                }),
+            )
+            .await,
+        )
+        .await;
+        let token = vbody["token"].as_str().expect("токен выдан");
+        let t = vault_relay::parse(&k, token).expect("токен разбирается");
+        assert_eq!(t.plan, vault_relay::tokens::Plan::Pro);
+        // Незнакомый order — 404; неверная подпись того же тела — 403.
+        let forged = serde_json::to_vec(&serde_json::json!({
+            "payment_status": "payment_received",
+            "order_id": "co_чужой",
+        }))
+        .expect("body");
+        let resp = relay_purchase_ipn(
+            State(app.clone()),
+            {
+                let mut h = axum::http::HeaderMap::new();
+                h.insert("x-signature", "00".repeat(64).parse().expect("hdr"));
+                h
+            },
+            axum::body::Bytes::from(forged.clone()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "подпись не сходится — 403 раньше поиска порядка");
+        let resp = relay_purchase_ipn(
+            State(app.clone()),
+            {
+                let mut mac = Hmac::<Sha512>::new_from_slice(b"s3cret").expect("mac");
+                mac.update(&forged);
+                let mut h = axum::http::HeaderMap::new();
+                h.insert(
+                    "x-signature",
+                    hex::encode(mac.finalize().into_bytes()).parse().expect("hdr"),
+                );
+                h
+            },
+            axum::body::Bytes::from(forged),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "чужой порядок — принято и молча, права не выданы");
+        // Без крипто-канала IPN-приём закрыт вовсе.
+        let app_off = pay_app_state_full(keys(), Some(Arc::new(vault_relay::payments::TestProvider::new())), None);
+        let resp =
+            relay_purchase_ipn(State(app_off), axum::http::HeaderMap::new(), axum::body::Bytes::from_static(b"{}"))
+                .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn relay_plans_reports_crypto_catalog_and_flag() {
+        let app = pay_app_state_full(
+            keys(),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+            Some(crypto_stub()),
+        );
+        let b = json_of(relay_plans(State(app)).await).await;
+        assert_eq!(b["plans"].as_array().expect("₽-витрина").len(), 5);
+        assert_eq!(b["crypto"]["enabled"], serde_json::json!(true));
+        assert_eq!(b["crypto"]["currency"], "USD");
+        let cp = b["crypto"]["plans"].as_array().expect("крипто-витрина");
+        assert_eq!(cp.len(), 5, "сроки те же, что у ₽-кассы");
+        assert_eq!(cp[0]["amount"], "2.00");
+        assert_eq!(b["crypto"]["assets"].as_array().expect("монеты").len(), 4);
+        // Без процессора — витрина остаётся (цены решает сервер), но с
+        // честным enabled=false: страница гасит способ, а не прячет цену.
+        let app_off = pay_app_state_full(keys(), None, None);
+        let b = json_of(relay_plans(State(app_off)).await).await;
+        assert_eq!(b["crypto"]["enabled"], serde_json::json!(false));
+        assert_eq!(b["crypto"]["plans"].as_array().unwrap().len(), 5);
     }
 
     async fn body_text(resp: axum::response::Response) -> String {

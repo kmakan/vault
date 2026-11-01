@@ -195,7 +195,7 @@
     "vault-relay/src/channel_keys.rs": 15,
     "vault-relay/src/fcm.rs": 17,
     "vault-relay/src/main.rs": 50,
-    "vault-relay/src/payments.rs": 27,
+    "vault-relay/src/payments.rs": 42,
     "vault-relay/src/persist.rs": 24,
     "vault-relay/src/rate.rs": 9,
     "vault-relay/src/store.rs": 9,

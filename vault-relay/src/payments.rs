@@ -13,12 +13,22 @@
 //! оплата подтверждается мгновенно, так выдаются ТЕСТОВЫЕ Pro-токены.
 //! Остальные (`GpProvider`, `StripeProvider`) — заглушки, отвечающие
 //! «недоступно»: клиент увидит честную ошибку, а не выдуманный успех.
+//!
+//! КРИПТО-КАНАЛ. `CryptoProvider` — приём не-рублёвой оплаты через сайт
+//! (NOWPayments-совместимый REST: invoice + статус; политика: покупка в
+//! магазинах выключена, платёж принимает только веб-витрина). Счёт
+//! выставляется в USD, монету покупатель выбирает на странице инвойса.
+//! IPN (x-signature = HMAC-SHA512 от сырого тела) лишь помечает платёж
+//! оплаченным досрочно: право выдаёт только `verify` с проверкой fp, поэтому
+//! потеря отметки при рестарте безопасна — опрос провайдера доживёт.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Mutex;
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha512;
 
 use crate::tokens::Plan;
 
@@ -588,6 +598,344 @@ impl PaymentProvider for YkProvider {
     }
 }
 
+// ── Крипто-канал: не-рублёвая оплата через сайт ─────────────────
+//
+// Цена считается ЗДЕСЬ в USD-центах по той же таблице скидок, что и ₽
+// (год = 10 месячных), витрина `/relay/plans` и касса читают одно число
+// (ADR-005: цену решает Rust, страница лишь рисует ответ сервера).
+// Монету и сеть покупатель выбирает на странице инвойса процессора —
+// релею достаточно выставить сумму в USD.
+
+/// Транспорт крипто-процессора: запрос + API-ключ в заголовке
+/// `x-api-key`. С ЮKассей не общий: там базовая авторизация, и один fake
+/// на два протокола начал бы врать про способ авторизации.
+pub trait CryptoHttp: Send + Sync {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        url: &'a str,
+        api_key: &'a str,
+        json_body: Option<serde_json::Value>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(u16, serde_json::Value), String>> + Send + 'a>>;
+}
+
+/// Живой транспорт на reqwest (rustls-tls).
+pub struct ReqwestCryptoHttp {
+    client: reqwest::Client,
+}
+
+impl ReqwestCryptoHttp {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+impl Default for ReqwestCryptoHttp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CryptoHttp for ReqwestCryptoHttp {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        url: &'a str,
+        api_key: &'a str,
+        json_body: Option<serde_json::Value>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(u16, serde_json::Value), String>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut req = self
+                .client
+                .request(
+                    reqwest::Method::from_bytes(method.as_bytes())
+                        .map_err(|e| format!("bad method: {e}"))?,
+                    url,
+                )
+                .header("x-api-key", api_key);
+            if let Some(body) = json_body {
+                req = req.json(&body);
+            }
+            let resp = req.send().await.map_err(|e| format!("http: {e}"))?;
+            let status = resp.status().as_u16();
+            let body = resp.json::<serde_json::Value>().await.map_err(|e| format!("json: {e}"))?;
+            Ok((status, body))
+        })
+    }
+}
+
+/// Монеты, которые показываем на витрине как принятые (коды процессора;
+/// выбор фактический шире — страница инвойса сама предлагает остальное).
+pub const CRYPTO_ASSETS: [&str; 4] = ["usdtrc20", "usdt", "btc", "ltc"];
+
+/// NOWPayments-совместимый крипто-провайдер (invoice API v1).
+///
+/// Ключи — только из окружения: `VAULT_RELAY_CRYPTO_APIKEY`,
+/// `VAULT_RELAY_CRYPTO_IPN_SECRET` (для проверки подписи IPN), опционально
+/// `VAULT_RELAY_CRYPTO_API` (база по умолчанию
+/// `https://api.nowpayments.io/v1`) и обязательный `VAULT_RELAY_PUBLIC_URL`
+/// (куда процессор вернёт покупателя и пришлёт IPN).
+pub struct CryptoProvider {
+    api_key: String,
+    ipn_secret: Option<String>,
+    api_base: String,
+    return_base: String,
+    http: std::sync::Arc<dyn CryptoHttp + Send + Sync>,
+    /// provider_ref платежей, оплаченных по подписанному IPN: verify
+    /// отвечает Paid без лишнего опроса процессора. In-memory — рестарт
+    /// только возвращает к опросу, право всё равно выдаёт verify с fp.
+    ipn_paid: Mutex<HashSet<String>>,
+}
+
+impl CryptoProvider {
+    pub fn from_env() -> Result<Self, String> {
+        let api_key = std::env::var("VAULT_RELAY_CRYPTO_APIKEY")
+            .or_else(|_| std::env::var("NOWPAYMENTS_API_KEY"))
+            .unwrap_or_default();
+        if api_key.trim().is_empty() {
+            return Err("VAULT_RELAY_CRYPTO_APIKEY not set".to_string());
+        }
+        let ipn_secret = std::env::var("VAULT_RELAY_CRYPTO_IPN_SECRET")
+            .or_else(|_| std::env::var("NOWPAYMENTS_IPN_SECRET"))
+            .unwrap_or_default();
+        let return_base = std::env::var("VAULT_RELAY_PUBLIC_URL").unwrap_or_default();
+        if return_base.trim().is_empty() {
+            return Err("VAULT_RELAY_PUBLIC_URL not set (ipn/success urls must be absolute)".to_string());
+        }
+        let base = std::env::var("VAULT_RELAY_CRYPTO_API")
+            .unwrap_or_else(|_| "https://api.nowpayments.io/v1".to_string());
+        Ok(Self::with_http(
+            api_key.trim().to_string(),
+            (!ipn_secret.trim().is_empty()).then(|| ipn_secret.trim().to_string()),
+            base.trim_end_matches('/').to_string(),
+            return_base.trim_end_matches('/').to_string(),
+            std::sync::Arc::new(ReqwestCryptoHttp::new()),
+        ))
+    }
+
+    /// Сборка с инъекцией транспорта (тесты подменяют `http`).
+    pub fn with_http(
+        api_key: String,
+        ipn_secret: Option<String>,
+        api_base: String,
+        return_base: String,
+        http: std::sync::Arc<dyn CryptoHttp + Send + Sync>,
+    ) -> Self {
+        Self {
+            api_key,
+            ipn_secret,
+            api_base,
+            return_base,
+            http,
+            ipn_paid: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Цена в центах USD. Та же сетка скидок, что у ₽-кассы: месячные
+    /// сроки по базовой цене, год — как 10 месячных. Непродаваемые тарифы
+    /// считаются по Pro: завысить цену безопаснее, чем продать дешевле.
+    pub fn amount_usd_cents(plan: Plan, months: u32) -> u64 {
+        let cents_month: u64 = match plan {
+            Plan::Pro => 200,
+            Plan::Business => 650,
+            _ => 200,
+        };
+        if months >= 12 {
+            cents_month * 10
+        } else {
+            cents_month * months as u64
+        }
+    }
+
+    /// Статус процессора, означающий «деньги получили». Только явные
+    /// терминалы оплаты: confirming/mined — ещё не оплата.
+    pub fn ipn_paid_status(status: &str) -> bool {
+        matches!(
+            status,
+            "payment_received" | "payment_sent" | "finished" | "confirmed" | "sent"
+        )
+    }
+
+    /// Статус процессора, означающий «не оплачено и уже не будет».
+    fn failed_status(status: &str) -> bool {
+        matches!(
+            status,
+            "failed" | "expired" | "canceled" | "cancelled" | "refunded" | "refunded_overpaid"
+                | "refunded_expired" | "refunded_unpaid" | "banned_input_wallet"
+        )
+    }
+
+    /// Отметить платёж оплаченным (вызывается маршрутом IPN после проверки
+    /// подписи). Возвращает true, если отметка новая.
+    pub fn mark_paid(&self, provider_ref: &str) -> bool {
+        if provider_ref.is_empty() {
+            return false;
+        }
+        self.ipn_paid.lock().expect("ipn_paid lock").insert(provider_ref.to_string())
+    }
+
+    /// Подпись IPN: `x-signature` = hex HMAC-SHA512 от СЫРОГО тела
+    /// запроса на общем секрете. Без секретa — всегда false: включать
+    /// приём уведомлений неподписанным нельзя ни при каких настройках.
+    pub fn ipn_signature_ok(&self, raw: &[u8], signature: &str) -> bool {
+        let Some(secret) = self.ipn_secret.as_deref() else {
+            return false;
+        };
+        let sig = signature.trim().trim_start_matches("sha512=");
+        let Ok(bytes) = hex::decode(sig) else {
+            return false;
+        };
+        let Ok(mut mac) = Hmac::<Sha512>::new_from_slice(secret.as_bytes()) else {
+            return false;
+        };
+        mac.update(raw);
+        mac.verify_slice(&bytes).is_ok()
+    }
+
+    /// Из ответа процессора: поле либо на верхнем уровне (v1), либо под
+    /// `result` (обёртка новых версий API) — читаем оба, не выбирая наугад.
+    fn pick<'v>(resp: &'v serde_json::Value, key: &str) -> Option<&'v serde_json::Value> {
+        resp.get(key)
+            .or_else(|| resp.get("result").and_then(|r| r.get(key)))
+    }
+}
+
+/// Витрина крипто-тарифов (USD) — сроки те же, что у ₽-кассы.
+pub fn crypto_catalog() -> Vec<serde_json::Value> {
+    PURCHASABLE_MONTHS
+        .iter()
+        .map(|&months| {
+            let cents = CryptoProvider::amount_usd_cents(Plan::Pro, months);
+            serde_json::json!({
+                "plan": "pro",
+                "months": months,
+                "cents": cents,
+                "amount": format!("{}.{}", cents / 100, format!("{:02}", cents % 100)),
+                "currency": "USD",
+            })
+        })
+        .collect()
+}
+
+impl PaymentProvider for CryptoProvider {
+    fn name(&self) -> &str {
+        "crypto"
+    }
+
+    fn create_checkout<'a>(
+        &'a self,
+        req: &'a CheckoutRequest,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<Checkout, PaymentError>> + Send + 'a>> {
+        let id = format!("co_{}", uuid::Uuid::new_v4().simple());
+        let cents = Self::amount_usd_cents(req.plan, req.months);
+        let body = serde_json::json!({
+            "price_amount": format!("{}.{}", cents / 100, format!("{:02}", cents % 100)),
+            "price_currency": "USD",
+            "order_id": id,
+            "order_description": format!("Vault {}: {} мес", format!("{:?}", req.plan).to_lowercase(), req.months),
+            "ipn_callback_url": format!("{}/relay/purchase/ipn", self.return_base),
+            "success_url": format!("{}/pay-return/{}?lang={}", self.return_base, id, req.lang),
+            "cancel_url": format!("{}/pay-return/{}?lang={}", self.return_base, id, req.lang),
+        });
+        let url = format!("{}/invoice", self.api_base);
+        let api_key = self.api_key.clone();
+        let fp = req.fp.clone();
+        let plan = req.plan;
+        let months = req.months;
+        let http = &*self.http;
+        Box::pin(async move {
+            let (status, resp) = http
+                .send("POST", &url, &api_key, Some(body))
+                .await
+                .map_err(PaymentError::Rejected)?;
+            if status != 200 {
+                return Err(match status {
+                    401 | 403 => PaymentError::Unavailable,
+                    429 => PaymentError::Rejected("too many requests".into()),
+                    other => PaymentError::Rejected(format!("crypto create: HTTP {other}")),
+                });
+            }
+            let invoice_url = Self::pick(&resp, "invoice_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let invoice_id = Self::pick(&resp, "id")
+                .or_else(|| Self::pick(&resp, "invoice_id"))
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+            if invoice_url.is_empty() || invoice_id.is_empty() {
+                return Err(PaymentError::Rejected(
+                    "crypto: no invoice url/id in response".into(),
+                ));
+            }
+            let now = now_unix();
+            Ok(Checkout {
+                id,
+                provider: "crypto".to_string(),
+                payment_url: invoice_url.to_string(),
+                expires_in: 1800,
+                expires_at: now + 1800,
+                fp,
+                plan,
+                months,
+                created_at: now,
+                provider_ref: invoice_id,
+            })
+        })
+    }
+
+    fn verify<'a>(
+        &'a self,
+        checkout: &'a Checkout,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<PaymentStatus, PaymentError>> + Send + 'a>>
+    {
+        if checkout.provider_ref.is_empty() {
+            return Box::pin(std::future::ready(Err(PaymentError::Unavailable)));
+        }
+        // IPN быстрее опроса: если подписанное уведомление уже пришло,
+        // процессор спрашивать не нужно.
+        if self.ipn_paid.lock().expect("ipn_paid lock").contains(&checkout.provider_ref) {
+            return Box::pin(std::future::ready(Ok(PaymentStatus::Paid)));
+        }
+        let url = format!("{}/payment/{}", self.api_base, checkout.provider_ref);
+        let api_key = self.api_key.clone();
+        let http = &*self.http;
+        Box::pin(async move {
+            let (status, resp) = http
+                .send("GET", &url, &api_key, None)
+                .await
+                .map_err(PaymentError::Rejected)?;
+            match status {
+                200 => {
+                    let s = Self::pick(&resp, "payment_status")
+                        .or_else(|| Self::pick(&resp, "status"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if Self::ipn_paid_status(s) {
+                        Ok(PaymentStatus::Paid)
+                    } else if Self::failed_status(s) {
+                        Ok(PaymentStatus::Failed(format!("status={s}")))
+                    } else {
+                        // Неизвестный процессору статус — «ещё идёт»:
+                        // сказать «оплачено» раньше денег нельзя, а сказать
+                        // «провалено» живому платежу — потерять покупателя.
+                        Ok(PaymentStatus::Pending)
+                    }
+                }
+                401 | 403 => Err(PaymentError::Unavailable),
+                // 404 — платежа ещё нет у процессора: не оплачено.
+                404 => Err(PaymentError::NotPaidYet),
+                other => Err(PaymentError::Rejected(format!("crypto verify: HTTP {other}"))),
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,5 +1419,262 @@ mod tests {
             serde_json::from_str(r#"{"id":"co","provider":"test","payment_url":"","expires_in":0,"expires_at":0,"fp":"f","plan":"Pro","months":1,"created_at":0}"#)
                 .unwrap();
         assert!(old.provider_ref.is_empty());
+    }
+
+    // ── CryptoProvider ────────────────────────────────────────────
+
+    /// Заглушка крипто-транспорта: POST — один ответ, GET — очередь
+    /// (последний повторяется), вызовы запоминаются.
+    struct FakeCryptoHttp {
+        post_reply: Mutex<Option<(u16, serde_json::Value)>>,
+        get_replies: Mutex<VecDeque<(u16, serde_json::Value)>>,
+        calls: Mutex<Vec<(String, String, String, Option<serde_json::Value>)>>,
+    }
+
+    impl FakeCryptoHttp {
+        fn new(post: (u16, serde_json::Value), gets: Vec<(u16, serde_json::Value)>) -> Self {
+            Self {
+                post_reply: Mutex::new(Some(post)),
+                get_replies: Mutex::new(VecDeque::from(gets)),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl CryptoHttp for FakeCryptoHttp {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            url: &'a str,
+            api_key: &'a str,
+            json_body: Option<serde_json::Value>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(u16, serde_json::Value), String>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.calls.lock().unwrap().push((
+                    method.to_string(),
+                    url.to_string(),
+                    api_key.to_string(),
+                    json_body,
+                ));
+                if method == "POST" {
+                    return self
+                        .post_reply
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .ok_or_else(|| "no POST reply".to_string());
+                }
+                let q = self.get_replies.lock().unwrap();
+                q.front()
+                    .cloned()
+                    .ok_or_else(|| "no GET reply".to_string())
+            })
+        }
+    }
+
+    fn crypto_with(
+        post: (u16, serde_json::Value),
+        gets: Vec<(u16, serde_json::Value)>,
+    ) -> (CryptoProvider, std::sync::Arc<FakeCryptoHttp>) {
+        let fake = std::sync::Arc::new(FakeCryptoHttp::new(post, gets));
+        let p = CryptoProvider::with_http(
+            "key".into(),
+            Some("ipnsecret".into()),
+            "https://api.example.test/v1".into(),
+            "https://relay.example.test".into(),
+            fake.clone(),
+        );
+        (p, fake)
+    }
+
+    fn crypto_checkout(ref_: &str) -> Checkout {
+        Checkout {
+            id: "co_1".into(),
+            provider: "crypto".into(),
+            payment_url: "https://invoice.example.test/1".into(),
+            expires_in: 1800,
+            expires_at: 100,
+            fp: "fp".into(),
+            plan: Plan::Pro,
+            months: 1,
+            created_at: 1,
+            provider_ref: ref_.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn crypto_create_checkout_posts_usd_price_and_keeps_invoice_id() {
+        let (p, calls) = crypto_with(
+            (
+                200,
+                serde_json::json!({
+                    "invoice_url": "https://invoice.example.test/42",
+                    "invoice_id": 42,
+                }),
+            ),
+            vec![],
+        );
+        let c = p.create_checkout(&req(Plan::Pro, 1)).await.expect("чекаут");
+        assert_eq!(c.provider, "crypto");
+        assert_eq!(c.provider_ref, "42", "id инвойса запоминается строкой");
+        assert_eq!(c.payment_url, "https://invoice.example.test/42");
+        let (method, url, key, body) = &calls.calls.lock().unwrap()[0];
+        assert_eq!(method, "POST");
+        assert_eq!(url, "https://api.example.test/v1/invoice");
+        assert_eq!(key, "key", "ключ идёт в x-api-key");
+        let body = body.as_ref().expect("тело POST /invoice");
+        assert_eq!(body["price_amount"], "2.00", "Pro/мес — $2");
+        assert_eq!(body["price_currency"], "USD");
+        assert_eq!(body["order_id"], c.id, "order_id = наш id чекаута: по нему вернётся IPN");
+        assert_eq!(body["ipn_callback_url"], "https://relay.example.test/relay/purchase/ipn");
+        assert!(body["success_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://relay.example.test/pay-return/"));
+    }
+
+    #[tokio::test]
+    async fn crypto_create_reads_wrapped_result_shape() {
+        // Новый API оборачивает инвойс в `result` — читать надо обе формы,
+        // иначе живой процессор «вернёт успех», а мы его не разберём.
+        let (p, _calls) = crypto_with(
+            (
+                200,
+                serde_json::json!({
+                    "result": { "id": 77, "invoice_url": "https://inv/77" },
+                }),
+            ),
+            vec![],
+        );
+        let c = p.create_checkout(&req(Plan::Business, 12)).await.expect("чекаут");
+        assert_eq!(c.provider_ref, "77");
+        assert_eq!(c.payment_url, "https://inv/77");
+    }
+
+    #[tokio::test]
+    async fn crypto_create_refuses_without_url_or_id() {
+        for resp in [
+            serde_json::json!({ "invoice_id": 5 }),
+            serde_json::json!({ "invoice_url": "https://inv/5" }),
+        ] {
+            let (p, _c) = crypto_with((200, resp), vec![]);
+            assert!(
+                matches!(
+                    p.create_checkout(&req(Plan::Pro, 1)).await,
+                    Err(PaymentError::Rejected(s)) if s.contains("invoice")
+                ),
+                "неполный ответ процессора — отказ, а не выдуманный чекаут"
+            );
+        }
+        let (p401, _c) = crypto_with((401, serde_json::json!({})), vec![]);
+        assert!(matches!(
+            p401.create_checkout(&req(Plan::Pro, 1)).await,
+            Err(PaymentError::Unavailable)
+        ));
+    }
+
+    #[tokio::test]
+    async fn crypto_verify_maps_payment_statuses() {
+        let paid_cases = ["payment_received", "payment_sent", "finished", "confirmed"];
+        for s in paid_cases {
+            let (p, _c) = crypto_with(
+                (200, serde_json::json!({})),
+                vec![(200, serde_json::json!({ "payment_status": s }))],
+            );
+            assert_eq!(
+                p.verify(&crypto_checkout("42")).await.unwrap(),
+                PaymentStatus::Paid,
+                "статус {s} — оплата"
+            );
+        }
+        for s in ["waiting", "confirming", "mined", "partially_paid"] {
+            let (p, _c) = crypto_with(
+                (200, serde_json::json!({})),
+                vec![(200, serde_json::json!({ "payment_status": s }))],
+            );
+            assert_eq!(
+                p.verify(&crypto_checkout("42")).await.unwrap(),
+                PaymentStatus::Pending,
+                "статус {s} — ещё не оплата"
+            );
+        }
+        for s in ["failed", "expired", "refunded"] {
+            let (p, _c) = crypto_with(
+                (200, serde_json::json!({})),
+                vec![(200, serde_json::json!({ "payment_status": s }))],
+            );
+            assert!(matches!(
+                p.verify(&crypto_checkout("42")).await.unwrap(),
+                PaymentStatus::Failed(x) if x.contains(s)
+            ));
+        }
+        // 404 — платежа ещё нет: not_paid_yet, а не недоступность.
+        let (p, _c) = crypto_with((200, serde_json::json!({})), vec![(404, serde_json::json!({}))]);
+        assert_eq!(p.verify(&crypto_checkout("42")).await, Err(PaymentError::NotPaidYet));
+        // пустой provider_ref — спрашивать не про что.
+        let (p, _c) = crypto_with((200, serde_json::json!({})), vec![]);
+        assert_eq!(p.verify(&crypto_checkout("")).await, Err(PaymentError::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn crypto_ipn_mark_paid_short_circuits_verify() {
+        let (p, calls) = crypto_with((200, serde_json::json!({})), vec![]);
+        assert!(p.mark_paid("42"), "отметка новая");
+        assert!(!p.mark_paid("42"), "повтор не плодит запись");
+        assert_eq!(
+            p.verify(&crypto_checkout("42")).await.unwrap(),
+            PaymentStatus::Paid,
+            "подписанный IPN ускоряет подтверждение без опроса"
+        );
+        assert!(calls.calls.lock().unwrap().is_empty(), "HTTP не вызывался");
+        assert!(!p.mark_paid(""), "пустой ref не отмечается");
+    }
+
+    #[test]
+    fn crypto_ipn_signature_is_hmac_sha512_over_raw_body() {
+        let (p, _c) = crypto_with((200, serde_json::json!({})), vec![]);
+        let raw = br#"{"payment_status":"payment_received","order_id":"co_1"}"#;
+        let mut mac = Hmac::<Sha512>::new_from_slice(b"ipnsecret").expect("mac");
+        mac.update(raw);
+        let good = hex::encode(mac.finalize().into_bytes());
+        assert!(p.ipn_signature_ok(raw, &good));
+        assert!(p.ipn_signature_ok(raw, &format!("sha512={good}")), "префикс алгоритма допустим");
+        assert!(!p.ipn_signature_ok(b"tampered", &good), "изменённое тело — неверная подпись");
+        assert!(!p.ipn_signature_ok(raw, "not-hex"), "не-hex — отказ");
+        assert!(!p.ipn_signature_ok(raw, ""), "пустая подпись — отказ");
+        // Без секрета приём уведомлений вообще закрыт.
+        let naked = CryptoProvider::with_http(
+            "key".into(),
+            None,
+            "https://api.example.test/v1".into(),
+            "https://relay.example.test".into(),
+            std::sync::Arc::new(FakeCryptoHttp::new((200, serde_json::json!({})), vec![])),
+        );
+        assert!(!naked.ipn_signature_ok(raw, &good), "без секрета IPN не принимается никогда");
+    }
+
+    #[test]
+    fn crypto_amounts_and_catalog_match_kassa() {
+        assert_eq!(CryptoProvider::amount_usd_cents(Plan::Pro, 1), 200);
+        assert_eq!(CryptoProvider::amount_usd_cents(Plan::Pro, 3), 600);
+        assert_eq!(CryptoProvider::amount_usd_cents(Plan::Pro, 12), 2_000, "год = 10 месячных");
+        assert_eq!(CryptoProvider::amount_usd_cents(Plan::Business, 1), 650);
+        assert_eq!(CryptoProvider::amount_usd_cents(Plan::Free, 1), 200, "непродаваемый — по Pro, не бесплатно");
+        let cat = crypto_catalog();
+        assert_eq!(cat.len(), PURCHASABLE_MONTHS.len());
+        for row in &cat {
+            let months = row["months"].as_u64().unwrap() as u32;
+            assert_eq!(
+                row["cents"].as_u64().unwrap(),
+                CryptoProvider::amount_usd_cents(Plan::Pro, months),
+                "витрина ≠ касса для {months} мес"
+            );
+            assert_eq!(row["currency"], "USD");
+        }
+        assert_eq!(cat[0]["amount"], "2.00");
+        assert_eq!(cat[4]["amount"], "20.00");
+        assert_eq!(CRYPTO_ASSETS, ["usdtrc20", "usdt", "btc", "ltc"]);
     }
 }
