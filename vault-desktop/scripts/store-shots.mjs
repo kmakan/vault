@@ -150,6 +150,65 @@ const TABLET = [
     await sleep(2400);
     return { screen: 'tablet-chat' };
   })()`],
+  ['t3-tablet-settings', `(async () => { ${HELPERS}
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    if (p.uiStore) p.uiStore.setModal('showSettings', true);
+    else p.showSettings = true;
+    await sleep(1400);
+    const cat = Array.from(document.querySelectorAll('.settings-nav-item, [class*=settings-nav] *'))
+      .find((el) => /Приватн|Privacy/i.test(String(el.innerText || '')));
+    if (cat) { cat.click(); await sleep(1200); }
+    return { screen: 'tablet-settings' };
+  })()`],
+  ['t4-tablet-group', `(async () => { ${HELPERS}
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    if (p.uiStore) p.uiStore.setModal('showSettings', false);
+    else p.showSettings = false;
+    await sleep(700);
+    const item = Array.from(document.querySelectorAll('.contact-item')).find((e) => /Команда/.test(String(e.innerText || '')));
+    if (!item) return { error: 'нет группы' };
+    item.click();
+    await sleep(2400);
+    return { screen: 'tablet-group' };
+  })()`],
+  ['t5-add-contact', `(async () => { ${HELPERS}
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    if (p.uiStore) p.uiStore.setModal('showSettings', false);
+    else p.showSettings = false;
+    await sleep(700);
+    const b = [...document.querySelectorAll('button')].find((e) => e.getAttribute('title') === 'Добавить контакт');
+    if (!b) return { error: 'нет кнопки' };
+    b.click();
+    await sleep(1800);
+    return { screen: 'add-contact' };
+  })()`],
+  ['t6-notes', `(async () => { ${HELPERS}
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    if (p.uiStore) p.uiStore.setModal('showSettings', false);
+    else p.showSettings = false;
+    await sleep(700);
+    const item = Array.from(document.querySelectorAll('.contact-item')).find((e) => /Заметки для себя/.test(String(e.innerText || '')));
+    if (!item) return { error: 'нет заметок' };
+    item.click();
+    await sleep(2000);
+    return { screen: 'notes' };
+  })()`],
+  ['t7-pro', `(async () => { ${HELPERS}
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    if (p.uiStore) p.uiStore.setModal('showSettings', true);
+    else p.showSettings = true;
+    await sleep(1400);
+    const cat = Array.from(document.querySelectorAll('.settings-nav-item, [class*=settings-nav] *')).find((el) => /Приватн|Privacy/i.test(String(el.innerText || '')));
+    if (cat) { cat.click(); await sleep(1400); }
+    const pro = Array.from(document.querySelectorAll('*')).find((el) => el.children.length === 0 && /Тариф Pro/.test(String(el.innerText || '')));
+    if (pro) { pro.scrollIntoView({ block: 'center' }); await sleep(700); }
+    return { screen: 'pro' };
+  })()`],
 ];
 
 async function runScenes(scenes) {
