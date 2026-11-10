@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Звонки (26.08): WebRTC-аудио требует доступ к микрофону. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -40,6 +41,39 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Видимость на планшетах (10.11.2026): без этих строк permission'ы
+         CAMERA/RECORD_AUDIO/ACCESS_*_LOCATION превращают Android в
+         ОБЯЗАТЕЛЬНЫЕ uses-feature (camera, camera.any, microphone, location) —
+         магазин исключает устройства без камеры/микрофона/GPS, и приложение
+         пропадало из подборки планшетов. Все датчики — опциональны: камера
+         нужна только для QR и видео, микрофон — для звонков, геолокация —
+         только для SOS по действию пользователя. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- camera.any: aapt2 подставляет «camera.any required=true» из
+         permission CAMERA ПОСЛЕ наших строк, и он перебивал наш
+         required=false (в badging 0.1.289 было uses-feature camera.any
+         required). tools:replace заставляет merger оставить наш false —
+         без камеры приложение всё равно ставится, камера только для QR. -->
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false"
+        tools:replace="android:required" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+
+    <!-- Все размеры экранов поддерживаются: телефон и планшет -->
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true"
+        android:anyDensity="true" />
+
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -47,7 +81,8 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        android:usesCleartextTraffic="${usesCleartextTraffic}"
+        android:resizeableActivity="true">
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"
