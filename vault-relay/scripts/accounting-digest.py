@@ -28,6 +28,7 @@
 
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -36,6 +37,41 @@ from email.message import EmailMessage
 from email.utils import formatdate
 
 TIMEOUT = 20
+
+# День постановки владельца на учёт в НПД (первый налоговый период по ч. 1
+# ст. 9 422-ФЗ идёт со дня регистрации до конца следующего месяца). Из
+# окружения — чтобы не расходилось с «Мой налог».
+NPD_REGISTERED = os.environ.get("VAULT_ACCOUNTING_NPD_REGISTERED", "29.10.2026")
+
+
+def first_period_deadline(month_key):
+    """Срок уплаты налога для ПЕРВОГО периода (месяц постановки на учёт).
+
+    Первый налоговый период — со дня регистрации до конца следующего месяца
+    (ч. 1 ст. 9 422-ФЗ), налог за него платится до 28-го числа месяца, который
+    идёт ПОСЛЕ конца первого периода. Постановка 29.10.2026 → период
+    29.10–30.11 → оплата до 28.12.2026. Для остальных месяцев срок обычный.
+    """
+    m = re.match(r"^(\d{4})-(\d{2})$", str(month_key or ""))
+    if not m:
+        return None
+    reg = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", NPD_REGISTERED)
+    if not reg:
+        return None
+    r_day, r_month, r_year = int(reg.group(1)), int(reg.group(2)), int(reg.group(3))
+    year, month = int(m.group(1)), int(m.group(2))
+    if (year, month) != (r_year, r_month):
+        return None
+    # конец первого периода = конец месяца, следующего за месяцем регистрации
+    end_month = month + 1 if month < 12 else 1
+    end_year = year if month < 12 else year + 1
+    # оплата — 28-е числа месяца после конца первого периода
+    pay_month = end_month + 1 if end_month < 12 else 1
+    pay_year = end_year if end_month < 12 else end_year + 1
+    return "{:02d}.{:02d}.{:04d}".format(PAY_DAY_OF_TAX, pay_month, pay_year)
+
+
+PAY_DAY_OF_TAX = 28
 
 
 def env(name, default=""):
@@ -116,13 +152,28 @@ def compose(report):
                     overdue_mark(m.get("receipt_overdue")),
                 )
             )
-            lines.append(
-                "    налог — до {}{}{}".format(
-                    m.get("tax_deadline", "?"),
-                    overdue_mark(m.get("tax_overdue")),
-                    "" if m.get("tax_paid") else " — не отмечен уплаченным",
+            # Срок налога: для ПЕРВОГО периода (месяц постановки на учёт) —
+            # не 28-е этого месяца, а 28-е месяца после конца первого периода
+            # (постановка 29.10 → период 29.10–30.11 → оплата до 28.12).
+            key = m.get("key", "")
+            tax_kopecks = 0
+            try:
+                tax_kopecks = int(str(m.get("tax_text", "0")).replace(" ", "").replace("₽", "").replace(",", ".").split(".")[0])
+            except Exception:
+                tax_kopecks = 0
+            if tax_kopecks and tax_kopecks <= 100 and not m.get("tax_paid"):
+                lines.append(
+                    "    налог — накоплен (до 100 ₽ не платится, переносится в следующий период)"
                 )
-            )
+            else:
+                deadline = first_period_deadline(key) or m.get("tax_deadline", "?")
+                lines.append(
+                    "    налог — до {}{}{}".format(
+                        deadline,
+                        overdue_mark(m.get("tax_overdue")),
+                        "" if m.get("tax_paid") else " — не отмечен уплаченным",
+                    )
+                )
 
     missing = [
         e for e in (report.get("entries") or []) if not e.get("receipt_at")
@@ -147,6 +198,20 @@ def compose(report):
         "следующего месяца; автоплатёж включается в банке "
         "(Т-Банк/Сбер/Альфа/ВТБ/МТС)."
     )
+    lines.append(
+        "Ставка 4% (доходы от физлиц) минус бонус-вычет 10 000 ₽, который "
+        "расходуется постепенно (ставка падает до 3% на первом 1 млн ₽ дохода). "
+        "Если начисленный налог не превышает 100 ₽, он переносится в следующий "
+        "период — платить пока не нужно (ч. 2 ст. 11 422-ФЗ)."
+    )
+    if NPD_REGISTERED:
+        lines.append(
+            "Первый налоговый период — с {} (день постановки на учёт) по 30.11.2026: "
+            "квитанция приходит до 12.12, оплата — до 28.12.2026. Доходы октября "
+            "входят в этот первый период, а не в отдельный «октябрьский».".format(
+                NPD_REGISTERED
+            )
+        )
     return "\n".join(lines)
 
 
