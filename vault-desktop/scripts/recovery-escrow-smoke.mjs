@@ -139,69 +139,85 @@ console.log('\nПоток поиска эскроу-письма (locateEscrowFl
     ...over,
   });
   // 1. Найдено в INBOX → предупреждение «не удаляйте», копирования нет.
+  //
+  // Обёртка поиска: снятый лимит попыток (мутация recovery-escrow-mut) не
+  // должен вешать процесс. Раньше сторож стоял только в разделе 3, и мутация
+  // «лимит снят» давала зависание на разделе 5 (бесконечная рекурсия с пустым
+  // sleep) — гейт видел «смоук завис» вместо провала утверждения. Теперь
+  // сторож общий: предел попыток поднимает флаг, а раздел проваливается
+  // УТВЕРЖДЕНИЕМ.
+  let sleepCalls = 0;
+  const locate = async (over, wrapped) => {
+    sleepCalls = 0;
+    const d = deps(over);
+    d.sleep = async () => {
+      if (++sleepCalls > 12) throw new Error('лимит попыток поиска снят');
+    };
+    try {
+      return { found: await R.locateEscrowFlow(d, wrapped), limitHit: false };
+    } catch (e) {
+      return { found: null, limitHit: /лимит попыток/.test(String(e && e.message)) };
+    }
+  };
+
   calls.length = 0;
-  let found = await R.locateEscrowFlow(deps({
+  let r = await locate({
     fetchBodies: async (uids, folder) => (folder === 'INBOX'
       ? [['u1', 'ESCROW:' + MINE]] : []),
-  }), LOCAL);
-  ok('поток: найдено в INBOX', found === true);
+  }, LOCAL);
+  let found = r.found;
+  ok('поток: найдено в INBOX', !r.limitHit && found === true);
   ok('поток: в INBOX копирования нет', !calls.some((c) => c[0] === 'copyToInbox'), calls);
   ok('поток: в INBOX — предупреждение «не удаляйте»',
     calls.some((c) => c[0] === 'toast' && c[1] === 'T:recovery_keep'), calls);
 
   // 2. Найдено в спаме → копируем в INBOX (иначе провайдер удалит).
   calls.length = 0;
-  found = await R.locateEscrowFlow(deps(), LOCAL);
-  ok('поток: найдено в спаме', found === true);
+  r = await locate({}, LOCAL);
+  found = r.found;
+  ok('поток: найдено в спаме', !r.limitHit && found === true);
   ok('поток: письмо скопировано во INBOX', calls.some((c) => c[0] === 'copyToInbox'), calls);
   ok('поток: копируется ИМЕННО найденное письмо (uid из пары тела)',
     calls.some((c) => c[0] === 'copyToInbox' && c[1] === 'u2'), calls);
   ok('поток: после копирования — предупреждение «переложено»',
     calls.some((c) => c[0] === 'toast' && c[1] === 'T:recovery_moved_toast'), calls);
 
-  // 3. Не найдено → поиск ПОВТОРЯЕТСЯ (письмо могло прийти позже).
-  // Сторож в sleep: если лимит попыток снят, рекурсия не должна съесть
-  // процесс — смоук падает утверждением, а не зависанием.
+  // 3. Не найдено → поиск ПОВТОРЯЕТСЯ (письмо могло прийти позже), но не
+  // бесконечно: лимит попыток обязан остановить рекурсию.
   calls.length = 0;
   let attemptsSeen = 0;
-  let sleepCalls = 0;
-  let limitThrew = null;
-  found = null;
-  try {
-    found = await R.locateEscrowFlow(deps({
-      fetchBodies: async () => [],
-      fetchEmails: async () => { attemptsSeen++; return []; },
-      sleep: async () => { if (++sleepCalls > 8) throw new Error('лимит попыток поиска снят'); },
-    }), LOCAL);
-  } catch (e) { limitThrew = e; }
-  ok('поток: не найдено → поиск повторён',
-    limitThrew === null && attemptsSeen > 1, limitThrew ? String(limitThrew.message) : attemptsSeen);
-  ok('поток: попыток не больше лимита', limitThrew === null && attemptsSeen <= 4, attemptsSeen);
-  ok('поток: не найдено — false', limitThrew === null && found === false);
+  r = await locate({
+    fetchBodies: async () => [],
+    fetchEmails: async () => { attemptsSeen++; return []; },
+  }, LOCAL);
+  found = r.found;
+  ok('поток: не найдено → поиск повторён', !r.limitHit && attemptsSeen > 1, r.limitHit ? 'лимит попыток снят' : attemptsSeen);
+  ok('поток: попыток не больше лимита', !r.limitHit && attemptsSeen <= 4, attemptsSeen);
+  ok('поток: не найдено — false', !r.limitHit && found === false);
 
   // 4. Битый wrappedJson → тихо, без повторов.
   calls.length = 0;
   attemptsSeen = 0;
-  found = await R.locateEscrowFlow(deps({
+  r = await locate({
     fetchEmails: async () => { attemptsSeen++; return []; },
-  }), '{битый json');
-  ok('поток: битый wrapped → выход без обращения к ящику', attemptsSeen === 0, attemptsSeen);
+  }, '{битый json');
+  ok('поток: битый wrapped → выход без обращения к ящику', !r.limitHit && attemptsSeen === 0, attemptsSeen);
 
   // 5. Совпадение только по salt — НЕ наше письмо: сверка идёт по всем трём
   // полям (salt+nonce+wrapped), иначе обрезанное письмо сошлось бы за наше.
   calls.length = 0;
-  found = await R.locateEscrowFlow(deps({
+  r = await locate({
     fetchBodies: async () => [['u1', 'ESCROW:' + JSON.stringify({ salt: 'S', nonce: 'ДРУГОЙ', wrapped: 'W' })]],
-  }), LOCAL);
-  ok('поток: совпадение только по salt — не наше письмо', found === false, calls);
+  }, LOCAL);
+  ok('поток: совпадение только по salt — не наше письмо', !r.limitHit && r.found === false, calls);
 
   // 6. Копирование не вышло → просим переложить вручную.
   calls.length = 0;
-  found = await R.locateEscrowFlow(deps({
+  r = await locate({
     copyToInbox: async () => { throw new Error('нет команды'); },
-  }), LOCAL);
+  }, LOCAL);
   ok('поток: при отказе копирования — просьба переложить вручную',
-    calls.some((c) => c[0] === 'toast' && String(c[1]).includes('T:recovery_spam_folder')), calls);
+    !r.limitHit && calls.some((c) => c[0] === 'toast' && String(c[1]).includes('T:recovery_spam_folder')), calls);
 }
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
