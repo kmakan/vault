@@ -53,7 +53,27 @@
             <p v-if="mailProviderHint" class="server-hint">{{ mailProviderHint }}</p>
             <p class="server-hint">{{ t('server_hint') || 'Оставьте пустыми для значений по умолчанию (Gmail).' }}</p>
           </div>
-          <button type="submit" :disabled="loginLoading">
+
+          <!-- RuStore §5.2: согласие на обработку ПДн спрашивается ОДИН раз,
+               до первого входа; решение помнит localStorage (features/pdn-notice.js).
+               Здесь только вёрстка — правило «пускать или нет» в модуле. -->
+          <div class="pdn-consent">
+            <div class="pdn-consent-title">{{ t('pdn_consent_title') }}</div>
+            <p class="pdn-consent-text">{{ t('pdn_consent_text') }}</p>
+            <ul class="pdn-consent-list">
+              <li v-for="(item, i) in pdnConsentItems" :key="i">{{ item }}</li>
+            </ul>
+            <div class="pdn-consent-links">
+              <a v-for="doc in pdnConsentDocs" :key="doc.key" href="#" class="pdn-consent-link"
+                 @click.prevent="openExternalUrl(doc.url)">{{ doc.label }}</a>
+            </div>
+            <label class="pdn-consent-label">
+              <input type="checkbox" :checked="pdnConsent" @change="onPdnConsentChange($event)" />
+              <span>{{ t('pdn_consent_checkbox') }}</span>
+            </label>
+          </div>
+
+          <button type="submit" :disabled="loginLoading || !pdnConsent">
             {{ loginLoading ? '...' : t('login') || 'Login' }}
           </button>
 
@@ -1030,6 +1050,7 @@ import * as TransportFeature from './features/transport.js';
 import * as ChatUiRulesFeature from './features/chat-ui-rules.js';
 import * as AccountLoadFeature from './features/account-load.js';
 import * as ProPlanFeature from './features/pro-plan.js';
+import * as PdnNotice from './features/pdn-notice.js';
 import * as EnvelopeBuildFeature from './features/envelope-build.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
@@ -1610,6 +1631,13 @@ export default {
     showArchived: { get() { return uiStore.getModal('showArchived'); }, set(v) { uiStore.setModal('showArchived', v); } },
     showServerSettings: { get() { return uiStore.getModal('showServerSettings'); }, set(v) { uiStore.setModal('showServerSettings', v); } },
     showRecovery: { get() { return uiStore.getModal('showRecovery'); }, set(v) { uiStore.setModal('showRecovery', v); } },
+    // Согласие на обработку ПДн (RuStore §5.2): состояние формы — в uiStore,
+    // само решение помнит features/pdn-notice.js (localStorage).
+    pdnConsent: { get() { return !!uiStore.getFormField('pdnConsent'); }, set(v) { uiStore.setFormField('pdnConsent', !!v); } },
+    // Документы, на которые ссылается экран согласия: состав — в фиче.
+    pdnConsentDocs() { return PdnNotice.consentDocs(this.t); },
+    // Категории обрабатываемых данных для экрана согласия: состав — в фиче.
+    pdnConsentItems() { return PdnNotice.processedItems(this.t); },
     showGroupSettings: { get() { return uiStore.getModal('showGroupSettings'); }, set(v) { uiStore.setModal('showGroupSettings', v); } },
     showInvitePopup: { get() { return uiStore.getModal('showInvitePopup'); }, set(v) { uiStore.setModal('showInvitePopup', v); } },
     showContactPopup: { get() { return uiStore.getModal('showContactPopup'); }, set(v) { uiStore.setModal('showContactPopup', v); } },
@@ -3084,6 +3112,12 @@ export default {
   async mounted() {
     // Duress-замок: включён ли (до авторизации)
     this.checkDuressLock();
+    // Согласие на ПДн: восстановить ранее принятое решение (RuStore §5.2).
+    // Пока его нет — кнопка входа неактивна, галочка видна на форме.
+    PdnNotice.loadConsent({
+      storage: (typeof localStorage !== 'undefined') ? localStorage : null,
+      setConsent: (v) => { this.pdnConsent = v; },
+    });
     // Тумблеры возможностей при старте (на любом экране, до входа): ответ
     // приходит из Rust, на чистой форме логина он просто не к чему.
     this.loadExperimentFlags();
@@ -3722,7 +3756,24 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     applyMailProvider(id) { return SettingsUiFeature.applyMailProvider(this.settingsUiDeps, id); },
     // Обработчик селекта: «Другой (вручную)» очищает поля для ручного ввода.
     onMailProviderChange() { return SettingsUiFeature.onMailProviderChange(this.settingsUiDeps); },
-    async login() { return AuthFlowFeature.login(this.authFlowDeps); },
+    // Вход без согласия на обработку ПДн не выполняется (RuStore §5.2).
+    // Решение «пускать или нет» — в features/pdn-notice.js; сам вход —
+    // по-прежнему в features/auth-flow.js.
+    async login() {
+      return PdnNotice.loginWithConsent({
+        consentAccepted: () => this.pdnConsent,
+        setLoginError: (m) => { this.loginError = m; },
+        tr: (k) => this.t(k),
+        runLogin: () => AuthFlowFeature.login(this.authFlowDeps),
+      });
+    },
+    // Галочка согласия: сохранить решение (localStorage) и обновить состояние.
+    onPdnConsentChange(e) {
+      return PdnNotice.acceptConsent({
+        storage: (typeof localStorage !== 'undefined') ? localStorage : null,
+        setConsent: (v) => { this.pdnConsent = v; },
+      }, e.target.checked);
+    },
     async handleLogout() {
       return LogoutFeature.logoutFlow(this.logoutDeps);
     },
@@ -4043,8 +4094,15 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Там: маркер прерванности ДО логина, логин без durable-персиста, импорт
     // файла/эскроу (без фолбэка), ПЕРЕзагрузка ключа без генерации, durable
     // commit и снятие маркера последним.
+    // Восстановление тоже трогает данные в ящике — без согласия на ПДн оно
+    // не начинается (то же правило, что и у обычного входа).
     async loginWithRecovery() {
-      return RecoveryFeature.loginWithRecovery(this.recoveryLoginDeps);
+      return PdnNotice.loginWithConsent({
+        consentAccepted: () => this.pdnConsent,
+        setLoginError: (m) => { this.loginError = m; },
+        tr: (k) => this.t(k),
+        runLogin: () => RecoveryFeature.loginWithRecovery(this.recoveryLoginDeps),
+      });
     },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() { return MsgStore.mediaQuality(); },
@@ -4639,6 +4697,16 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
 .login-error { color: #f85149; font-size: 13px; margin-top: 4px; }
 .remember-label { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text-secondary, #8b949e); font-size: 13px; cursor: pointer; user-select: none; }
 .remember-label input { width: auto; margin: 0; cursor: pointer; }
+/* Согласие на ПДн на экране входа (RuStore §5.2) */
+.pdn-consent { margin: 10px 0 12px; padding: 10px 12px; border: 1px solid var(--border-subtle, #30363d); border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+.pdn-consent-label { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.45; color: var(--text-secondary, #8b949e); cursor: pointer; user-select: none; }
+.pdn-consent-label input { width: auto; margin: 2px 0 0; flex-shrink: 0; cursor: pointer; }
+.pdn-consent-title { font-size: 13px; font-weight: 600; color: var(--text-primary, #e6edf3); }
+.pdn-consent-text { margin: 8px 0 6px; font-size: 11px; line-height: 1.45; color: var(--text-muted, #64748b); }
+.pdn-consent-list { margin: 0 0 8px; padding-left: 16px; font-size: 11px; line-height: 1.5; color: var(--text-muted, #64748b); }
+.pdn-consent-links { display: flex; flex-wrap: wrap; gap: 10px; }
+.pdn-consent-link { font-size: 11px; color: var(--accent-primary, #6366f1); text-decoration: none; }
+.pdn-consent-link:hover { text-decoration: underline; }
 .server-toggle { display: flex; align-items: center; gap: 6px; background: none; border: none; color: var(--text-secondary, #8b949e); font-size: 13px; cursor: pointer; padding: 6px 0; margin: 4px 0; width: 100%; text-align: left; }
 .server-toggle:hover { color: var(--text-primary, #e6edf3); }
 .server-toggle-arrow { margin-left: auto; }

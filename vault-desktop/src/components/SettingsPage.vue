@@ -218,6 +218,39 @@
           <span>{{ t('settings_terms_of_use') }}</span>
           <span class="settings-link-arrow">→</span>
         </div>
+
+        <!-- RuStore §5.2/§3.5: «Данные и ПДн» — документы, оператор, категории
+             обрабатываемых данных и контакты службы поддержки/модерации.
+             Содержимое — из features/pdn-notice.js (контракт перед магазином),
+             здесь только вёрстка. -->
+        <div class="pdn-block">
+          <h3 class="pdn-block-title">{{ t('pdn_block_title') }}</h3>
+          <div v-for="link in pdnLinks" :key="link.key" class="setting-row settings-link-row"
+               role="link" tabindex="0" @click="openExternalLink(link.url)">
+            <span>{{ link.label }}</span>
+            <span class="settings-link-arrow">→</span>
+          </div>
+
+          <div class="pdn-subtitle">{{ t('pdn_operator_title') }}</div>
+          <div class="pdn-rows">
+            <div v-for="row in pdnOperatorRows" :key="row.key" class="pdn-row">
+              <span class="pdn-row-label">{{ row.label }}</span>
+              <span class="pdn-row-value">{{ row.value }}</span>
+            </div>
+          </div>
+
+          <div class="pdn-subtitle">{{ t('pdn_data_title') }}</div>
+          <ul class="pdn-list">
+            <li v-for="(item, i) in pdnProcessedItems" :key="i">{{ item }}</li>
+          </ul>
+
+          <div class="pdn-subtitle">{{ t('pdn_support_title') }}</div>
+          <div class="setting-row settings-link-row" role="link" tabindex="0"
+               @click="openExternalLink(pdnSupport.url)">
+            <span>{{ pdnSupport.label }}</span>
+            <span class="pdn-row-value">{{ pdnSupport.email }}</span>
+          </div>
+        </div>
         <div class="setting-row" style="display:block">
           <div style="display:flex;align-items:center;justify-content:space-between">
             <span>{{ t('presence_enable') || 'Показывать, что я онлайн' }}</span>
@@ -477,6 +510,7 @@ import { openUrl as shellOpen } from '@tauri-apps/plugin-opener';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import * as relayClient from '../relay-client.js';
 import * as ProPlan from '../features/pro-plan.js';
+import * as PdnNotice from '../features/pdn-notice.js';
 import { copyTextToClipboard } from '../clipboard.js';
 import { uiStore } from '../features/session-store.js';
 import AvatarUpload from './AvatarUpload.vue';
@@ -685,6 +719,11 @@ export default {
     proDetailsText() {
       return ProPlan.proDetailsText(this.proView, this.t, this.currentLocale);
     },
+    // «Данные и ПДн» (§5.2/§3.5): состав блока решает фича, компонент рисует.
+    pdnLinks() { return PdnNotice.settingsLinks(this.t); },
+    pdnSupport() { return PdnNotice.supportLink(this.t); },
+    pdnOperatorRows() { return PdnNotice.operatorFields(this.t); },
+    pdnProcessedItems() { return PdnNotice.processedItems(this.t); },
   },
   methods: {
     // ── Платный тариф Pro (M2: монетизация) ────────────────────
@@ -1393,6 +1432,41 @@ export default {
 .settings-link-row { cursor: pointer; }
 .settings-link-row:hover { color: var(--text-primary, #e6edf3); }
 .settings-link-arrow { color: var(--accent-primary, #58a6ff); }
+
+/* «Данные и ПДн» (§5.2/§3.5): карточка с документами, реквизитами оператора и
+   перечнем обрабатываемых данных. Только оформление — состав даёт
+   features/pdn-notice.js. */
+.pdn-block {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, #30363d);
+  border-radius: 8px;
+  background: var(--bg-secondary, #161b22);
+}
+.pdn-block-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.pdn-subtitle {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #8b949e);
+}
+.pdn-rows { display: flex; flex-direction: column; gap: 4px; }
+.pdn-row { display: flex; gap: 8px; font-size: 13px; line-height: 1.4; }
+.pdn-row-label { flex: 0 0 auto; min-width: 132px; color: var(--text-secondary, #8b949e); }
+.pdn-row-value { flex: 1 1 auto; word-break: break-word; }
+.pdn-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary, #e6edf3);
+}
 
 /* Единая система кнопок (глобальная в App.vue): .btn, .btn-primary,
    .btn-secondary, .btn-danger, .btn-ghost, .btn-sm, .btn-lg.

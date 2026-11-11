@@ -408,13 +408,24 @@ const LOGIN_EXPR = `(async () => {
   setVal(inputs[0], 'probe@example.test');
   setVal(inputs[1], 'probe-pass');
   await new Promise((r) => setTimeout(r, 250));
-  const before = (window.__SMOKE_CALLS || []).length;
   const form = document.querySelector('.login-box form');
-  if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  else { const btn = document.querySelector('.login-box button[type=submit]'); if (btn) btn.click(); }
+  const submit = () => {
+    if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    else { const btn = document.querySelector('.login-box button[type=submit]'); if (btn) btn.click(); }
+  };
+  // Шаг 1: без согласия на обработку ПДн (RuStore §5.2) вход обязан НЕ пройти.
+  const before = (window.__SMOKE_CALLS || []).length;
+  submit();
+  await new Promise((r) => setTimeout(r, 800));
+  const callsNoConsent = (window.__SMOKE_CALLS || []).slice(before);
+  // Шаг 2: пользователь ставит галочку согласия — теперь вход идёт.
+  const box = document.querySelector('.login-box .pdn-consent-label input[type=checkbox]');
+  if (box) { box.click(); await new Promise((r) => setTimeout(r, 200)); }
+  const before2 = (window.__SMOKE_CALLS || []).length;
+  submit();
   await new Promise((r) => setTimeout(r, 1500));
-  const calls = (window.__SMOKE_CALLS || []).slice(before);
-  return JSON.stringify({ calls, submitted: !!form });
+  const calls = (window.__SMOKE_CALLS || []).slice(before2);
+  return JSON.stringify({ calls, callsNoConsent, submitted: !!form, consentBox: !!box });
 })()`;
 
 // ── Фазы ────────────────────────────────────────────────────────────────
@@ -430,11 +441,20 @@ const PHASES = [
       for (const p of problems) if (/is not defined|ReferenceError|TypeError/.test(p)) failed.push(p);
       // Кнопка «Войти» обязана дойти до бэкенда (email_connect). Прокси
       // `login()` поверх полного входа тихо ломал это (20.10.2026).
+      // С RuStore §5.2 кнопка обязана ещё и НЕ пускать без согласия на ПДн —
+      // поэтому проверка идёт в два шага (см. LOGIN_EXPR).
       const l = s.login;
       if (!l || l.error) {
         failed.push('проверка входа с формы не выполнилась: ' + ((l && l.error) || 'нет данных'));
-      } else if (!l.calls.some((c) => c === 'email_connect')) {
-        failed.push(`кнопка «Войти» НЕ подключилась к IMAP (вызовы бэкенда: ${l.calls.join(', ') || '—'}) — метод входа перебит другим`);
+      } else {
+        if (!l.consentBox) {
+          failed.push('на форме входа нет галочки согласия на обработку ПДн (§5.2)');
+        } else if (!Array.isArray(l.callsNoConsent) || l.callsNoConsent.includes('email_connect')) {
+          failed.push(`вход выполнился БЕЗ согласия на ПДн (вызовы: ${(l.callsNoConsent || []).join(', ') || '—'})`);
+        }
+        if (!l.calls.some((c) => c === 'email_connect')) {
+          failed.push(`кнопка «Войти» НЕ подключилась к IMAP (вызовы бэкенда: ${l.calls.join(', ') || '—'}) — метод входа перебит другим`);
+        }
       }
       return failed;
     },

@@ -1003,7 +1003,7 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     !delBody || !/email_fetch_bodies/.test(delBody));
   if (delBody) {
     let called = false;
-    const names = ['api', 'crypto', 'invoke', 'db', 'relay', 'RelayFeature', 'EmailsFeature', 'initNotifications', 'uiStore'];
+    const names = ['api', 'crypto', 'invoke', 'db', 'relay', 'RelayFeature', 'EmailsFeature', 'initNotifications', 'PdnNotice', 'uiStore'];
     // Execute the ACTUAL delegate without a global `t`. The old shorthand
     // compiled successfully but threw ReferenceError on the real button.
     const delegate = new Function('RecoveryFeature', ...names,
@@ -1011,6 +1011,13 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     const t = (k) => 'T:' + k;
     // J.5b: делегат читает uiStore.tr (не this.t) — прокидываем stub.
     const uiStoreStub = { tr: t, toast: () => {}, scrollToBottom: () => {} };
+    // Восстановление теперь проходит через согласие ПДн (RuStore §5.2):
+    // стенд обязан отдать stub PdnNotice, иначе живой делегат падает на
+    // ReferenceError и проверка «вход дошёл» становится ложной.
+    let pdnCalled = false;
+    const pdnStub = {
+      loginWithConsent: async (deps) => { pdnCalled = true; return deps.runLogin(); },
+    };
     let seenTr = null;
     try {
       // ВАЖНО: stub uiStore обязан попасть в СВОЙ слот (последний в names).
@@ -1021,8 +1028,8 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
       // (ADR-005 W3, партия 13) — делегат берёт его отсюда, поэтому в
       // stub-компоненте должен быть ЭТОТ контракт, а не пустой this.
       await delegate({ loginWithRecovery: async (deps) => { seenTr = deps.t; } },
-        ...names.slice(0, -1).map(() => ({})), uiStoreStub).call({
-          t, uiStore: uiStoreStub,
+        ...names.slice(0, -1).map((n) => (n === 'PdnNotice' ? pdnStub : {})), uiStoreStub).call({
+          t, uiStore: uiStoreStub, pdnConsent: true, loginError: '',
           recoveryLoginDeps: { t, api: {}, crypto: {}, invoke: () => {}, db: {}, relay: {} },
         });
     } catch (e) { console.error('delegate failed: ' + (e && e.message)); }
@@ -1030,6 +1037,7 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     // переводчик реально уходит в контракт (deps.t — функция).
     console.log('  [debug] seenTr=' + typeof seenTr + ' | delBody=' + String(delBody).slice(0, 220).replace(/\n/g, ' '));
     check('App.vue: живой делегат запускается без ReferenceError', typeof seenTr === 'function');
+    check('App.vue: восстановление идёт через согласие ПДн', pdnCalled === true);
   }
   // mounted: guard маркера ДО авто-входа; initCrypto загрузка-only.
   check('App.vue mounted: guard recovery-pending перед авто-входом',
