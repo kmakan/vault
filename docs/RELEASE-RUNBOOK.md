@@ -406,6 +406,30 @@ ssh server 'systemctl is-active vault-relay
 
 ### Платёжный провайдер
 
+> Правило про glibc подтверждено ВТОРОЙ раз 11.11.2026: локальный
+> `cargo build --release` дал бинарь, который на сервере не стартует
+> (`GLIBC_2.32/2.33/2.34 not found`). Правильный путь — rsync исходников и
+> сборка НА СЕРВЕРЕ (`~/vault-relay/build`, cargo там есть, но не в PATH
+> неинтерактивной сессии: `PATH=$HOME/.cargo/bin:$PATH`). Сборка на сервере
+> заняла 1 мин 34 с.
+>
+> Если `sudo` недоступен (пароль не подставляется), сервис перезапускается
+> без него: подменить бинарник и убить процесс — systemd поднимет его сам
+> (`Restart=on-failure`, `RestartSec=3`): `kill -9 $(systemctl show
+> vault-relay.service -p MainPID --value)`. После рестарта в журнале должно
+> быть `state: loaded ... fcm=N ringtone=N fp=N kept_fcm=N kept_ringtone=N`
+> — это проверка, что привязки FCM/будилок пережили рестарт.
+>
+> **Проверка после деплоя платёжных роутов** (11.11.2026, рабочие):
+> ```bash
+> curl -s https://vault-msg.ru/relay/plans                       # каталог цен
+> curl -s -X POST -H 'Content-Type: application/json' \
+>   -d '{}' https://vault-msg.ru/relay/purchase/checkout         # 422 = роут есть
+> curl -s -X POST -H 'Content-Type: application/json' \
+>   -d '{"fp":"probe:x","keep":"deadbeef"}' \
+>   https://vault-msg.ru/relay/purchase/claim                    # 403 = роут есть
+> ```
+
 По умолчанию платежи ВЫКЛЮЧЕНЫ (`VAULT_RELAY_PAYMENTS` не задан) — все
 платёжные роуты отвечают `402 {"error":"checkout disabled"}`. Это честное
 состояние: реального провайдера (ЮKassa) нет до ИП (канбан ORG-2). Для
@@ -413,6 +437,29 @@ ssh server 'systemctl is-active vault-relay
 (`VAULT_RELAY_PAYMENTS=test` → `TestProvider`, оплата подтверждается
 мгновенно) и выключают сразу после: включённый тестовый провайдер в проде
 раздаёт бесплатные Pro-токены всем подряд.
+
+### Веб-канал оплаты в проде (11.11.2026)
+
+Состояние на 11.11.2026: веб-канал поднят end-to-end.
+
+| Слой | Что |
+|---|---|
+| Рель | `VAULT_RELAY_PAYMENTS=yookassa`, `VAULT_RELAY_YOOKASSA_SHOPID`, `VAULT_RELAY_YOOKASSA_SECRET_KEY`, `VAULT_RELAY_PUBLIC_URL=https://vault-msg.ru` — в env релея |
+| Роуты | `/relay/plans`, `/relay/purchase/{checkout,verify,claim,ipn}`, `/relay/tokens/{activate,info}`, `/pay-return/:id` |
+| Сайт | `pay.html` и `pricing.html` — RU в `sites/vault-msg/ru/`, EN в `sites/vault-msg/en/`; **EN-сайт отдаётся доменом `vault-msg.tech`, а не путём `/en/`** |
+| Цены | 149 ₽/мес · 447 за 3 · 894 за 6 · 1341 за 9 · 1490 за 12 (каталог считает сервер: `/relay/plans`) |
+| Крипто | **не подключён** (нет `VAULT_RELAY_CRYPTO_*`) — обещание USDT/BTC/LTC убрано из текстов сайта; в `pay.html` крипто-переключатель скрывает сервер (`crypto.enabled=false`) |
+
+Сквозная проверка без реальных денег (6 минут, `VAULT_RELAY_PAYMENTS=test`):
+checkout → claim → выдан Pro-токен → в приложении экран Pro показал
+«PRO активен до …». Потом: `VAULT_RELAY_PAYMENTS=yookassa`, рестарт, тестовые
+выдачи отозваны (`POST /admin/revoke {"fp":"…"}`), `/admin/payments` показывает
+только реальные платежи (отчёт спрашивает ЮKassa, тестовые чекауты в выручку
+не попадают).
+
+Код оплаты — это fp аккаунта, примаскированный по дизайну
+(`3a:5f:3c:1b:0e:15:4c:24:****`): маску снимать не нужно, рель регистрирует
+аккаунт ровно по этой строке, и сайт передаёт её без изменений.
 
 ### Тест-коды тестеров (безлимит на срок, с отзывом)
 
