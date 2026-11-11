@@ -20,7 +20,7 @@ export default {
       pattern: "    tr('report_content_msg_id', 'ID сообщения') + ': ' + (msg.id || '-'),",
       replacement: "    tr('report_content_msg_id', 'ID сообщения') + ': ' + msg.id," },
     { name: "адрес поддержки подменяется",
-      pattern: "  return 'mailto:support@vault-msg.ru?subject=' + encodeURIComponent(subject)",
+      pattern: "  return 'mailto:vault-msg@ya.ru?subject=' + encodeURIComponent(subject)",
       replacement: "  return 'mailto:support@example.com?subject=' + encodeURIComponent(subject)" },
   ],
 };

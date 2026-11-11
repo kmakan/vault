@@ -1,8 +1,13 @@
 // Жалоба на контент: сборка письма (ADR-003 Этап 3, партия 12).
 //
 // В App.vue остаётся диалог ввода и открытие ссылки — это UI. Здесь только
-// текст жалобы, и он уходит по почте в support@vault-msg.ru, то есть покидает
+// текст жалобы, и он уходит по почте на vault-msg@ya.ru, то есть покидает
 // устройство, поэтому его форма — тоже контракт, а не черновик.
+//
+// АДРЕС: vault-msg@ya.ru (ящик оператора на Яндексе). НЕ support@vault-msg.ru:
+// у домена vault-msg.ru нет MX, письма на него не доходят — решение владельца
+// от 29.10.2026 (Notes/Projects/mailcipher/next.md): почтовый сервер не
+// поднимаем, домен-мейл отложен до выручки, работаем через ящик оператора.
 //
 // ТРИ ФАКТА, КОТОРЫЕ ЛЕГКО ПОТЕРЯТЬ ПРИ ПЕРЕНОСЕ:
 //
@@ -40,7 +45,7 @@ export function buildReportLines({ type, msg, sender }, t) {
 // mailto со собранным текстом. Адрес поддержки зашит в коде — он не меняется от
 // пользователя и не должен приходить из настроек.
 export function buildReportMailto(subject, lines) {
-  return 'mailto:support@vault-msg.ru?subject=' + encodeURIComponent(subject)
+  return 'mailto:vault-msg@ya.ru?subject=' + encodeURIComponent(subject)
     + '&body=' + encodeURIComponent(lines.join('\n'));
 }
 

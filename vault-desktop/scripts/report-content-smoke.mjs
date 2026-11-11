@@ -63,7 +63,7 @@ ok('переводчик вернул пустое → запасной текс
 
 // ── mailto ─────────────────────────────────────────────────────────────
 const url = R.buildReportMailto('Жалоба на контент', lines);
-ok('адрес поддержки зашит и не подменён', url.startsWith('mailto:support@vault-msg.ru?'));
+ok('адрес поддержки зашит и не подменён', url.startsWith('mailto:vault-msg@ya.ru?'));
 ok('тема в subject', url.includes('subject=' + encodeURIComponent('Жалоба на контент')));
 ok('текст в body, переносы строк закодированы',
   url.includes('body=' + encodeURIComponent(lines.join('\n'))));
