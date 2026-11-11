@@ -3131,6 +3131,8 @@ fn pay_return_page(lang: &str, kind: PayReturnKind) -> String {
             "This payment session could not be found. Return to the app and start the purchase again.",
             "If you already paid, open Settings → Pro plan — the status will be fetched from the server.",
         ),
+        // hygiene:cjk-begin — китайская локализация страницы возврата (?lang=zh):
+        // строки намеренно на китайском, как src/locales/zh.js в приложении.
         ("zh", PayReturnKind::Ok) => (
             "zh",
             "Vault — 支付确认中",
@@ -3152,6 +3154,7 @@ fn pay_return_page(lang: &str, kind: PayReturnKind) -> String {
             "找不到此支付会话。请返回应用并重新发起购买。",
             "如果已经付款，请打开「设置 → Pro 套餐」——状态会从服务器获取。",
         ),
+        // hygiene:cjk-end
         (_, PayReturnKind::Ok) => (
             "ru",
             "Vault — проверка оплаты",
@@ -5424,7 +5427,10 @@ mod tests {
         let checkout_id = create_checkout_id(app.clone()).await;
         let cases = [
             (Some("en"), "Checking your payment", r#"lang="en""#),
+            // hygiene:cjk-begin — здесь китайский текст ПРОВЕРЯЕТСЯ, а не украшает:
+            // страница ?lang=zh обязана содержать китайскую строку.
             (Some("zh"), "正在确认支付", r#"lang="zh""#),
+            // hygiene:cjk-end
             (Some("EN"), "Checking your payment", r#"lang="en""#),
             (Some("de"), "Проверяем оплату", r#"lang="ru""#),
             (None, "Проверяем оплату", r#"lang="ru""#),

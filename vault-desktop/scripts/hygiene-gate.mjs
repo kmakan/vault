@@ -105,6 +105,19 @@ function isAllowedLine(rel, line) {
   return /language_zh\s*:/.test(line);
 }
 
+// БЛОКИ, ГДЕ ИЕРОГЛИФЫ — ЭТО ЯЗЫК, А НЕ ПОРЧА. Релей отдаёт пользователю
+// страницы на языке ?lang=…, и китайские строки там обязаны быть китайскими
+// (как src/locales/zh.js в приложении). Такие места помечаются В САМОМ КОДЕ
+// парой комментариев — тогда исключение видно рядом со строками, а не в списке
+// гейта, и его нельзя расширить незаметно:
+//     // hygiene:cjk-begin — <почему здесь китайский>
+//     …строки…
+//     // hygiene:cjk-end
+// Внутри блока иероглифы/кана/хангыль не считаются находкой, но БИТЫЕ БАЙТЫ
+// (U+FFFD) и склейка алфавитов ловятся по-прежнему: это всегда дефект.
+const CJK_BEGIN = /hygiene:cjk-begin/;
+const CJK_END = /hygiene:cjk-end/;
+
 let skippedData = 0;
 function scanTree(root, label, findings) {
   if (!existsSync(root)) return 0;
@@ -138,11 +151,18 @@ function scanTree(root, label, findings) {
       if (isDataFile(rel)) { skippedData++; continue; }
       if (isAllowedFile(rel)) continue;
       const lines = txt.split('\n');
+      let cjkBlock = false;
       for (let i = 0; i < lines.length; i++) {
-        const kind = classify(lines[i]);
+        const line = lines[i];
+        if (CJK_BEGIN.test(line)) { cjkBlock = true; continue; }
+        if (CJK_END.test(line)) { cjkBlock = false; continue; }
+        const kind = classify(line);
         if (!kind) continue;
-        if (isAllowedLine(rel, lines[i])) continue;
-        findings.push({ file: path.join(label, rel), line: i + 1, kind, text: lines[i].trim().slice(0, 140) });
+        if (isAllowedLine(rel, line)) continue;
+        // В помеченном блоке язык — это язык: пропускаем только «чужие буквы»,
+        // битые байты и склейку алфавитов оставляем находкой.
+        if (cjkBlock && /^(иероглифы|кана|хангыль)/.test(kind)) continue;
+        findings.push({ file: path.join(label, rel), line: i + 1, kind, text: line.trim().slice(0, 140) });
       }
     }
   };
