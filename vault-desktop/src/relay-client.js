@@ -77,13 +77,23 @@ export function memLearn(relayUrl, chatId, token) {
   else memPeers.delete(key);
 }
 
-let http = null;
-try {
-  // Tauri http-плагин: обходит CORS WebView (запрос идёт из Rust).
-  http = (await import('@tauri-apps/plugin-http')).fetch;
-} catch (e) { /* фолбэк на window.fetch (desktop dev) */ }
+// Tauri http-плагин обходит CORS WebView (запрос идёт из Rust). Грузится
+// ЛЕНИВО и один раз: раньше здесь стоял top-level await, а это ES2022 —
+// системный WebView на Android 7-9 (minSdk = 24) такой файл не разбирает
+// вовсе, и модуль релея уносит с собой весь чанк. Тот же класс дефекта, что
+// `?.`/`??` в бандле (t_cca47c2c); ловится scripts/es-target-gate.mjs.
+let httpPromise = null;
+function loadHttp() {
+  if (!httpPromise) {
+    httpPromise = import('@tauri-apps/plugin-http')
+      .then((m) => m.fetch)
+      .catch(() => null); // фолбэк на window.fetch (desktop dev)
+  }
+  return httpPromise;
+}
 
 async function rfetch(url, opts = {}) {
+  const http = await loadHttp();
   if (http) return http(url, opts);
   return fetch(url, opts);
 }
