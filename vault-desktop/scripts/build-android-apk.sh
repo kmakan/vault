@@ -115,3 +115,25 @@ fi
 # зато ставится здесь — до телефона.
 echo "=== JNI-провода по DEX ==="
 node scripts/dex-jni-check.mjs "$OUT" || { echo "✗ часть JNI-вызовов из Rust не видна в артефакте как static — не принимать" >&2; exit 1; }
+
+# --- Раскладка артефакта в ~/vault-releases/<версия>/ ---------------------
+# Раньше это делалось руками, и 12.11 вышел ровно тот дефект, ради которого
+# блок появился: APK пересобрали после правки вёрстки, а в ~/vault-releases/
+# 0.1.292/ остался файл ПРЕДЫДУЩЕЙ сборки. Дальше приёмка поставила старый код,
+# а SHA256 в SHA256SUMS.txt описывал не то, что лежало рядом. Артефакт и его
+# сумма теперь кладутся здесь, из того же файла, который проверил DEX.
+REL_DIR="$HOME/vault-releases/$TREE_VER"
+mkdir -p "$REL_DIR"
+if [ "$MODE" = apk ]; then
+  REL_NAME="vault-$TREE_VER.apk"
+else
+  REL_NAME="vault-$TREE_VER.aab"
+fi
+cp -f "$OUT" "$REL_DIR/$REL_NAME"
+( cd "$REL_DIR" && sha256sum "$REL_NAME" > SHA256SUMS.txt )
+echo
+echo "=== артефакт разложен ==="
+ls -la "$REL_DIR/$REL_NAME"
+cat "$REL_DIR/SHA256SUMS.txt"
+echo "(каталог: $REL_DIR)"
+

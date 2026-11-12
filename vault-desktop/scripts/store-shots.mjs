@@ -17,6 +17,15 @@
 //
 // Использование:
 //   node scripts/store-shots.mjs <out-dir> [--ser emulator-5554] [--port 9224]
+//
+// ⚠️ НЕ ЧИСТИТЬ ДАННЫЕ ПРИЛОЖЕНИЯ (`adb shell pm clear com.vault.vault`).
+// 12.11.2026 на этом потеряли вход: pm clear стирает зашифрованные креды из
+// хранилища, и приложение больше не может авто-войти — в логах
+// «no credentials — exit (нужен один вход в приложение)». Восстановление
+// требует живого пароля (app-пароль в ~/Notes/Projects/mailcipher/mails.md),
+// а на боевом X50 это вообще инцидент (правило #8 AGENTS.md).
+// Нужен экран согласия или чистый профиль — поднимать ОТДЕЛЬНЫЙ AVD
+// (`emulator -avd <другой> -no-snapshot-save`), а не обнулять текущий.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
