@@ -1435,6 +1435,10 @@ export default {
 .settings-link-row:hover { color: var(--text-primary, #e6edf3); }
 .settings-link-arrow { color: var(--accent-primary, #58a6ff); }
 
+/* Строка поддержки в блоке «Данные и ПДн»: подпись и адрес стоят рядом, и
+   без зазора они слипаются в «Написать в поддержкуvault-msg@ya.ru». */
+.pdn-block .settings-link-row { gap: 8px; }
+
 /* «Данные и ПДн» (§5.2/§3.5): карточка с документами, реквизитами оператора и
    перечнем обрабатываемых данных. Только оформление — состав даёт
    features/pdn-notice.js. */
