@@ -1,0 +1,17 @@
+[Unit]
+Description=Vault NPD receipts (ЮKassa payment -> «Мой налог» receipt reconciliation)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=maksim
+WorkingDirectory=/home/maksim/vault-relay
+# Основные настройки (ЮKassa shop/secret) и отдельно токен ЛКФЛ: разные
+# секреты, разные файлы — ротация одного не требует трогать другой.
+EnvironmentFile=/home/maksim/vault-relay/env
+EnvironmentFile=/home/maksim/vault-relay/npd.env
+Environment=VAULT_NPD_STATE_PATH=/home/maksim/vault-relay/npd-state.json
+ExecStart=/home/maksim/vault-relay/vault-npd-receipts
+# Ненулевой код = провайдер недоступен или чек не выдан. Юнит обязан
+# выглядеть упавшим: «тихо зелёный» молчащий чек — это штраф 20%.
