@@ -4,6 +4,7 @@ pub mod accounting;
 pub mod channel_keys;
 pub mod payments;
 pub mod fcm;
+pub mod npd;
 pub mod persist;
 pub mod rate;
 pub mod store;
