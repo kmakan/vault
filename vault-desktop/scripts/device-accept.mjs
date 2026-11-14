@@ -77,6 +77,11 @@ const labelsOf = (key) => {
 };
 const BUY_LABELS = labelsOf('pro_action_buy');
 const EXTEND_LABELS = labelsOf('pro_action_extend');
+// Веб-канал оплаты (RuStore/прямой APK): подсказка «оплата на сайте» и кнопка
+// копирования кода. Своя копия текста тут опасна так же, как и с кнопкой
+// покупки: подпись в словаре меняется, проба продолжает искать старое.
+const WEB_HINT_LABELS = labelsOf('pro_web_hint');
+const WEB_COPY_LABELS = labelsOf('pro_web_copy');
 
 // Проба — код, исполняемый В СТРАНИЦЕ приложения. Возвращает отчёт.
 const PROBES = {
@@ -204,6 +209,36 @@ const PROBES = {
       // возможность мимо стора: в такой сборке его входа нет.
       step('сборка без покупок: входа в промо-ключ нет',
         !btnTexts().some((x) => /промо|promo/i.test(x)), { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+
+      // ВЕБ-КАНАЛ ОПЛАТЫ. «Сборка без покупок» бывает двух видов, и различает
+      // их само приложение (флаг VITE_WEB_PAY), а не запускающий приёмку:
+      //   RuStore / прямой APK — внешняя оплата разрешена, значит человеку
+      //   нужен КОД (fp) и адрес сайта, иначе заплатить физически нечем
+      //   (0.1.295 собрали с выключенным блоком — магазинный пользователь
+      //   не мог купить вообще, при зелёной приёмке);
+      //   Google Play AAB — внешняя оплата цифровых товаров запрещена её
+      //   политикой, блока нет.
+      // Поэтому шаг не «есть/нет вообще», а «совпадает с решением компонента».
+      const WEB_HINT = ${WEB_HINT_LABELS};
+      const WEB_COPY = ${WEB_COPY_LABELS};
+      const hintEl = Array.from(document.querySelectorAll('.settings-content div'))
+        .find((el) => WEB_HINT.includes((el.innerText || '').trim())) || null;
+      const codeEl = hintEl && hintEl.parentElement
+        ? hintEl.parentElement.querySelector('code') : null;
+      if (pro && pro.webPayHint === true) {
+        step('веб-оплата: подсказка «оплата на сайте» напечатана', !!hintEl,
+          { text: content().slice(0, 200) });
+        step('веб-оплата: код оплаты напечатан и совпадает с fp аккаунта',
+          !!codeEl && !!pro.proPayCode && codeEl.innerText.trim() === String(pro.proPayCode).trim(),
+          { dom: codeEl ? codeEl.innerText.trim() : null, fp: pro.proPayCode || null });
+        const freshBtns = Array.from(document.querySelectorAll('.settings-content button'))
+          .map((b) => norm(b.innerText));
+        step('веб-оплата: кнопка «Копировать код» есть',
+          freshBtns.some((x) => WEB_COPY.includes(x)), { buttons: freshBtns.map((e) => e.slice(0, 24)) });
+      } else {
+        step('веб-оплата выключена: ни кода, ни подсказки про сайт', !hintEl && !codeEl,
+          { code: codeEl ? codeEl.innerText.trim() : null, hint: !!hintEl });
+      }
     }
     step('состояние тарифа читается компонентом настроек', !!pro && !!pro.proView, {
       kind: pro && pro.proView ? pro.proView.kind : null,
