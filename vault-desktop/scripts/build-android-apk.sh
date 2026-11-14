@@ -69,7 +69,19 @@ export VITE_NO_PURCHASES="$([ "${VAULT_NO_PURCHASES:-0}" = 1 ] && echo 1 || echo
 # там флаг был выключен и раньше.
 # Прямой/девич-канал, которому подсказка нужна, включает её явно:
 #   VITE_WEB_PAY=1 scripts/build-android-apk.sh apk
-export VITE_WEB_PAY="${VITE_WEB_PAY:-0}"
+# Покупка В ПРИЛОЖЕНИИ самозанятому недоступна: биллинг RuStore — только
+# ЮЛ/ИП с УКЭП, Play не платит с расчётным счётом РФ и запрещает внешнюю
+# оплату цифровых товаров. Значит единственный путь оплаты — сайт (ЮKassa),
+# и магазинному APK НУЖЕН код оплаты (fp) + указание на сайт, иначе
+# пользователь магазина физически не сможет заплатить. Для AAB (Google Play)
+# внешняя оплата запрещена — там блок оплаты выключен.
+if [ -z "${VITE_WEB_PAY:-}" ]; then
+  case "$MODE" in
+    apk) VITE_WEB_PAY=1 ;;
+    *)   VITE_WEB_PAY=0 ;;
+  esac
+fi
+export VITE_WEB_PAY
 echo "покупки в сборке: $([ "$VITE_NO_PURCHASES" = 1 ] && echo "НЕТ (магазин/сайт-политика)" || echo "есть (прямой канал)") (режим $MODE, VITE_NO_PURCHASES=$VITE_NO_PURCHASES, VITE_WEB_PAY=$VITE_WEB_PAY)"
 
 case "$MODE" in
