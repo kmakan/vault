@@ -1,5 +1,10 @@
 [Unit]
 Description=Vault NPD receipts (ЮKassa payment -> «Мой налог» receipt reconciliation)
+# НЕ ВКЛЮЧАТЬ НА СЕРВЕРЕ. 14.11 проверено живьём: ЛКФЛ отбивает IP хостинга
+# (AS14576) — TCP 443 до lknpd.nalog.ru 3/3 FAIL, при этом www.nalog.ru и
+# госуслуги отвечают. Боевой вариант — vault-npd-receipts-user.service
+# (домашний провайдерский IP, там сверка проходит: 2026-11-14 «без чека 0»).
+# Этот файл оставлен как заготовка на случай «жилого» IP у сервера.
 Wants=network-online.target
 After=network-online.target
 

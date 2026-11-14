@@ -1,0 +1,19 @@
+[Unit]
+Description=Vault NPD receipts — сверка «оплата ЮKassa ↔ чек Мой налог» (домашний IP)
+# Зачем отдельный юнит от серверного: ФНС отбивает ЛКФЛ с IP хостинга
+# (AS14576), а домашний провайдерский адрес проходит. Поэтому сверка живёт
+# там, где есть живой доступ, — на машине владельца; сервер остаётся только
+# для ЮKassa. Готовый серверный вариант — vault-npd-receipts.service.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+# Только нужные переменные (магазин ЮKassa + токен ЛКФЛ), а не весь env
+# релея: ротация одного секрета не тянет за собой остальные.
+EnvironmentFile=%h/.config/vault-relay/npd.env
+Environment=VAULT_NPD_STATE_PATH=%h/.local/state/vault-relay/npd-state.json
+ExecStart=%h/.local/bin/vault-npd-receipts
+# Ненулевой код = провайдер недоступен или чек не выдан. Юнит обязан
+# выглядеть упавшим: «тихо зелёный» молчащий чек — это штраф 20%.
