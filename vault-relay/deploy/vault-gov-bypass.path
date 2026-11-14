@@ -1,0 +1,9 @@
+[Unit]
+Description=Vault: применить обход гос-хостов при появлении Amnezia (amn0)
+
+[Path]
+PathExists=/sys/class/net/amn0
+Unit=vault-gov-bypass.service
+
+[Install]
+WantedBy=paths.target
