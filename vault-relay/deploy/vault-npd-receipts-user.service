@@ -6,6 +6,8 @@ Description=Vault NPD receipts — сверка «оплата ЮKassa ↔ че�
 # для ЮKassa. Готовый серверный вариант — vault-npd-receipts.service.
 Wants=network-online.target
 After=network-online.target
+# При отказе — оповещение (лог + рабочий стол + push на телефон через ntfy).
+OnFailure=vault-npd-alert.service
 
 [Service]
 Type=oneshot
