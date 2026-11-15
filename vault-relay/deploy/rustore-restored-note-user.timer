@@ -1,0 +1,11 @@
+[Unit]
+Description=Проверка «сайт поднялся?» каждые 30 минут — для письма в RuStore
+
+[Timer]
+OnCalendar=*:10/30
+Persistent=true
+AccuracySec=1min
+Unit=rustore-restored-note.service
+
+[Install]
+WantedBy=timers.target

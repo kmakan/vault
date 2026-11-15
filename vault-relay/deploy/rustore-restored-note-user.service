@@ -1,0 +1,9 @@
+[Unit]
+Description=RuStore: письмо о восстановлении сайта (один раз, только при живом сайте)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.hermes/scripts/rustore-restored-note-send.py
+TimeoutStartSec=180
