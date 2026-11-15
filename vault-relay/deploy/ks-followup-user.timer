@@ -1,0 +1,11 @@
+[Unit]
+Description=Разово 15.11.2026 в 18:30 — отправить выводы хостеру, если тишина
+
+[Timer]
+OnCalendar=2026-11-15 18:30:00
+Persistent=true
+AccuracySec=30s
+Unit=ks-followup.service
+
+[Install]
+WantedBy=timers.target
