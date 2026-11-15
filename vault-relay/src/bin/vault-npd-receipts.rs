@@ -22,7 +22,7 @@ async fn main() {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("vault-npd-receipts: {e}");
-            std::process::exit(1);
+            std::process::exit(npd::exit_code_for_error(&e));
         }
     }
 }
@@ -38,7 +38,10 @@ async fn run(check_only: bool) -> Result<i32, String> {
         _ => state.token.refresh_token.clone(),
     };
     if refresh_token.trim().is_empty() {
-        return Err("нет refresh-токена: VAULT_NPD_REFRESH_TOKEN пуст и в состоянии пусто (код 2)".to_string());
+        return Err(format!(
+            "{}: VAULT_NPD_REFRESH_TOKEN пуст и в состоянии пусто",
+            npd::NO_SETTINGS
+        ));
     }
 
     let client = NpdClient::from_env()?;

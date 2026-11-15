@@ -87,6 +87,20 @@ impl NpdState {
     }
 }
 
+/// Префикс ошибки «сверять нечем»: refresh-токена нет ни в окружении, ни в
+/// состоянии. Отличается от сбоя провайдера тем, что лечится настройкой, а не
+/// ожиданием, поэтому у него отдельный код выхода.
+pub const NO_SETTINGS: &str = "нет refresh-токена";
+
+/// Код выхода для ошибки сверки: 2 — нет настроек, 1 — всё остальное.
+///
+/// Документированный контракт `vault-npd-receipts` («2 — нет настроек»)
+/// соблюдается здесь, а не в точке входа: иначе в журнале «нет токена» и
+/// «ЛКФЛ не ответил» выглядели одинаково, хотя чинятся по-разному.
+pub fn exit_code_for_error(msg: &str) -> i32 {
+    if msg.starts_with(NO_SETTINGS) { 2 } else { 1 }
+}
+
 /// Путь к файлу состояния из окружения.
 pub fn state_path_from_env() -> PathBuf {
     match std::env::var("VAULT_NPD_STATE_PATH") {
@@ -516,7 +530,18 @@ mod tests {
         assert_eq!(msk_day_key("2026-10-31T23:30:00Z").as_deref(), Some("2026-11-01"));
         // 00:30 МСК остаётся тем же днём, а не уезжает назад.
         assert_eq!(msk_day_key("2026-11-01T00:30:00+03:00").as_deref(), Some("2026-11-01"));
+        // НЕ московское смещение: его надо ВЫЧЕСТЬ, иначе день уезжает вперёд
+        // (00:30+05:00 = 22:30 МСК 31.10, а не 03:30 МСК 01.11). Так приходит
+        // время от ЛКФЛ, если аккаунт смотрели из другого пояса, и так же
+        // выглядит строка с отрицательным смещением.
+        assert_eq!(msk_day_key("2026-11-01T00:30:00+05:00").as_deref(), Some("2026-10-31"));
+        assert_eq!(msk_day_key("2026-10-31T23:30:00-05:00").as_deref(), Some("2026-11-01"));
         assert_eq!(msk_day_key("мусор"), None);
+        // Несуществующая дата — не факт: иначе чек уезжает в придуманный день,
+        // которого не было, и сверка «платёж ↔ чек» не находит пару.
+        for junk in ["2026-13-45T99:99:00Z", "2026-00-10T10:00:00Z", "2026-10-32T10:00:00Z"] {
+            assert_eq!(msk_day_key(junk), None, "должно быть отброшено: {junk}");
+        }
     }
 
     #[test]
@@ -526,6 +551,9 @@ mod tests {
         // 23:30 UTC — уже следующий день в Москве.
         assert_eq!(msk_iso("2026-10-31T23:30:00Z").as_deref(), Some("2026-11-01T02:30:00+03:00"));
         assert_eq!(msk_iso("не дата"), None);
+        // Нечитаемое смещение — не «считаем UTC»: чек с придуманным временем
+        // хуже, чем сигнал «строку не разобрали».
+        assert_eq!(msk_iso("2026-10-31T11:56:52+xx:yy"), None);
     }
 
     #[test]
@@ -545,6 +573,11 @@ mod tests {
         let b = build_refresh_body("ref", "dev-1");
         assert_eq!(b["refreshToken"], serde_json::json!("ref"));
         assert_eq!(b["deviceInfo"]["sourceDeviceId"], serde_json::json!("dev-1"));
+        // Плоских полей быть не должно: сервер ЛКФЛ отвечает на них
+        // `422 validation.failed` — то есть «токен в форме есть, а авторизации
+        // нет». Ровно два ключа верхнего уровня.
+        assert!(b.get("token").is_none(), "токен только внутри deviceInfo: {b}");
+        assert_eq!(b.as_object().map(|o| o.len()), Some(2), "лишние плоские поля: {b}");
         let ok = parse_refresh(&serde_json::json!({"token": "t", "refreshToken": "r", "tokenExpireIn": "z"})).unwrap();
         assert_eq!(ok.token, "t");
         assert_eq!(ok.refresh_token, "r");
@@ -605,12 +638,17 @@ mod tests {
     fn неоплаченные_тестовые_и_уже_отправленные_пропускаются() {
         let mut p2 = pay("p2", "pending", "2026-10-31T08:00:00Z", "149.00");
         p2.paid = false;
+        // Двухстадийная оплата: деньги ЗАБЛОКИРОВАНЫ (`paid: true`), но ещё не
+        // списаны (`status: waiting_for_capture`). Чек на такую «продажу» —
+        // налог с денег, которых у нас нет.
+        let mut p2b = pay("p2b", "waiting_for_capture", "2026-10-31T08:00:00Z", "149.00");
+        p2b.paid = true;
         let mut p3 = pay("p3", "succeeded", "2026-10-31T08:00:00Z", "149.00");
         p3.test = true;
         let p4 = pay("p4", "succeeded", "2026-10-31T08:00:00Z", "149.00");
         let mut done = BTreeMap::new();
         done.insert("p4".to_string(), "uuid".to_string());
-        let payments = vec![p2, p3, p4];
+        let payments = vec![p2, p2b, p3, p4];
         assert!(missing_receipts(&payments, &[], &done).is_empty());
     }
 
@@ -628,5 +666,14 @@ mod tests {
         assert_eq!(service_name("Vault pro: 1 мес"), "Vault: pro: 1 мес");
         assert_eq!(service_name("Vault pro: 12 мес"), "Vault: pro: 12 мес");
         assert_eq!(service_name("  "), "Доступ к тарифу Pro (Vault)");
+    }
+
+    #[test]
+    fn нет_настроек_отличается_от_сбоя_провайдера() {
+        // «нечем сверять» и «провайдер молчит» чинятся по-разному, поэтому и
+        // коды разные: 2 против 1. Один общий код стёр бы это различие в журнале.
+        assert_eq!(exit_code_for_error("нет refresh-токена: пусто"), 2);
+        assert_eq!(exit_code_for_error("платежи ЮKassa: timeout"), 1);
+        assert_eq!(exit_code_for_error(""), 1);
     }
 }
