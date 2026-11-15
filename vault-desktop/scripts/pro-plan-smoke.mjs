@@ -267,10 +267,16 @@ console.log('4b. buyPro: живой провайдер');
   check('живой: успех после подтверждения', res.ok === true && res.plan === 'pro', res);
   check('живой: состояние перечитано после оплаты', calls.some((c) => c[0] === 'refresh'), calls);
 
-  // Человек не оплатил за окно — ok=false, но НЕ «успех»; refresh не вызван.
+  // Человек не оплатил за окно — ok=false, но НЕ «успех» и НЕ провал:
+  // возвращаем pending с чекаутом, чтобы экран предложил «Проверить оплату».
+  // refresh не вызван: подтверждения от сервера не было.
   verifyCount = 0; calls.length = 0; toasts.length = 0;
   res = await P.buyPro(liveDeps(() => ({ error: 'not_paid_yet' })));
-  check('живой: неоплата за окно → ok=false', res.ok === false && res.error === 'not_paid_yet', res);
+  check('живой: неоплата за окно → ok=false', res.ok === false, res);
+  check('живой: неоплата за окно → pending с тем же чекаутом',
+    res.pending === true && res.checkoutId === 'co_live', res);
+  check('живой: неоплата → тост «проверьте оплату», не «не удалось»',
+    toasts[toasts.length - 1] === 'pro_pay_pending', toasts);
   check('живой: неоплата → состояние НЕ перечитывается', !calls.some((c) => c[0] === 'refresh'), calls);
   check('живой: опрос ограничен maxVerify', verifyCount === 5, verifyCount);
 
@@ -291,6 +297,60 @@ console.log('4b. buyPro: живой провайдер');
   });
   check('тестовый провайдер: браузер НЕ открывается (нет http-ссылки)', !tcalls.some((c) => c[0] === 'open'), tcalls);
   check('тестовый провайдер: один verify, успех', tcalls.filter((c) => c[0] === 'verify').length === 1 && res.ok === true, tcalls);
+}
+
+// ── 4c. checkPending: переспросить по УЖЕ созданному чекауту ────────────
+// Кнопка «Проверить оплату» обязана спрашивать тот же чекаут: новый создаёт
+// второй платёж, и человек может заплатить дважды.
+console.log('4c. checkPending');
+{
+  const cpDeps = (verifyFn) => {
+    const calls = [];
+    const toasts = [];
+    return {
+      calls, toasts,
+      deps: {
+        checkoutId: 'co_pending',
+        verify: async (id) => { calls.push(['verify', id]); return verifyFn(); },
+        refresh: async () => { calls.push(['refresh']); },
+        toast: (m) => toasts.push(m), tr: tl,
+      },
+    };
+  };
+
+  // Ещё не подтвердили — остаёмся в ожидании, состояние не перечитываем.
+  {
+    const { deps, calls, toasts } = cpDeps(() => ({ error: 'not_paid_yet' }));
+    const res = await P.checkPending(deps);
+    check('checkPending: не оплачено → pending', res.ok === false && res.pending === true, res);
+    check('checkPending: спрашивает тот же чекаут', calls.some((c) => c[0] === 'verify' && c[1] === 'co_pending'), calls);
+    check('checkPending: новый чекаут НЕ создаётся', !calls.some((c) => c[0] === 'checkout'), calls);
+    check('checkPending: не оплачено → состояние НЕ перечитывается', !calls.some((c) => c[0] === 'refresh'), calls);
+    check('checkPending: не оплачено → тост «проверьте оплату»', toasts[0] === 'pro_pay_pending', toasts);
+  }
+
+  // Оплату подтвердили — Pro выдан, состояние перечитано.
+  {
+    const { deps, calls, toasts } = cpDeps(() => ({ token: 'v2', plan: 'pro', paid_until: NOW + 30 * DAY }));
+    const res = await P.checkPending(deps);
+    check('checkPending: оплачено → ok', res.ok === true && res.plan === 'pro', res);
+    check('checkPending: оплачено → состояние перечитано', calls.some((c) => c[0] === 'refresh'), calls);
+    check('checkPending: оплачено → тост «Pro активирован»', toasts[0] === 'Pro активирован', toasts);
+  }
+
+  // Чекаут истёк (окно сервера 30 минут) — ожидание снимаем, ошибка честная.
+  {
+    const { deps, toasts } = cpDeps(() => ({ error: 'checkout_expired' }));
+    const res = await P.checkPending(deps);
+    check('checkPending: истёк → не pending, ошибка', res.ok === false && !res.pending && res.error === 'checkout_expired', res);
+    check('checkPending: истёк → тост с причиной', toasts[0] && toasts[0].includes('checkout_expired'), toasts);
+  }
+
+  // Без чекаута спрашивать нечего — и это не ошибка сети.
+  {
+    const res = await P.checkPending({ checkoutId: '', verify: async () => ({}) });
+    check('checkPending: пустой чекаут → no_checkout', res.ok === false && res.error === 'no_checkout', res);
+  }
 }
 
 // ── 5. Бейдж Pro в шапке чата ───────────────────────────────────────────

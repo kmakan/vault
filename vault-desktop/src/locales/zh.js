@@ -698,6 +698,8 @@ export default {
   pro_buy_failed: '无法完成购买：{why}',
   pro_buy_ok: 'Pro 已激活',
   pro_pay_open: '请在打开的页面完成付款 — Pro 将自动开通',
+  pro_pay_pending: '付款尚未确认。完成付款后请点击“检查支付”',
+  pro_check_payment: '检查支付',
   pro_web_hint: '付款在官网 vault-msg.ru。在付款页输入此码,订阅会在应用中自动开通。',
   pro_web_copy: '复制代码',
   pro_web_copied: '代码已复制',

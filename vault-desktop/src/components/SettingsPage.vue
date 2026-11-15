@@ -334,6 +334,13 @@
                   :disabled="proBusy" @click="proBuy()">
             {{ proBusy ? t('pro_buy_busy') : proActionLabel }}
           </button>
+          <!-- Платёж создан, но банк/кошелёк ещё не подтвердил: показываем
+               проверку вместо повторной покупки, иначе человек платит дважды. -->
+          <button v-if="proPendingCheckout" class="btn-secondary"
+                  style="padding:9px 14px;border-radius:8px;cursor:pointer"
+                  :disabled="proBusy" @click="proCheckPayment">
+            {{ proBusy ? t('pro_buy_busy') : t('pro_check_payment') }}
+          </button>
         </div>
         <!-- Веб-канал: в сборке без покупок оплата на сайте. Код оплаты —
              отпечаток аккаунта: с ним платёж привязывается к этому fp, а
@@ -562,6 +569,9 @@ export default {
       // сервер (плюс офлайн-грейс, когда сервер недоступен).
       proState: null,
       proBusy: false,
+      // Чекаут, по которому платёж создан, но сервер ещё не подтвердил оплату.
+      // Непустое значение = на экране есть кнопка «Проверить оплату».
+      proPendingCheckout: '',
       // fp аккаунта — «код оплаты» для веб-канала (покупка на сайте).
       proPayCode: '',
       // Витрина тарифов — ОТ СЕРВЕРА (/relay/plans): [{plan, months, kopecks,
@@ -761,7 +771,7 @@ export default {
       if (this.proBusy) return;
       this.proBusy = true;
       try {
-        await ProPlan.buyPro({
+        const r = await ProPlan.buyPro({
           months,
           checkout: (plan, m) => relayClient.purchaseCheckout(this.email || 'anon', plan, m, this.currentLocale),
           verify: (id) => relayClient.purchaseVerify(this.email || 'anon', id),
@@ -771,6 +781,27 @@ export default {
           toast: (m) => uiStore.toast(m),
           tr: (k, p) => this.t(k, p),
         });
+        // Платёж создан, но не подтверждён — держим чекаут, чтобы «Проверить
+        // оплату» спрашивала сервер по нему, а не создавала вторую покупку.
+        this.proPendingCheckout = (r && r.pending) ? (r.checkoutId || '') : '';
+      } finally {
+        this.proBusy = false;
+      }
+    },
+    async proCheckPayment() {
+      if (this.proBusy || !this.proPendingCheckout) return;
+      this.proBusy = true;
+      try {
+        const r = await ProPlan.checkPending({
+          checkoutId: this.proPendingCheckout,
+          verify: (id) => relayClient.purchaseVerify(this.email || 'anon', id),
+          refresh: () => this.proRefresh(),
+          toast: (m) => uiStore.toast(m),
+          tr: (k, p) => this.t(k, p),
+        });
+        // Ожидание снимаем при любом окончательном ответе (оплачено, истёк,
+        // отклонён). Пока платёж в силе — кнопка остаётся.
+        if (!r || !r.pending) this.proPendingCheckout = '';
       } finally {
         this.proBusy = false;
       }

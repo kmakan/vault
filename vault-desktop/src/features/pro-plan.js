@@ -311,6 +311,15 @@ export async function buyPro(deps) {
     if (v.error !== 'not_paid_yet') break;     // реальная ошибка — её не ждём
     if (i < attempts - 1 && deps.sleep) await deps.sleep(deps.pollMs || 3000);
   }
+  if (live && v && v.error === 'not_paid_yet') {
+    // Окно ожидания вышло, а банк или кошелёк ещё не подтвердили платёж.
+    // Это НЕ провал покупки: страница оплаты открыта, деньги могут прийти
+    // через минуту-другую. Раньше здесь показывалось «не удалось», человек
+    // шёл покупать заново, а первый платёж истекал неподтверждённым —
+    // ровно так терялись оплаты. Отдаём pending: экран предложит проверить.
+    deps.toast(deps.tr('pro_pay_pending'));
+    return { ok: false, pending: true, checkoutId: res.checkout_id };
+  }
   if (!v || v.error) {
     const why = (v && v.error) || 'network';
     deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));
@@ -319,4 +328,28 @@ export async function buyPro(deps) {
   deps.toast(deps.tr('pro_buy_ok'));
   if (deps.refresh) await deps.refresh();
   return { ok: true, plan: v.plan, paidUntil: v.paid_until };
+}
+
+// Переспросить сервер о уже созданном чекауте (кнопка «Проверить оплату»).
+//
+// Новый чекаут здесь НЕ создаётся: иначе повторная проверка открывала бы
+// второй платёж и человек мог заплатить дважды. Вердикт по-прежнему за
+// сервером: клиент лишь спрашивает и показывает то, что ответили.
+export async function checkPending(deps) {
+  if (!deps || !deps.checkoutId) return { ok: false, error: 'no_checkout' };
+  const v = await deps.verify(deps.checkoutId);
+  if (v && !v.error) {
+    deps.toast(deps.tr('pro_buy_ok'));
+    if (deps.refresh) await deps.refresh();
+    return { ok: true, plan: v.plan, paidUntil: v.paid_until };
+  }
+  if (v && v.error === 'not_paid_yet') {
+    deps.toast(deps.tr('pro_pay_pending'));
+    return { ok: false, pending: true };
+  }
+  // checkout_expired / already_redeemed / fp_mismatch — окончательный ответ:
+  // ждать больше нечего, экран должен снять ожидание и предложить купить снова.
+  const why = (v && v.error) || 'network';
+  deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));
+  return { ok: false, error: why };
 }

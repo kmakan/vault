@@ -704,6 +704,8 @@ export default {
   pro_buy_failed: 'Could not complete the purchase: {why}',
   pro_buy_ok: 'Pro activated',
   pro_pay_open: 'Complete the payment on the opened page — Pro turns on automatically',
+  pro_pay_pending: 'The payment is not confirmed yet. Finish it and press “Check payment”',
+  pro_check_payment: 'Check payment',
   pro_web_hint: 'Payment is handled on our site, vault-msg.ru. Enter this code on the payment page: the subscription turns on in the app by itself.',
   pro_web_copy: 'Copy code',
   pro_web_copied: 'Code copied',
