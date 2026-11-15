@@ -110,6 +110,60 @@ pub struct PersistedState {
     /// Персист: рестарт релея не должен воскрешать отозванный безлимит.
     #[serde(default)]
     pub revoked_tokens: std::collections::BTreeSet<String>,
+    /// Незавершённые ₽-чекауты: id платежа у провайдера → что нужно, чтобы
+    /// выдать Pro, когда деньги придут БЕЗ участия клиента.
+    ///
+    /// ПЕРСИСТ — не оптимизация, а условие. Сценарий, который терял деньги:
+    /// человек оплатил, закрыл приложение, релей перезапустился (деплой,
+    /// авария) — в памяти чекаутов нет, а уведомление ЮKassa приходит уже
+    /// после рестарта и не находит, кому и какой план выдавать. Ровно поэтому
+    /// карта живёт в state.json, а не только в памяти.
+    #[serde(default)]
+    pub pending_checkouts: HashMap<String, PendingCheckout>,
+}
+
+/// Незавершённая оплата в рублёвой кассе: минимум полей для выдачи Pro.
+///
+/// Ключ карты — `provider_ref` (id платежа у провайдера): именно его присылает
+/// уведомление, и по нему же можно переспросить провайдера самому.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingCheckout {
+    /// id чекаута в релее (`co_…`) — он попадает в metadata платежа.
+    #[serde(default)]
+    pub checkout_id: String,
+    /// Имя провайдера ("yookassa"): по нему решается, кого переспрашивать.
+    #[serde(default)]
+    pub provider: String,
+    /// fingerprint покупателя: чужому аккаунту оплаченный чекаут не выдаётся.
+    #[serde(default)]
+    pub fp: String,
+    /// "pro" | "business".
+    #[serde(default)]
+    pub plan: String,
+    /// Срок оплаты в месяцах.
+    #[serde(default)]
+    pub months: u32,
+    /// unix-сек создания чекаута.
+    #[serde(default)]
+    pub created_at: u64,
+    /// unix-сек, после которого платёж у провайдера заведомо мёртв.
+    #[serde(default)]
+    pub expires_at: u64,
+    /// Сколько раз уже спрашивали провайдера (диагностика «почему не выдано»).
+    #[serde(default)]
+    pub polls: u32,
+}
+
+impl PendingCheckout {
+    /// Запись жива и её можно показывать провайдеру как вопрос «оплачено?».
+    fn valid(&self) -> bool {
+        !self.checkout_id.is_empty()
+            && !self.provider.is_empty()
+            && matches!(self.plan.as_str(), "pro" | "business")
+            && (1..=12).contains(&self.months)
+            && valid_fp(&self.fp)
+            && self.created_at > 0
+    }
 }
 
 /// Состояние оплаченной подписки.
@@ -226,6 +280,7 @@ impl PersistedState {
         daily_pub: &HashMap<String, (u64, u32)>,
         tester_codes: &HashMap<String, TesterCode>,
         revoked_tokens: &std::collections::BTreeSet<String>,
+        pending_checkouts: &HashMap<String, PendingCheckout>,
     ) -> Self {
         Self {
             v: STATE_VERSION,
@@ -240,6 +295,7 @@ impl PersistedState {
             daily_pub: daily_pub.clone(),
             tester_codes: tester_codes.clone(),
             revoked_tokens: revoked_tokens.clone(),
+            pending_checkouts: pending_checkouts.clone(),
         }
     }
 
@@ -331,6 +387,20 @@ impl PersistedState {
                 self.sub_tokens.remove(&k);
             }
             tracing::warn!(dropped = extra, "state: subscription devices over cap dropped");
+        }
+        // Незавершённые чекауты: битая запись хуже отсутствующей (по ней
+        // выдали бы Pro не тому или не тот план), а просроченная старше суток
+        // уже не оплатится — платёж у провайдера к тому времени мёртв.
+        let stale_before = now_unix().saturating_sub(86_400);
+        self.pending_checkouts
+            .retain(|_, p| p.valid() && p.created_at >= stale_before);
+        if self.pending_checkouts.len() > MAX_ENTRIES {
+            let extra = self.pending_checkouts.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.pending_checkouts.keys().take(extra).cloned().collect();
+            for k in drop {
+                self.pending_checkouts.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: pending checkouts over cap dropped");
         }
         // Счётчики прошлых суток бесполезны: лимит считается по дню UTC,
         // и после полуночи запись всё равно сбросилась бы первым же pub.
@@ -490,6 +560,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &BTreeSet::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -515,6 +586,105 @@ mod tests {
         let loaded = PersistedState::load(&path);
         assert!(loaded.token_bindings.is_empty());
         assert!(loaded.subscriptions.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// НЕЗАВЕРШЁННАЯ ОПЛАТА ПЕРЕЖИВАЕТ РЕСТАРТ — иначе деньги теряются.
+    ///
+    /// Сценарий, ради которого это поле появилось: человек оплатил и закрыл
+    /// приложение, релей перезапустили (деплой), уведомление ЮKassa пришло уже
+    /// после рестарта. Если бы карта ожиданий жила только в памяти, Pro не
+    /// выдался бы никому: платёж есть, а кому и какой план — забыто.
+    #[test]
+    fn test_pending_checkouts_survive_restart() {
+        let path = tmp_path("pending");
+        let mut pending = HashMap::new();
+        pending.insert(
+            "pay-abc".to_string(),
+            PendingCheckout {
+                checkout_id: "co_1".to_string(),
+                provider: "yookassa".to_string(),
+                fp: "fp:alice".to_string(),
+                plan: "pro".to_string(),
+                months: 3,
+                created_at: now_unix(),
+                expires_at: now_unix() + 1800,
+                polls: 2,
+            },
+        );
+        PersistedState::snapshot(
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
+            &pending,
+        )
+        .save_atomic(&path)
+        .expect("state saved");
+        let loaded = PersistedState::load(&path);
+        let got = loaded.pending_checkouts.get("pay-abc").expect("ожидание на месте");
+        assert_eq!(got.checkout_id, "co_1");
+        assert_eq!(got.fp, "fp:alice");
+        assert_eq!(got.plan, "pro");
+        assert_eq!(got.months, 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Битая запись ожидания не переживает загрузку: по ней выдали бы Pro не
+    /// тому человеку или не за тот срок. Просроченная старше суток тоже
+    /// снимается — платёж у провайдера к тому времени мёртв.
+    #[test]
+    fn test_broken_and_stale_pending_are_dropped() {
+        let path = tmp_path("pending-broken");
+        let good = PendingCheckout {
+            checkout_id: "co_ok".to_string(),
+            provider: "yookassa".to_string(),
+            fp: "fp:ok".to_string(),
+            plan: "pro".to_string(),
+            months: 1,
+            created_at: now_unix(),
+            expires_at: now_unix() + 1800,
+            polls: 0,
+        };
+        let mut bad_plan = good.clone();
+        bad_plan.plan = "business-plus".to_string();
+        let mut bad_months = good.clone();
+        bad_months.months = 0;
+        let mut bad_fp = good.clone();
+        bad_fp.fp = "fp with space".to_string();
+        let mut stale = good.clone();
+        stale.created_at = now_unix().saturating_sub(3 * 86_400);
+        let pending = HashMap::from([
+            ("pay-ok".to_string(), good),
+            ("pay-plan".to_string(), bad_plan),
+            ("pay-months".to_string(), bad_months),
+            ("pay-fp".to_string(), bad_fp),
+            ("pay-stale".to_string(), stale),
+        ]);
+        PersistedState::snapshot(
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &BTreeSet::new(),
+            &pending,
+        )
+        .save_atomic(&path)
+        .expect("state saved");
+        let loaded = PersistedState::load(&path);
+        let left: Vec<&String> = loaded.pending_checkouts.keys().collect();
+        assert_eq!(left, vec!["pay-ok"], "осталась только годная запись");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -544,6 +714,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &BTreeSet::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -591,6 +762,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &BTreeSet::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("save");
 
@@ -633,6 +805,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &BTreeSet::new(),
+            &HashMap::new(),
         )
         .save_atomic(&path)
         .expect("save 2");
@@ -718,6 +891,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &BTreeSet::new(),
+            &HashMap::new(),
         )
         .save_atomic(&path)
         .expect("save");
@@ -752,6 +926,7 @@ mod tests {
             &counters,
             &HashMap::new(),
             &BTreeSet::new(),
+            &HashMap::new(),
         )
         .save_atomic(&path)
         .expect("save");

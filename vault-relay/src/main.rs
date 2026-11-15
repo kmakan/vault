@@ -88,9 +88,14 @@ pub struct AppState {
     /// обрывает незавершённую оплату (клиент начнёт заново) — но ВЫДАЧЕННЫЙ
     /// после оплаты токен и подписка переживают рестарт (persist.rs).
     pub checkouts: std::sync::Mutex<std::collections::HashMap<String, vault_relay::payments::Checkout>>,
+    /// Незавершённые ₽-чекауты: id платежа у провайдера → запись для выдачи
+    /// Pro без участия клиента (уведомление ЮKassa / периодический опрос).
+    /// ПЕРСИСТ (state.json): рестарт релея иначе терял «оплачено, но не
+    /// востребовано» — деньги списаны, подписка никому не выдана.
+    pub pending_checkouts:
+        std::sync::Mutex<std::collections::HashMap<String, persist::PendingCheckout>>,
     /// Попытки чекаута по fp: unix-сек последних попыток (лимитер ≤5/час).
-    pub checkout_attempts: std::sync::Mutex<std::collections::HashMap<String, Vec<u64>>>,
-    /// Выданные чекауты: id тех, по которым подписка уже выпущена. Один платёж
+    pub checkout_attempts: std::sync::Mutex<std::collections::HashMap<String, Vec<u64>>>,    /// Выданные чекауты: id тех, по которым подписка уже выпущена. Один платёж
     /// обязан выдать ровно одну подписку — ни двойной verify, ни verify после
     /// claim (веб-чекаут: оплачен сайтом, получен приложением) не должны
     /// выдавать токен повторно. Живёт столько же, сколько сами чекауты (память).
@@ -176,7 +181,7 @@ impl AppState {
         state_path: Option<std::path::PathBuf>,
         payment: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
     ) -> Self {
-        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens, daily_pub, tester_codes, revoked_tokens) =
+        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens, daily_pub, tester_codes, revoked_tokens, pending_checkouts) =
             match &state_path {
                 Some(p) => {
                     let st = PersistedState::load(p);
@@ -191,6 +196,7 @@ impl AppState {
                         st.daily_pub,
                         st.tester_codes,
                         st.revoked_tokens,
+                        st.pending_checkouts,
                     )
                 }
                 None => (
@@ -204,6 +210,7 @@ impl AppState {
                     HashMap::new(),
                     HashMap::new(),
                     std::collections::BTreeSet::new(),
+                    HashMap::new(),
                 ),
             };
         let accounting_path = std::env::var("VAULT_RELAY_ACCOUNTING")
@@ -244,6 +251,7 @@ impl AppState {
             payment,
             crypto: None,
             checkouts: std::sync::Mutex::new(HashMap::new()),
+            pending_checkouts: std::sync::Mutex::new(pending_checkouts),
             checkout_attempts: std::sync::Mutex::new(HashMap::new()),
             redeemed: std::sync::Mutex::new(std::collections::HashSet::new()),
             sub_tokens: std::sync::Mutex::new(sub_tokens),
@@ -347,6 +355,81 @@ impl AppState {
             .insert(c.id.clone(), c);
     }
 
+    /// Запомнить незавершённую ₽-оплату: по ней Pro выдаётся, даже если
+    /// человек закрыл приложение и уведомление провайдера придёт позже
+    /// (в том числе после рестарта релея — запись персистится).
+    ///
+    /// Ключ — `provider_ref` (id платежа у провайдера): именно его присылает
+    /// уведомление, и по нему же мы сами переспрашиваем провайдера. Пустой
+    /// provider_ref (тестовый провайдер) не записываем: спрашивать некого.
+    pub fn remember_pending_checkout(&self, c: &vault_relay::payments::Checkout) {
+        if c.provider_ref.trim().is_empty() || c.provider != "yookassa" {
+            return;
+        }
+        let rec = persist::PendingCheckout {
+            checkout_id: c.id.clone(),
+            provider: c.provider.clone(),
+            fp: c.fp.clone(),
+            plan: format!("{:?}", c.plan).to_lowercase(),
+            months: c.months,
+            created_at: c.created_at,
+            expires_at: c.expires_at,
+            polls: 0,
+        };
+        self.pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .insert(c.provider_ref.clone(), rec);
+        self.persist();
+    }
+
+    /// Забрать незавершённую оплату по id платежа у провайдера.
+    pub fn pending_by_ref(&self, provider_ref: &str) -> Option<persist::PendingCheckout> {
+        self.pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .get(provider_ref)
+            .cloned()
+    }
+
+    /// Снять запись: либо деньги пришли и Pro выдан, либо платёж мёртв.
+    pub fn forget_pending_checkout(&self, provider_ref: &str) -> bool {
+        let removed = self
+            .pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .remove(provider_ref)
+            .is_some();
+        if removed {
+            self.persist();
+        }
+        removed
+    }
+
+    /// Снимок незавершённых оплат для сторожа (опрос провайдера).
+    /// Возвращает (id платежа у провайдера, запись).
+    pub fn pending_snapshot(&self) -> Vec<(String, persist::PendingCheckout)> {
+        self.pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Отметить попытку опроса: счётчик живёт в записи (диагностика «почему
+    /// не выдано»), персист не нужен — потеря счётчика ничего не решает.
+    pub fn bump_pending_polls(&self, provider_ref: &str) {
+        if let Some(p) = self
+            .pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .get_mut(provider_ref)
+        {
+            p.polls = p.polls.saturating_add(1);
+        }
+    }
+
     /// По этому чекауту уже выпущена подписка?
     pub fn is_redeemed(&self, id: &str) -> bool {
         self.redeemed
@@ -445,6 +528,7 @@ impl AppState {
             &self.daily_pub.lock().expect("daily_pub lock"),
             &self.tester_codes.lock().expect("tester_codes lock"),
             &self.revoked_tokens.lock().expect("revoked_tokens lock"),
+            &self.pending_checkouts.lock().expect("pending_checkouts lock"),
         );
         if let Err(e) = st.save_atomic(path) {
             tracing::error!(path = %path.display(), error = %e, "state: save failed");
@@ -2541,6 +2625,11 @@ fn grant_paid_checkout(
         .map(|t| t.hash)
         .unwrap_or_default();
     app.mark_redeemed(&checkout.id);
+    // Незавершённая запись больше не нужна: Pro выдан (для крипто-кассы
+    // записи нет — удаление no-op).
+    if !checkout.provider_ref.trim().is_empty() {
+        app.forget_pending_checkout(&checkout.provider_ref);
+    }
     serde_json::json!({
         "token": token,
         "topic": topic,
@@ -2877,6 +2966,9 @@ async fn relay_purchase_checkout(
     match provider.create_checkout(&cr).await {
         Ok(c) => {
             app.remember_checkout(c.clone());
+            // ₽-касса: запоминаем платёж, чтобы Pro выдался и без клиента
+            // (уведомление ЮKassa / сторож), в том числе после рестарта.
+            app.remember_pending_checkout(&c);
             (
                 StatusCode::OK,
                 AxumJson(serde_json::json!({
@@ -3056,6 +3148,158 @@ async fn relay_purchase_ipn(
         crypto.mark_paid(&checkout.provider_ref);
     }
     StatusCode::OK.into_response()
+}
+
+/// POST /relay/purchase/yk-notify — HTTP-уведомление ЮKassa.
+///
+/// Тело уведомления НЕ является доказательством оплаты: ЮKassa не подписывает
+/// их, а подделать POST может кто угодно. Поэтому уведомление — только ПОВОД
+/// спросить провайдера: берём id платежа из тела, спрашиваем ЮKassa нашим
+/// секретным ключом (`verify`) и выдаём Pro лишь если ОНА ответила «оплачено».
+/// Подделка с «succeeded» в теле ничего не даёт: verify вернёт реальный статус.
+///
+/// Ответ 200 отдаём и когда платёж неизвестен: иначе ЮKassa будет ретраить
+/// сутки. 400 — только на неразборчивое тело.
+async fn relay_purchase_yk_notify(
+    State(app): State<Arc<AppState>>,
+    raw: axum::body::Bytes,
+) -> Response {
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        return err(StatusCode::BAD_REQUEST, "bad payload");
+    };
+    let event = body
+        .get("event")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    // ЮKassa кладёт платёж в object; id — единственное, чему верим как адресу.
+    let payment_id = body
+        .get("object")
+        .and_then(|o| o.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if payment_id.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "no payment id");
+    }
+    let Some(pending) = app.pending_by_ref(payment_id) else {
+        // Чужой/уже обработанный платёж — не ошибка отправителя.
+        tracing::info!(payment = %payment_id, event = %event, "yk-notify: неизвестный платёж, пропускаем");
+        return StatusCode::OK.into_response();
+    };
+    if app.is_redeemed(&pending.checkout_id) {
+        app.forget_pending_checkout(payment_id);
+        return StatusCode::OK.into_response();
+    }
+    let checkout = checkout_from_pending(payment_id, &pending);
+    let Some(provider) = provider_for_checkout(&app, &checkout) else {
+        tracing::warn!(payment = %payment_id, "yk-notify: провайдер не настроен");
+        return StatusCode::OK.into_response();
+    };
+    match provider.verify(&checkout).await {
+        Ok(vault_relay::payments::PaymentStatus::Paid) => {
+            grant_paid_checkout(&app, &checkout);
+            tracing::info!(payment = %payment_id, fp = %pending.fp, plan = %pending.plan, months = pending.months, event = %event, "yk-notify: оплата подтверждена провайдером, Pro выдан");
+        }
+        Ok(vault_relay::payments::PaymentStatus::Failed(why)) => {
+            app.forget_pending_checkout(payment_id);
+            tracing::info!(payment = %payment_id, reason = %why, event = %event, "yk-notify: платёж не состоялся, ожидание снято");
+        }
+        Ok(vault_relay::payments::PaymentStatus::Pending) => {
+            // Уведомление пришло раньше фактической оплаты — оставляем запись,
+            // сторожат её и клиент, и периодический опрос.
+            tracing::info!(payment = %payment_id, event = %event, "yk-notify: провайдер ещё не подтвердил оплату");
+        }
+        Err(e) => {
+            tracing::warn!(payment = %payment_id, error = ?e, "yk-notify: провайдер не ответил, ждём следующего повода");
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+/// Чекаут из сохранённой незавершённой оплаты.
+///
+/// Нужен, чтобы переспросить провайдера тем же путём, что и клиент: verify
+/// работает по `provider_ref`, а плана/срока/получателя в памяти после
+/// рестарта нет — они берутся из персистентной записи.
+fn checkout_from_pending(
+    provider_ref: &str,
+    p: &persist::PendingCheckout,
+) -> vault_relay::payments::Checkout {
+    vault_relay::payments::Checkout {
+        id: p.checkout_id.clone(),
+        provider: p.provider.clone(),
+        payment_url: String::new(),
+        expires_in: 0,
+        expires_at: p.expires_at,
+        fp: p.fp.clone(),
+        plan: paid_plan(&p.plan).unwrap_or(vault_relay::tokens::Plan::Pro),
+        months: p.months,
+        created_at: p.created_at,
+        provider_ref: provider_ref.to_string(),
+    }
+}
+
+/// Сторож незавершённых ₽-оплат: страховка на случай, когда уведомление не
+/// дошло (сервер лежал, URL был недоступен, ЮKassa исчерпала ретраи).
+///
+/// Каждые две минуты спрашивает провайдера про каждую незавершённую оплату и
+/// выдаёт Pro, если деньги пришли. Это второй, независимый путь к тому же
+/// результату, что и уведомление: выплата не должна зависеть от того, открыто
+/// ли приложение и дошёл ли один HTTP-запрос.
+pub fn spawn_pending_sweeper(app: Arc<AppState>) {
+    tokio::spawn(async move {
+        // Даём сервису подняться: сразу после старта провайдеру звонить незачем.
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        loop {
+            sweep_pending_once(&app).await;
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        }
+    });
+}
+
+/// Один проход сторожа. Ошибки провайдера не рвут цикл: недоступный API —
+/// повод попробовать снова, а не повод потерять запись об оплате.
+async fn sweep_pending_once(app: &Arc<AppState>) {
+    let Some(provider) = app.payment.clone() else {
+        return;
+    };
+    let now = now();
+    for (provider_ref, pending) in app.pending_snapshot() {
+        if app.is_redeemed(&pending.checkout_id) {
+            app.forget_pending_checkout(&provider_ref);
+            continue;
+        }
+        // Сутки — предел: платёж у провайдера к этому времени мёртв, а
+        // бесконечные вопросы к API только шумят.
+        if now.saturating_sub(pending.created_at) > 86_400 {
+            app.forget_pending_checkout(&provider_ref);
+            continue;
+        }
+        // Совсем свежий чекаут не трогаем: клиент прямо сейчас опрашивает сам,
+        // и второй параллельный вопрос к провайдеру не нужен.
+        if now.saturating_sub(pending.created_at) < 45 {
+            continue;
+        }
+        app.bump_pending_polls(&provider_ref);
+        let checkout = checkout_from_pending(&provider_ref, &pending);
+        match provider.verify(&checkout).await {
+            Ok(vault_relay::payments::PaymentStatus::Paid) => {
+                grant_paid_checkout(app, &checkout);
+                tracing::info!(
+                    payment = %provider_ref, fp = %pending.fp, plan = %pending.plan,
+                    months = pending.months, "сторож оплат: платёж подтверждён, Pro выдан"
+                );
+            }
+            Ok(vault_relay::payments::PaymentStatus::Failed(why)) => {
+                app.forget_pending_checkout(&provider_ref);
+                tracing::info!(payment = %provider_ref, reason = %why, "сторож оплат: платёж не состоялся");
+            }
+            // Ещё висит — ждём следующего прохода.
+            Ok(vault_relay::payments::PaymentStatus::Pending) => {}
+            Err(e) => {
+                tracing::warn!(payment = %provider_ref, error = ?e, "сторож оплат: провайдер не ответил");
+            }
+        }
+    }
 }
 
 /// Параметры страницы возврата: язык интерфейса платежа (`ru` по умолчанию).
@@ -3336,6 +3580,8 @@ async fn main() {
         // Подписанное уведомление крипто-процессора (отмечает оплату, право
         // всё равно выдаёт verify с fp).
         .route("/relay/purchase/ipn", post(relay_purchase_ipn))
+        // HTTP-уведомление ЮKassa: повод переспросить провайдера, не право.
+        .route("/relay/purchase/yk-notify", post(relay_purchase_yk_notify))
         // Получка веб-покупки приложением (оплачено на сайте — токен в приложении).
         .route("/relay/purchase/claim", post(relay_purchase_claim))
         // return_url провайдера (ЮKassa): человеку — страница, не 404.
@@ -3366,7 +3612,10 @@ async fn main() {
         .route("/admin/receipt", post(admin_receipt_mark))
         .route("/admin/tax-paid", post(admin_tax_paid_mark))
         .layer(cors_layer())
-        .with_state(state);
+        .with_state(state.clone());
+    // Сторож незавершённых оплат: выплата не должна зависеть от того, дошло
+    // ли одно HTTP-уведомление (сервер лежал, URL был недоступен).
+    spawn_pending_sweeper(state);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     axum::serve(
         listener,
@@ -3425,6 +3674,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
     use vault_relay::tokens::{issue, issue_install, issue_test, issue_v2, parse, Plan};
 
     fn keys() -> ServerKeys {
@@ -6688,5 +6938,258 @@ mod tests {
         .await;
         assert_eq!(ok.status(), StatusCode::SEE_OTHER);
         assert!(app.accounting.lock().unwrap().tax_paid.contains_key("2026-10"));
+    }
+
+    /// Провайдер с именем «yookassa», отвечающий по id платежа БЕЗ сети:
+    /// так проверяется форма уведомления, а не сам ЮKassa.
+    ///
+    /// `verify` здесь — заменитель настоящего вопроса к API: важно, что
+    /// обработчик спрашивает ПРОВАЙДЕРА, а не верит телу уведомления.
+    struct YkStub {
+        paid: std::sync::Mutex<std::collections::HashSet<String>>,
+        dead: std::sync::Mutex<std::collections::HashSet<String>>,
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl YkStub {
+        fn new(paid: &[&str], dead: &[&str]) -> Arc<Self> {
+            Arc::new(Self {
+                paid: std::sync::Mutex::new(paid.iter().map(|s| s.to_string()).collect()),
+                dead: std::sync::Mutex::new(dead.iter().map(|s| s.to_string()).collect()),
+                asked: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().expect("asked lock").clone()
+        }
+    }
+
+    impl vault_relay::payments::PaymentProvider for YkStub {
+        fn name(&self) -> &str {
+            "yookassa"
+        }
+
+        fn create_checkout<'a>(
+            &'a self,
+            _req: &'a vault_relay::payments::CheckoutRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = Result<vault_relay::payments::Checkout, vault_relay::payments::PaymentError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Err(vault_relay::payments::PaymentError::Unavailable) })
+        }
+
+        fn verify<'a>(
+            &'a self,
+            checkout: &'a vault_relay::payments::Checkout,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = Result<vault_relay::payments::PaymentStatus, vault_relay::payments::PaymentError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.asked
+                    .lock()
+                    .expect("asked lock")
+                    .push(checkout.provider_ref.clone());
+                if self
+                    .paid
+                    .lock()
+                    .expect("paid lock")
+                    .contains(&checkout.provider_ref)
+                {
+                    Ok(vault_relay::payments::PaymentStatus::Paid)
+                } else if self
+                    .dead
+                    .lock()
+                    .expect("dead lock")
+                    .contains(&checkout.provider_ref)
+                {
+                    Ok(vault_relay::payments::PaymentStatus::Failed("canceled".into()))
+                } else {
+                    Ok(vault_relay::payments::PaymentStatus::Pending)
+                }
+            })
+        }
+    }
+
+    /// Чекаут ₽-кассы, каким его запоминает релей после checkout.
+    fn yk_checkout(
+        id: &str,
+        provider_ref: &str,
+        fp: &str,
+        age_sec: u64,
+    ) -> vault_relay::payments::Checkout {
+        let created = now().saturating_sub(age_sec);
+        vault_relay::payments::Checkout {
+            id: id.to_string(),
+            provider: "yookassa".to_string(),
+            payment_url: "https://yoomoney.ru/checkout/x".to_string(),
+            expires_in: 1800,
+            expires_at: created + 1800,
+            fp: fp.to_string(),
+            plan: Plan::Pro,
+            months: 1,
+            created_at: created,
+            provider_ref: provider_ref.to_string(),
+        }
+    }
+
+    /// Тело уведомления ЮKassa — ровно та форма, что приходит в POST.
+    fn yk_body(event: &str, payment_id: &str) -> axum::body::Bytes {
+        axum::body::Bytes::from(
+            serde_json::json!({
+                "type": "notification",
+                "event": event,
+                "object": { "id": payment_id, "status": "succeeded", "paid": true },
+            })
+            .to_string(),
+        )
+    }
+
+    /// УВЕДОМЛЕНИЕ = ПОВОД СПРОСИТЬ, А НЕ ПРАВО ВЫДАТЬ.
+    ///
+    /// ЮKassa не подписывает HTTP-уведомления: подделать POST может кто угодно.
+    /// Поэтому «succeeded» в теле ничего не значит — Pro выдаётся только когда
+    /// ПРОВАЙДЕР на вопрос ответил «оплачено». Здесь проверяется именно это:
+    /// с «succeeded» в теле, но с Pending у провайдера — выдачи НЕТ.
+    #[tokio::test]
+    async fn yk_notify_ne_verit_telu_a_sprashivaet_provajdera() {
+        let stub = YkStub::new(&[], &[]); // провайдер говорит «ещё висит»
+        let app = pay_app_state(keys(), Some(stub.clone() as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_yk1", "pay-yk1", "fp-alice", 120));
+
+        let resp = relay_purchase_yk_notify(State(app.clone()), yk_body("payment.succeeded", "pay-yk1")).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!app.is_redeemed("co_yk1"), "тело уведомления не право на Pro");
+        assert!(app.pending_by_ref("pay-yk1").is_some(), "ждём подтверждения");
+        assert_eq!(stub.asked(), vec!["pay-yk1".to_string()]);
+    }
+
+    /// Провайдер подтвердил — Pro выдан БЕЗ участия клиента (закрыл приложение),
+    /// запись ожидания снята, подписка сохранена.
+    #[tokio::test]
+    async fn yk_notify_vydaet_pro_kogda_provajder_podtverdil() {
+        let stub = YkStub::new(&["pay-yk2"], &[]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_yk2", "pay-yk2", "fp-bob", 120));
+
+        let resp = relay_purchase_yk_notify(State(app.clone()), yk_body("payment.succeeded", "pay-yk2")).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(app.is_redeemed("co_yk2"), "оплачено провайдером — Pro выдан");
+        assert!(app.pending_by_ref("pay-yk2").is_none(), "ожидание снято");
+        let subs = app.subscriptions.lock().expect("subs lock");
+        let (id, sub) = subs.iter().next().expect("подписка выпущена");
+        assert_eq!(sub.fp, "fp-bob");
+        assert_eq!(sub.plan, "pro");
+        assert!(!sub.revoked);
+        assert_eq!(id, "1", "первая подписка — id 1");
+    }
+
+    /// Отмена: запись ожидания снимается, Pro не выдаётся (денег нет).
+    #[tokio::test]
+    async fn yk_notify_otmena_snimaet_ozhidanie_bez_vydachi() {
+        let stub = YkStub::new(&[], &["pay-yk3"]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_yk3", "pay-yk3", "fp-carol", 120));
+
+        let resp = relay_purchase_yk_notify(State(app.clone()), yk_body("payment.canceled", "pay-yk3")).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!app.is_redeemed("co_yk3"));
+        assert!(app.pending_by_ref("pay-yk3").is_none(), "мёртвый платёж не ждём");
+    }
+
+    /// Неизвестный платёж — 200, а не 4xx: иначе ЮKassa будет ретраить сутки.
+    #[tokio::test]
+    async fn yk_notify_neizvestnyj_platezh_otvechaet_200() {
+        let stub = YkStub::new(&[], &[]);
+        let app = pay_app_state(keys(), Some(stub.clone() as Arc<dyn vault_relay::payments::PaymentProvider>));
+
+        let resp = relay_purchase_yk_notify(State(app.clone()), yk_body("payment.succeeded", "pay-chuzhoj")).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(stub.asked().is_empty(), "чужой платёж провайдера не спрашиваем");
+        assert!(app.subscriptions.lock().expect("subs").is_empty());
+    }
+
+    /// Неразборчивое тело — 400 (это не наше уведомление), но без паники.
+    #[tokio::test]
+    async fn yk_notify_bityj_json_otvechaet_400() {
+        let app = pay_app_state(keys(), Some(YkStub::new(&[], &[]) as Arc<dyn vault_relay::payments::PaymentProvider>));
+        let resp = relay_purchase_yk_notify(
+            State(app),
+            axum::body::Bytes::from_static(b"not json"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let no_id = relay_purchase_yk_notify(
+            State(pay_app_state(keys(), Some(YkStub::new(&[], &[]) as Arc<dyn vault_relay::payments::PaymentProvider>))),
+            axum::body::Bytes::from_static(b"{\"event\":\"payment.succeeded\"}"),
+        )
+        .await;
+        assert_eq!(no_id.status(), StatusCode::BAD_REQUEST, "без id платежа отвечать некуда");
+    }
+
+    /// СТОРОЖ — вторая, независимая дорога к тому же результату: даже если
+    /// уведомление не дошло вовсе (сервер лежал), оплата не теряется.
+    /// Просроченные (>суток) и оплаченные записи сторож убирает.
+    #[tokio::test]
+    async fn storozh_vydaet_oplatu_bez_uvedomleniya() {
+        let stub = YkStub::new(&["pay-s1"], &["pay-s2"]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_s1", "pay-s1", "fp-dave", 120));
+        app.remember_pending_checkout(&yk_checkout("co_s2", "pay-s2", "fp-erin", 120));
+        app.remember_pending_checkout(&yk_checkout("co_s3", "pay-s3", "fp-frank", 90_000));
+
+        sweep_pending_once(&app).await;
+
+        assert!(app.is_redeemed("co_s1"), "оплаченное выдано сторожем");
+        assert!(app.pending_by_ref("pay-s1").is_none());
+        assert!(app.pending_by_ref("pay-s2").is_none(), "отменённое снято");
+        assert!(
+            app.pending_by_ref("pay-s3").is_none(),
+            "просроченное (>суток) не ждём: платёж у провайдера мёртв"
+        );
+        assert!(!app.is_redeemed("co_s2"));
+        assert!(!app.is_redeemed("co_s3"));
+    }
+
+    /// Только что созданный чекаут сторож не трогает: клиент прямо сейчас
+    /// опрашивает сам, второй параллельный вопрос к провайдеру не нужен.
+    #[tokio::test]
+    async fn storozh_ne_trogaet_svezhij_chekaut() {
+        let stub = YkStub::new(&["pay-fresh"], &[]);
+        let app = pay_app_state(keys(), Some(stub.clone() as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_fresh", "pay-fresh", "fp-gina", 5));
+
+        sweep_pending_once(&app).await;
+
+        assert!(stub.asked().is_empty(), "свежий чекаут — не наш вопрос");
+        assert!(!app.is_redeemed("co_fresh"));
+        assert!(app.pending_by_ref("pay-fresh").is_some());
+    }
+
+    /// Тестовый провайдер (provider="test") не порождает записей ожидания:
+    /// спрашивать некого — id платежа у провайдера у него нет.
+    #[tokio::test]
+    async fn testovyj_provajder_ne_zapominaet_ozhidanie() {
+        let app = pay_app_state(keys(), Some(Arc::new(vault_relay::payments::TestProvider::new())));
+        let mut c = yk_checkout("co_t", "", "fp-hank", 10);
+        c.provider = "test".to_string();
+        app.remember_pending_checkout(&c);
+        assert!(app.pending_snapshot().is_empty());
+        let mut c2 = yk_checkout("co_t2", "pay-t2", "fp-hank", 10);
+        c2.provider_ref = "  ".to_string();
+        app.remember_pending_checkout(&c2);
+        assert!(app.pending_snapshot().is_empty(), "пустой id платежа не запоминаем");
     }
 }
