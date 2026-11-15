@@ -1,0 +1,11 @@
+[Unit]
+Description=Копия релея каждый день в 04:30
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+AccuracySec=5min
+Unit=vault-backup-pull.service
+
+[Install]
+WantedBy=timers.target

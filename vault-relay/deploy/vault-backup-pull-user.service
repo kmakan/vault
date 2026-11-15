@@ -1,0 +1,9 @@
+[Unit]
+Description=Vault: ежедневная выгрузка состояния релея к нам (state, accounting, env, nginx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.hermes/scripts/vault-backup-pull.sh
+TimeoutStartSec=300
