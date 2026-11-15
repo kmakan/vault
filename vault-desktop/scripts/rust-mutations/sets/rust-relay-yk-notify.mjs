@@ -108,15 +108,26 @@ export default {
       replacement: '        let stale_before = now_unix().saturating_sub(0);',
     },
     {
-      name: 'получка не видит оплат, подтверждённых уведомлением (оплатил и закрыл — Pro не появился)',
-      pattern: '    if let Some((sub, plan_name, paid_until, saved_token)) = app.granted_subscription_for_fp(&fp) {',
+      name: 'проверка оплаты после выдачи отвечает 409 вместо токена (клиент видит «не удалось» при выданном Pro)',
+      pattern: '        if let Some((sub, plan_name, paid_until, saved_token)) = app.granted_subscription_for_fp(&fp) {',
       replacement:
-        '    if let Some((sub, plan_name, paid_until, saved_token)) = None::<(u64, String, u64, String)> {',
+        '        if let Some((sub, plan_name, paid_until, saved_token)) = None::<(u64, String, u64, String)> {',
+    },
+    {
+      name: 'проверка оплаты не смотрит в карту ожиданий (после рестарта 410 на оплаченный чекаут)',
+      pattern: '        .or_else(|| app.pending_by_checkout_id(&req.checkout_id).map(|(r, p)| checkout_from_pending(&r, &p)))',
+      replacement: '        .or_else(|| Option::<vault_relay::payments::Checkout>::None)',
+    },
+    {
+      name: 'получка не видит оплат, подтверждённых уведомлением (оплатил и закрыл — Pro не появился)',
+      pattern: '        if let Some(body) = handout_granted(&app, sub, &plan_name, paid_until, &saved_token) {',
+      replacement:
+        '        if let Some(body) = Option::<serde_json::Value>::None {',
     },
     {
       name: 'повторная получка выпускает НОВЫЙ токен (адрес очереди меняется на каждом старте приложения)',
-      pattern: '            let token = if saved_token.is_empty() {',
-      replacement: '            let token = if true {',
+      pattern: '    let token = if saved_token.is_empty() {',
+      replacement: '    let token = if true {',
     },
     {
       name: 'получка не смотрит в карту ожиданий на диске (после рестарта «нечего получать»)',

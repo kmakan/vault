@@ -438,6 +438,20 @@ impl AppState {
             .collect()
     }
 
+    /// Запись ожидания по id чекаута релея (а не по id платежа у провайдера).
+    ///
+    /// Нужна проверке оплаты после рестарта: карта `checkouts` живёт только в
+    /// памяти, и подтверждение по купленному чекауту иначе отвечало бы 410
+    /// «сессия истекла», хотя человек только что заплатил.
+    pub fn pending_by_checkout_id(&self, checkout_id: &str) -> Option<(String, persist::PendingCheckout)> {
+        self.pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .iter()
+            .find(|(_, p)| p.checkout_id == checkout_id)
+            .map(|(k, v)| (k.clone(), v.clone()))
+    }
+
     /// Незавершённые ₽-оплаты ЭТОГО покупателя — для получки приложением.
     ///
     /// Нужны потому, что карта `checkouts` живёт только в памяти: после
@@ -2637,6 +2651,43 @@ fn payment_error_response(e: vault_relay::payments::PaymentError) -> Response {
     }
 }
 
+/// Ответ «подписка уже выдана»: клиент получает ТОТ ЖЕ токен.
+///
+/// Одна функция на две дороги (проверка оплаты и получка), иначе правила
+/// расходились бы: одна дорога отдавала бы сохранённый токен, другая выпускала
+/// новый (и меняла адрес очереди на каждом старте приложения). Второй подписки
+/// не создаёт — только достаёт уже выпущенное.
+fn handout_granted(
+    app: &Arc<AppState>,
+    sub: u64,
+    plan_name: &str,
+    paid_until: u64,
+    saved_token: &str,
+) -> Option<serde_json::Value> {
+    let plan = paid_plan(plan_name)?;
+    // Записи до 15.11.2026 токена не знали: выпускаем один раз и запоминаем,
+    // чтобы следующая выдача уже не меняла адрес очереди.
+    let token = if saved_token.is_empty() {
+        let fresh = vault_relay::tokens::issue_v2(
+            &app.keys,
+            vault_relay::tokens::Scope::Read,
+            plan,
+            sub,
+            paid_until as u32,
+        );
+        app.remember_subscription_token(sub, &fresh);
+        fresh
+    } else {
+        saved_token.to_string()
+    };
+    let topic = vault_relay::parse(&app.keys, &token)
+        .map(|t| t.hash)
+        .unwrap_or_default();
+    let mut body = token_body(&token, topic, plan_name.to_string(), paid_until, sub);
+    body["status"] = serde_json::json!("already_granted");
+    Some(body)
+}
+
 /// Провайдер ПО СОХРАНЁННОМУ чекауту, а не по запросу клиента: спросить
 /// «оплачен ли» можно только того процессора, который создавал счёт.
 /// Crypto-чекаут без настроенного crypto — недоступен, а не «нет».
@@ -3062,12 +3113,36 @@ async fn relay_purchase_verify(
     if app.payment.is_none() && app.crypto.is_none() {
         return err(StatusCode::PAYMENT_REQUIRED, "checkout disabled");
     }
-    let Some(checkout) = app.get_checkout(&req.checkout_id) else {
-        return err(StatusCode::GONE, "checkout expired");
+    // Чекаут ищем в памяти (обычный путь), а если там пусто — в персистентной
+    // карте ожиданий: после рестарта релея память чиста, а оплата уже могла
+    // пройти. Отвечать «сессия истекла» на оплаченный чекаут нельзя.
+    let checkout = match app
+        .get_checkout(&req.checkout_id)
+        .or_else(|| app.pending_by_checkout_id(&req.checkout_id).map(|(r, p)| checkout_from_pending(&r, &p)))
+    {
+        Some(c) => c,
+        None => return err(StatusCode::GONE, "checkout expired"),
     };
-    // Одна оплата — одна выдача: по этому чекауту токен уже выпущен
-    // (verify или claim веб-чекаута). Второй заход — ошибка клиента, не покупка.
+    // Одна оплата — одна выдача: по этому чекауту токен уже выпущен (verify,
+    // claim или уведомление провайдера). Повторный вопрос — не ошибка: клиент
+    // вправе спросить «ну что, оплата дошла?». Отдаём ТОТ ЖЕ токен (второй
+    // подписки не создаётся), иначе покупатель видел бы «не удалось» при
+    // выданном Pro — именно так уведомление и опрос дрались друг с другом.
+    // 409: fingerprint не совпадает — иначе оплаченный чекаут забрал бы чужой
+    // аккаунт (а токен ушёл бы не тому, кто платил).
+    if norm_fp(Some(&req.fp)).as_deref() != Some(checkout.fp.as_str()) {
+        return err(StatusCode::CONFLICT, "fp_mismatch");
+    }
     if app.is_redeemed(&req.checkout_id) {
+        let fp = norm_fp(Some(&req.fp)).unwrap_or_default();
+        if let Some((sub, plan_name, paid_until, saved_token)) = app.granted_subscription_for_fp(&fp) {
+            if let Some(mut body) =
+                handout_granted(&app, sub, &plan_name, paid_until, &saved_token)
+            {
+                body["checkout_id"] = serde_json::json!(req.checkout_id);
+                return (StatusCode::OK, AxumJson(body)).into_response();
+            }
+        }
         return err(StatusCode::CONFLICT, "already_redeemed");
     }
     // Провайдер берётся ПО СОХРАНЁННОМУ чекауту, а не по запросу клиента:
@@ -3080,11 +3155,6 @@ async fn relay_purchase_verify(
             err(StatusCode::PAYMENT_REQUIRED, "checkout disabled")
         };
     };
-    // 409: fingerprint не совпадает — иначе оплаченный чекаут забрал бы чужой
-    // аккаунт (а токен ушёл бы не тому, кто платил).
-    if norm_fp(Some(&req.fp)).as_deref() != Some(checkout.fp.as_str()) {
-        return err(StatusCode::CONFLICT, "fp_mismatch");
-    }
     // Для crypto окно в 30 минут — подсказка интерфейсу, а не отсечение
     // права: сеть может подтвердить перевод позже, а «деньги пришли» для
     // покупателя важнее локального таймера. Для ₽-кассы поведение прежнее.
@@ -3177,28 +3247,10 @@ async fn relay_purchase_claim(State(app): State<Arc<AppState>>, Json(req): Json<
     // Отдаём тот же токен: без этого человек видел бы «бесплатный тариф»
     // при списанных деньгах, и получка отвечала бы «нечего получать».
     if let Some((sub, plan_name, paid_until, saved_token)) = app.granted_subscription_for_fp(&fp) {
-        if let Some(plan) = paid_plan(&plan_name) {
-            // Токен берём СОХРАНЁННЫЙ: выпуск нового дал бы другой адрес
-            // очереди, и приложение, забирающее покупку на каждом старте,
-            // меняло бы адрес (и теряло сообщения на прежнем).
-            let token = if saved_token.is_empty() {
-                let fresh = vault_relay::tokens::issue_v2(
-                    &app.keys,
-                    vault_relay::tokens::Scope::Read,
-                    plan,
-                    sub,
-                    paid_until as u32,
-                );
-                app.remember_subscription_token(sub, &fresh);
-                fresh
-            } else {
-                saved_token
-            };
-            let topic = vault_relay::parse(&app.keys, &token)
-                .map(|t| t.hash)
-                .unwrap_or_default();
-            let mut body = token_body(&token, topic, plan_name.clone(), paid_until, sub);
-            body["status"] = serde_json::json!("already_granted");
+        // Токен берём СОХРАНЁННЫЙ: выпуск нового дал бы другой адрес очереди, и
+        // приложение, забирающее покупку на каждом старте, меняло бы адрес
+        // (и теряло сообщения на прежнем).
+        if let Some(body) = handout_granted(&app, sub, &plan_name, paid_until, &saved_token) {
             tracing::info!(fp = %fp, sub = sub, plan = %plan_name, "claim: подписка уже выдана — повторная выдача сохранённого токена");
             return (StatusCode::OK, AxumJson(body)).into_response();
         }
@@ -5591,16 +5643,27 @@ mod tests {
             1,
             "второй подписки не появилось"
         );
-        // Verify после claim — 409: одна оплата, одна выдача.
-        let resp = relay_purchase_verify(
-            State(app.clone()),
-            Json(VerifyReq {
-                checkout_id: checkout_id.clone(),
-                fp: "fp-site".into(),
-            }),
+        // Verify после claim — ТОТ ЖЕ токен, а не 409: клиент вправе спросить
+        // «оплата дошла?» ещё раз (уведомление провайдера и опрос клиента
+        // идут параллельно), но второй подписки не появляется.
+        let vb = json_of(
+            relay_purchase_verify(
+                State(app.clone()),
+                Json(VerifyReq {
+                    checkout_id: checkout_id.clone(),
+                    fp: "fp-site".into(),
+                }),
+            )
+            .await,
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert_eq!(vb["status"], "already_granted");
+        assert_eq!(vb["token"].as_str(), Some(first_token.as_str()));
+        assert_eq!(
+            app.subscriptions.lock().expect("subs").len(),
+            1,
+            "verify после выдачи не создаёт вторую подписку"
+        );
         // Без настроенных процессоров claim — честное 402, а не «не оплачено».
         let off = pay_app_state_full(keys(), None, None);
         let resp = relay_purchase_claim(
@@ -5759,6 +5822,54 @@ mod tests {
         .await;
         assert_eq!(again["token"].as_str(), Some(granted_token.as_str()));
         assert_eq!(app.subscriptions.lock().expect("subs").len(), 1, "второй подписки нет");
+    }
+
+    /// Проверка оплаты после рестарта релея: карта чекаутов в памяти пуста,
+    /// а оплата прошла. Ответ «сессия истекла» (410) на оплаченный чекаут —
+    /// это «деньги списаны, доступа нет», поэтому verify ищет и на диске.
+    #[tokio::test]
+    async fn verify_posle_restarta_naokhodit_oplatu_na_diske() {
+        let stub = YkStub::new(&["pay-vr"], &[]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_vr", "pay-vr", "fp-vik", 120));
+        assert!(app.checkouts.lock().expect("checkouts").is_empty());
+
+        let resp = relay_purchase_verify(
+            State(app.clone()),
+            Json(VerifyReq {
+                checkout_id: "co_vr".into(),
+                fp: "fp-vik".into(),
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_of(resp).await;
+        assert!(body["token"].is_string(), "оплата найдена на диске: {body}");
+        assert!(app.is_redeemed("co_vr"));
+    }
+
+    /// Чужой fp не забирает оплаченный чекаут даже после выдачи: сверка fp
+    /// идёт ДО выдачи токена, иначе токен ушёл бы не тому, кто платил.
+    #[tokio::test]
+    async fn verify_chuzhoj_fp_posle_vydachi_ne_poluchaet_token() {
+        let stub = YkStub::new(&["pay-fp"], &[]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_fp", "pay-fp", "fp-owner", 120));
+        app.mark_redeemed("co_fp");
+        app.save_subscription(1, Plan::Pro, "fp-owner", now() + 86_400, "tok-owner");
+
+        let resp = relay_purchase_verify(
+            State(app.clone()),
+            Json(VerifyReq {
+                checkout_id: "co_fp".into(),
+                fp: "fp-чужой".into(),
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert_eq!(json_of(resp).await["error"], "fp_mismatch");
     }
 
     /// Получка после рестарта релея: карта `checkouts` живёт только в памяти и

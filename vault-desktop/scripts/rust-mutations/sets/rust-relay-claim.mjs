@@ -67,9 +67,9 @@ export default {
     { name: 'выдача не помечает чекаут выданным (повтор claim выдаёт токен заново)',
       pattern: '    app.mark_redeemed(&checkout.id);\n    // Незавершённая запись больше не нужна',
       replacement: '    // Незавершённая запись больше не нужна' },
-    { name: 'verify после выдачи пропускает повтор (одна оплата — много токенов)',
-      pattern: '    if app.is_redeemed(&req.checkout_id) {\n        return err(StatusCode::CONFLICT, "already_redeemed");\n    }',
-      replacement: '    if false {\n        return err(StatusCode::CONFLICT, "already_redeemed");\n    }' },
+    { name: 'verify после выдачи выдаёт ВТОРУЮ подписку (одна оплата — две выдачи)',
+      pattern: '    if app.is_redeemed(&req.checkout_id) {',
+      replacement: '    if false {' },
     { name: 'идемпотентность создания отдаёт уже выданный чекаут (повторный клик ведёт к оплаченному сессии)',
       pattern: `                    && c.expires_at > now()
                     // Выданный чекаут — не «та же покупка»: подписка по нему
