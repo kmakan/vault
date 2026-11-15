@@ -1,0 +1,11 @@
+[Unit]
+Description=Сторож подъёма VPS — каждые 3 минуты, действует только когда сайт ожил
+
+[Timer]
+OnCalendar=*:0/3
+AccuracySec=20s
+Persistent=false
+Unit=vault-server-recover.service
+
+[Install]
+WantedBy=timers.target
