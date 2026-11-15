@@ -19,8 +19,8 @@ if [ $((now - last)) -lt 21600 ]; then
   exit 0
 fi
 
-reason=$(journalctl --user -u vault-npd-receipts.service -n 20 --no-pager 2>/dev/null \
-  | grep -E 'vault-npd-receipts\[[0-9]+\]:' \
+reason=$(journalctl --user -u vault-npd-receipts.service -u vault-npd-retry.service -n 30 --no-pager 2>/dev/null \
+  | grep -E 'vault-npd-(receipts|run)\[[0-9]+\]:' \
   | grep -viE 'сверка:|Starting|Finished' | tail -1 \
   | sed -E 's/.*vault-npd-receipts\[[0-9]+\]: //')
 [ -z "$reason" ] && reason="сверка чеков не прошла (journalctl --user -u vault-npd-receipts)"

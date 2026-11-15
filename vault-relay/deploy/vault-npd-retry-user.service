@@ -1,0 +1,19 @@
+[Unit]
+Description=Vault NPD receipts — догон сверки, когда VPN опущен
+# Зачем: сверка ходит на lknpd.nalog.ru. При поднятой Amnezia доступ режет
+# kill switch (трафик мимо туннеля отклоняется), и запуск в :17 падает.
+# Этот юнит догоняет сверку в пределах 10 минут после того, как туннель
+# опущен, — не дожидаясь следующего часа. Пока туннель поднят, guard внутри
+# vault-npd-retry выходит сразу, чтобы не долбить ФНС заведомо падающим
+# запросом; штатную сверку в этом случае делает часовой таймер.
+Wants=network-online.target
+After=network-online.target
+# При отказе — то же оповещение, что и у часового юнита (дедуп 6 ч внутри).
+OnFailure=vault-npd-alert.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+EnvironmentFile=%h/.config/vault-relay/npd.env
+Environment=VAULT_NPD_STATE_PATH=%h/.local/state/vault-relay/npd-state.json
+ExecStart=%h/.local/bin/vault-npd-retry

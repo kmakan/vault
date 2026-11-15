@@ -16,6 +16,8 @@ WorkingDirectory=%h
 # релея: ротация одного секрета не тянет за собой остальные.
 EnvironmentFile=%h/.config/vault-relay/npd.env
 Environment=VAULT_NPD_STATE_PATH=%h/.local/state/vault-relay/npd-state.json
-ExecStart=%h/.local/bin/vault-npd-receipts
+# Обёртка ставит отметку «последний успех» — по ней догоняющий юнит
+# (vault-npd-retry-user.service) понимает, что сверка упала и её надо повторить.
+ExecStart=%h/.local/bin/vault-npd-run
 # Ненулевой код = провайдер недоступен или чек не выдан. Юнит обязан
 # выглядеть упавшим: «тихо зелёный» молчащий чек — это штраф 20%.

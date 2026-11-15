@@ -1,0 +1,13 @@
+[Unit]
+Description=Vault NPD receipts — догон каждые 10 минут (только при опущенном VPN)
+
+[Timer]
+# Не на :17 (там часовой запуск) и не на круглой минуте.
+OnCalendar=*:4/10
+AccuracySec=30s
+# Догон пропущенного после выключенной машины делает часовой таймер
+# (Persistent=true), здесь накопление не нужно.
+Persistent=false
+
+[Install]
+WantedBy=timers.target
