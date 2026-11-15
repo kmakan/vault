@@ -38,8 +38,13 @@ export default {
       pattern: "  if (!v || v.error) {",
       replacement: "  if (false) {" },
     { name: "после покупки состояние не перечитывается (экран остаётся старым)",
-      pattern: "  if (deps.refresh) await deps.refresh();",
-      replacement: "  void 0;" },
+      // Контекст обязателен: тот же вызов есть и в checkPending, и без
+      // окружения паттерн не говорит, какое из двух решений сломано.
+      pattern: "  deps.toast(deps.tr('pro_buy_ok'));\n  if (deps.refresh) await deps.refresh();\n  return { ok: true, plan: v.plan, paidUntil: v.paid_until };",
+      replacement: "  deps.toast(deps.tr('pro_buy_ok'));\n  return { ok: true, plan: v.plan, paidUntil: v.paid_until };" },
+    { name: "после «Проверить оплату» состояние не перечитывается (человек видит Free при выданном Pro)",
+      pattern: "  if (v && !v.error) {\n    deps.toast(deps.tr('pro_buy_ok'));\n    if (deps.refresh) await deps.refresh();",
+      replacement: "  if (v && !v.error) {\n    deps.toast(deps.tr('pro_buy_ok'));" },
     { name: "бейдж Pro показывается всегда (даже на бесплатном тарифе)",
       pattern: "  if (plan === 'free') return false;",
       replacement: "  if (false) return false;" },
