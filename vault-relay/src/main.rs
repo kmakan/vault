@@ -287,7 +287,14 @@ impl AppState {
 
     /// Сохранить подписку (персист: купленный Pro не должен теряться при
     /// рестарте релея).
-    pub fn save_subscription(&self, sub: u64, plan: vault_relay::tokens::Plan, fp: &str, paid_until: u64) {
+    pub fn save_subscription(
+        &self,
+        sub: u64,
+        plan: vault_relay::tokens::Plan,
+        fp: &str,
+        paid_until: u64,
+        token: &str,
+    ) {
         {
             let mut subs = self.subscriptions.lock().expect("subscriptions lock");
             subs.insert(
@@ -297,8 +304,22 @@ impl AppState {
                     fp: fp.to_string(),
                     paid_until,
                     revoked: false,
+                    token: token.to_string(),
                 },
             );
+        }
+        self.persist();
+    }
+
+    /// Дописать токен в уже сохранённую подписку (записи до 15.11.2026 его не
+    /// знали). Нужно ровно один раз на подписку: дальше выдача берёт
+    /// сохранённый токен, а не выпускает новый адрес очереди.
+    pub fn remember_subscription_token(&self, sub: u64, token: &str) {
+        {
+            let mut subs = self.subscriptions.lock().expect("subscriptions lock");
+            if let Some(s) = subs.get_mut(&sub.to_string()) {
+                s.token = token.to_string();
+            }
         }
         self.persist();
     }
@@ -415,6 +436,39 @@ impl AppState {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    /// Незавершённые ₽-оплаты ЭТОГО покупателя — для получки приложением.
+    ///
+    /// Нужны потому, что карта `checkouts` живёт только в памяти: после
+    /// рестарта релея (деплой, авария) там пусто, и получка отвечала
+    /// «нечего получать», хотя человек уже заплатил. Персистентная карта
+    /// ожиданий отвечает на тот же вопрос после перезапуска.
+    pub fn pending_for_fp(&self, fp: &str) -> Vec<(String, persist::PendingCheckout)> {
+        self.pending_checkouts
+            .lock()
+            .expect("pending_checkouts lock")
+            .iter()
+            .filter(|(_, p)| p.fp == fp && !self.is_redeemed(&p.checkout_id))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Уже выданная подписка этого покупателя (самая свежая): по ней токен
+    /// выдаётся ПОВТОРНО, без второй подписки.
+    ///
+    /// Зачем: оплата может быть подтверждена уведомлением ЮKassa, когда
+    /// приложение закрыто. Подписка уже есть, а токен до устройства не
+    /// дошёл — без этой выдачи человек видел бы «бесплатный тариф» при
+    /// списанных деньгах.
+    pub fn granted_subscription_for_fp(&self, fp: &str) -> Option<(u64, String, u64, String)> {
+        let subs = self.subscriptions.lock().expect("subscriptions lock");
+        let now = now();
+        subs.iter()
+            .filter(|(_, s)| s.fp == fp && !s.revoked && s.paid_until > now)
+            .filter_map(|(k, s)| Some((k.parse::<u64>().ok()?, s)))
+            .max_by_key(|(id, _)| *id)
+            .map(|(id, s)| (id, s.plan.clone(), s.paid_until, s.token.clone()))
     }
 
     /// Отметить попытку опроса: счётчик живёт в записи (диагностика «почему
@@ -2612,7 +2666,9 @@ fn grant_paid_checkout(
     // теряться при рестарте релея. Токен — v2 (в нём план и срок).
     let sub = app.next_subscription_id();
     let paid_until = now() + (checkout.months as u64) * 30 * 86400;
-    app.save_subscription(sub, checkout.plan, &checkout.fp, paid_until);
+    // Токен выпускаем ДО сохранения подписки: он в ней и останется — иначе
+    // повторная выдача (приложение забирает покупку на каждом старте) дала бы
+    // новый адрес очереди, и сообщения на прежний адрес потерялись бы.
     let token = vault_relay::tokens::issue_v2(
         &app.keys,
         vault_relay::tokens::Scope::Read,
@@ -2620,6 +2676,7 @@ fn grant_paid_checkout(
         sub,
         paid_until as u32,
     );
+    app.save_subscription(sub, checkout.plan, &checkout.fp, paid_until, &token);
     // Адрес очереди (topic) — тот же hash, что и у любого read-токена.
     let topic = vault_relay::parse(&app.keys, &token)
         .map(|t| t.hash)
@@ -2630,13 +2687,26 @@ fn grant_paid_checkout(
     if !checkout.provider_ref.trim().is_empty() {
         app.forget_pending_checkout(&checkout.provider_ref);
     }
+    let mut body = token_body(&token, topic, format!("{:?}", checkout.plan).to_lowercase(), paid_until, sub);
+    body["checkout_id"] = serde_json::json!(checkout.id);
+    body
+}
+
+/// Ответ «вот твой токен» — ОДНА форма для покупки, получки и повторной
+/// выдачи, иначе клиент разбирал бы три разных конверта.
+fn token_body(
+    token: &str,
+    topic: String,
+    plan: String,
+    paid_until: u64,
+    sub: u64,
+) -> serde_json::Value {
     serde_json::json!({
         "token": token,
         "topic": topic,
-        "plan": format!("{:?}", checkout.plan).to_lowercase(),
+        "plan": plan,
         "paid_until": paid_until,
         "sub": sub,
-        "checkout_id": checkout.id,
     })
 }
 
@@ -3074,13 +3144,14 @@ async fn relay_purchase_claim(State(app): State<Arc<AppState>>, Json(req): Json<
             "valid read token bound to this fp required",
         );
     }
-    let candidates = app.pending_checkouts_for_fp(&fp, 5);
-    if candidates.is_empty() {
-        return (
-            StatusCode::OK,
-            AxumJson(serde_json::json!({ "status": "no_pending" })),
-        )
-            .into_response();
+    // Сначала НОВЫЕ оплаты этого fp: их ещё не выдавали. В памяти — сессии,
+    // созданные приложением и сайтом с момента старта; на диске — незавершённые
+    // ₽-оплаты, пережившие рестарт (в памяти после деплоя пусто).
+    let mut candidates = app.pending_checkouts_for_fp(&fp, 5);
+    for (provider_ref, p) in app.pending_for_fp(&fp) {
+        if !candidates.iter().any(|c| c.id == p.checkout_id) {
+            candidates.push(checkout_from_pending(&provider_ref, &p));
+        }
     }
     for c in &candidates {
         let Some(provider) = provider_for_checkout(&app, c) else {
@@ -3100,6 +3171,44 @@ async fn relay_purchase_claim(State(app): State<Arc<AppState>>, Json(req): Json<
             // pending/failed/ошибка — пробуем следующую сессию этого fp.
             _ => continue,
         }
+    }
+    // Новых оплат нет, но подписка у этого fp уже ЕСТЬ — значит её выдало
+    // уведомление провайдера (или сторож), пока приложение было закрыто.
+    // Отдаём тот же токен: без этого человек видел бы «бесплатный тариф»
+    // при списанных деньгах, и получка отвечала бы «нечего получать».
+    if let Some((sub, plan_name, paid_until, saved_token)) = app.granted_subscription_for_fp(&fp) {
+        if let Some(plan) = paid_plan(&plan_name) {
+            // Токен берём СОХРАНЁННЫЙ: выпуск нового дал бы другой адрес
+            // очереди, и приложение, забирающее покупку на каждом старте,
+            // меняло бы адрес (и теряло сообщения на прежнем).
+            let token = if saved_token.is_empty() {
+                let fresh = vault_relay::tokens::issue_v2(
+                    &app.keys,
+                    vault_relay::tokens::Scope::Read,
+                    plan,
+                    sub,
+                    paid_until as u32,
+                );
+                app.remember_subscription_token(sub, &fresh);
+                fresh
+            } else {
+                saved_token
+            };
+            let topic = vault_relay::parse(&app.keys, &token)
+                .map(|t| t.hash)
+                .unwrap_or_default();
+            let mut body = token_body(&token, topic, plan_name.clone(), paid_until, sub);
+            body["status"] = serde_json::json!("already_granted");
+            tracing::info!(fp = %fp, sub = sub, plan = %plan_name, "claim: подписка уже выдана — повторная выдача сохранённого токена");
+            return (StatusCode::OK, AxumJson(body)).into_response();
+        }
+    }
+    if candidates.is_empty() {
+        return (
+            StatusCode::OK,
+            AxumJson(serde_json::json!({ "status": "no_pending" })),
+        )
+            .into_response();
     }
     (
         StatusCode::OK,
@@ -5443,8 +5552,8 @@ mod tests {
         )
         .await;
         let k2 = keys();
-        let t = vault_relay::parse(&k2, cb["token"].as_str().expect("выдан токен"))
-            .expect("разбирается");
+        let first_token = cb["token"].as_str().expect("выдан токен").to_string();
+        let t = vault_relay::parse(&k2, &first_token).expect("разбирается");
         assert_eq!(t.plan, vault_relay::tokens::Plan::Pro);
         assert!(
             app.active_subscription("fp-site").is_some(),
@@ -5457,7 +5566,10 @@ mod tests {
                 .is_none(),
             "выданный чекаут снят с идемпотентности"
         );
-        // Повтор claim — нечего получать: выданный чекаут снят с очереди.
+        // Повтор claim отдаёт ТОТ ЖЕ токен, а не вторую подписку: подписка
+        // уже выдана, но токен мог не дойти до устройства (приложение было
+        // закрыто, а оплату подтвердило уведомление провайдера). Иначе
+        // человек видел бы «бесплатный тариф» при списанных деньгах.
         let cb = json_of(
             relay_purchase_claim(
                 State(app.clone()),
@@ -5469,7 +5581,16 @@ mod tests {
             .await,
         )
         .await;
-        assert_eq!(cb["status"], "no_pending");
+        assert_eq!(cb["status"], "already_granted");
+        assert_eq!(
+            cb["token"], first_token,
+            "повторная выдача — тот же токен, не новая подписка"
+        );
+        assert_eq!(
+            app.subscriptions.lock().expect("subs").len(),
+            1,
+            "второй подписки не появилось"
+        );
         // Verify после claim — 409: одна оплата, одна выдача.
         let resp = relay_purchase_verify(
             State(app.clone()),
@@ -5560,9 +5681,11 @@ mod tests {
             .await,
         )
         .await;
-        let t = vault_relay::parse(&k, cb["token"].as_str().expect("токен")).expect("разбирается");
+        let token1 = cb["token"].as_str().expect("токен").to_string();
+        let t = vault_relay::parse(&k, &token1).expect("разбирается");
         assert_eq!(t.plan, vault_relay::tokens::Plan::Pro);
-        // Выдано — второй claim ничего не ищет и повторно не выдаёт.
+        // Выдано — второй claim отдаёт тот же токен (второй подписки нет),
+        // чтобы приложение могло добрать покупку, если токен не дошёл.
         let cb = json_of(
             relay_purchase_claim(
                 State(app.clone()),
@@ -5574,7 +5697,102 @@ mod tests {
             .await,
         )
         .await;
-        assert_eq!(cb["status"], "no_pending");
+        assert_eq!(cb["status"], "already_granted");
+        assert_eq!(cb["token"].as_str(), Some(token1.as_str()), "тот же токен");
+        assert_eq!(app.subscriptions.lock().expect("subs").len(), 1);
+    }
+
+    /// ГЛАВНЫЙ СЦЕНАРИЙ ПОТЕРЯННЫХ ОПЛАТ: человек оплатил, приложение закрыто,
+    /// оплату подтвердило уведомление ЮKassa. Подписка на сервере есть, токен
+    /// до устройства не дошёл. Получка при следующем старте обязана отдать
+    /// ТОТ ЖЕ токен — иначе экран показывал бы «бесплатный тариф» при
+    /// списанных деньгах.
+    #[tokio::test]
+    async fn claim_vydaet_podpisku_podtverzhdennuyu_uvedomleniem() {
+        let stub = YkStub::new(&["pay-closed"], &[]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        let keep = register_token(&app, "fp-closed").await;
+        app.remember_pending_checkout(&yk_checkout("co_closed", "pay-closed", "fp-closed", 120));
+        assert_eq!(
+            relay_purchase_yk_notify(State(app.clone()), yk_body("payment.succeeded", "pay-closed"))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let granted_token = app
+            .granted_subscription_for_fp("fp-closed")
+            .expect("подписка выдана уведомлением")
+            .3;
+
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-closed".into(),
+                    keep: keep.clone(),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(cb["status"], "already_granted");
+        assert_eq!(
+            cb["token"].as_str(),
+            Some(granted_token.as_str()),
+            "отдан тот же токен, что выпущен при оплате"
+        );
+        assert_eq!(app.subscriptions.lock().expect("subs").len(), 1);
+        // Повторный старт приложения — снова тот же токен, адрес очереди не
+        // меняется (иначе сообщения на прежний адрес терялись бы на каждом
+        // запуске).
+        let again = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-closed".into(),
+                    keep,
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(again["token"].as_str(), Some(granted_token.as_str()));
+        assert_eq!(app.subscriptions.lock().expect("subs").len(), 1, "второй подписки нет");
+    }
+
+    /// Получка после рестарта релея: карта `checkouts` живёт только в памяти и
+    /// после деплоя пуста, поэтому оплата ищется и в персистентной карте
+    /// ожиданий — иначе «оплатил» превращалось бы в «нечего получать».
+    #[tokio::test]
+    async fn claim_nahodit_oplatu_perezhivshuyu_restart() {
+        let stub = YkStub::new(&["pay-disk"], &[]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        let keep = register_token(&app, "fp-disk").await;
+        // Чекаут НЕ создавали через /purchase/checkout: в памяти пусто, как
+        // после перезапуска сервиса. На диске — только запись ожидания.
+        app.remember_pending_checkout(&yk_checkout("co_disk", "pay-disk", "fp-disk", 120));
+        assert!(
+            app.checkouts.lock().expect("checkouts").is_empty(),
+            "в памяти чекаутов нет — условие теста"
+        );
+
+        let cb = json_of(
+            relay_purchase_claim(
+                State(app.clone()),
+                Json(ClaimReq {
+                    fp: "fp-disk".into(),
+                    keep,
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        assert!(cb["token"].is_string(), "оплата с диска выдана: {cb}");
+        let t = vault_relay::parse(&keys(), cb["token"].as_str().expect("токен")).expect("parses");
+        assert_eq!(t.plan, vault_relay::tokens::Plan::Pro);
+        assert!(app.pending_by_ref("pay-disk").is_none(), "ожидание снято");
     }
 
     #[tokio::test]
@@ -7074,12 +7292,16 @@ mod tests {
     }
 
     /// Провайдер подтвердил — Pro выдан БЕЗ участия клиента (закрыл приложение),
-    /// запись ожидания снята, подписка сохранена.
+    /// запись ожидания снята, подписка сохранена со сроком из покупки.
     #[tokio::test]
     async fn yk_notify_vydaet_pro_kogda_provajder_podtverdil() {
         let stub = YkStub::new(&["pay-yk2"], &[]);
         let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
-        app.remember_pending_checkout(&yk_checkout("co_yk2", "pay-yk2", "fp-bob", 120));
+        // Три месяца, а не один: срок подписки обязан приехать из ЗАПИСИ, а не
+        // из константы (год, выданный за месяц, — это потерянная выручка).
+        let mut c = yk_checkout("co_yk2", "pay-yk2", "fp-bob", 120);
+        c.months = 3;
+        app.remember_pending_checkout(&c);
 
         let resp = relay_purchase_yk_notify(State(app.clone()), yk_body("payment.succeeded", "pay-yk2")).await;
 
@@ -7092,6 +7314,32 @@ mod tests {
         assert_eq!(sub.plan, "pro");
         assert!(!sub.revoked);
         assert_eq!(id, "1", "первая подписка — id 1");
+        let days = (sub.paid_until.saturating_sub(now())) / 86_400;
+        assert!(
+            (89..=91).contains(&days),
+            "три месяца = ~90 дней, получено {days}"
+        );
+    }
+
+    /// Повторное уведомление по уже выданному чекауту НЕ выдаёт второй
+    /// подписки. Состояние «выдано, а запись ожидания на диске осталась» —
+    /// реальное: релей сохраняет выдачу и снятие ожидания двумя записями, и
+    /// падение между ними оставляет ровно такую комбинацию.
+    #[tokio::test]
+    async fn yk_notify_ne_vydaet_vtoroj_raz_po_tomu_zhe_chekautu() {
+        let stub = YkStub::new(&["pay-dup"], &[]);
+        let app = pay_app_state(keys(), Some(stub as Arc<dyn vault_relay::payments::PaymentProvider>));
+        app.remember_pending_checkout(&yk_checkout("co_dup", "pay-dup", "fp-ida", 120));
+        app.mark_redeemed("co_dup"); // Pro по этому чекауту уже выпущен
+
+        let resp = relay_purchase_yk_notify(State(app.clone()), yk_body("payment.succeeded", "pay-dup")).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            app.subscriptions.lock().expect("subs").is_empty(),
+            "по выданному чекауту второй подписки нет"
+        );
+        assert!(app.pending_by_ref("pay-dup").is_none(), "запись ожидания снята");
     }
 
     /// Отмена: запись ожидания снимается, Pro не выдаётся (денег нет).

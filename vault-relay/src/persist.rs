@@ -186,6 +186,13 @@ pub struct Subscription {
     /// Подписка отозвана (возврат/отмена) — токены подписки не работают.
     #[serde(default)]
     pub revoked: bool,
+    /// Токен, выпущенный при оплате. Хранится, потому что выпуск НЕ
+    /// детерминирован (в токене случайный dev_nonce): без сохранённого
+    /// значения повторная выдача дала бы ДРУГОЙ адрес очереди, и приложение,
+    /// забирающее покупку на каждом старте, теряло бы сообщения, отправленные
+    /// на прежний адрес. Пусто у записей, созданных до 15.11.2026.
+    #[serde(default)]
+    pub token: String,
 }
 
 /// Запись «fp аккаунта → выданный ему read-токен».
@@ -547,6 +554,7 @@ mod tests {
                 fp: "fp-alice".to_string(),
                 paid_until: 1_800_000_000,
                 revoked: false,
+                token: String::new(),
             },
         );
         let st = PersistedState::snapshot(
@@ -642,13 +650,15 @@ mod tests {
     #[test]
     fn test_broken_and_stale_pending_are_dropped() {
         let path = tmp_path("pending-broken");
+        // Час назад, а не «сейчас»: запись, созданная в ту же секунду, не
+        // отличает «сутки» от «ноль» — обе границы её пропускают.
         let good = PendingCheckout {
             checkout_id: "co_ok".to_string(),
             provider: "yookassa".to_string(),
             fp: "fp:ok".to_string(),
             plan: "pro".to_string(),
             months: 1,
-            created_at: now_unix(),
+            created_at: now_unix().saturating_sub(3_600),
             expires_at: now_unix() + 1800,
             polls: 0,
         };
@@ -667,21 +677,17 @@ mod tests {
             ("pay-fp".to_string(), bad_fp),
             ("pay-stale".to_string(), stale),
         ]);
-        PersistedState::snapshot(
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &BTreeSet::new(),
-            &pending,
-        )
-        .save_atomic(&path)
-        .expect("state saved");
+        // Файл пишем НАПРЯМУЮ, минуя snapshot/save: иначе отбраковка
+        // случилась бы ещё при записи, и тест не отличил бы «фильтр на
+        // загрузке» от его отсутствия (битый файл приносят именно извне —
+        // рестарт после аварии, старая версия, ручная правка).
+        let st = PersistedState {
+            v: STATE_VERSION,
+            saved_at: now_unix(),
+            pending_checkouts: pending,
+            ..Default::default()
+        };
+        std::fs::write(&path, serde_json::to_string(&st).expect("json")).expect("state written");
         let loaded = PersistedState::load(&path);
         let left: Vec<&String> = loaded.pending_checkouts.keys().collect();
         assert_eq!(left, vec!["pay-ok"], "осталась только годная запись");
@@ -701,6 +707,7 @@ mod tests {
                 fp: "fp-alice".to_string(),
                 paid_until: 1_800_000_000,
                 revoked: true,
+                token: String::new(),
             },
         );
         let st = PersistedState::snapshot(

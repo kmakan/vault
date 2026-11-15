@@ -445,7 +445,7 @@ ssh server 'systemctl is-active vault-relay
 | Слой | Что |
 |---|---|
 | Рель | `VAULT_RELAY_PAYMENTS=yookassa`, `VAULT_RELAY_YOOKASSA_SHOPID`, `VAULT_RELAY_YOOKASSA_SECRET_KEY`, `VAULT_RELAY_PUBLIC_URL=https://vault-msg.ru` — в env релея |
-| Роуты | `/relay/plans`, `/relay/purchase/{checkout,verify,claim,ipn}`, `/relay/tokens/{activate,info}`, `/pay-return/:id` |
+| Роуты | `/relay/plans`, `/relay/purchase/{checkout,verify,claim,ipn,yk-notify}`, `/relay/tokens/{activate,info}`, `/pay-return/:id` |
 | Сайт | `pay.html` и `pricing.html` — RU в `sites/vault-msg/ru/`, EN в `sites/vault-msg/en/`; **EN-сайт отдаётся доменом `vault-msg.tech`, а не путём `/en/`** |
 | Цены | 149 ₽/мес · 447 за 3 · 894 за 6 · 1341 за 9 · 1490 за 12 (каталог считает сервер: `/relay/plans`) |
 | Крипто | **не подключён** (нет `VAULT_RELAY_CRYPTO_*`) — обещание USDT/BTC/LTC убрано из текстов сайта; в `pay.html` крипто-переключатель скрывает сервер (`crypto.enabled=false`) |
@@ -456,6 +456,53 @@ checkout → claim → выдан Pro-токен → в приложении э�
 выдачи отозваны (`POST /admin/revoke {"fp":"…"}`), `/admin/payments` показывает
 только реальные платежи (отчёт спрашивает ЮKassa, тестовые чекауты в выручку
 не попадают).
+
+### Уведомления ЮKassa (yk-notify, 15.11.2026)
+
+**Найдено 15.11.2026 при разборе «оплатил — Pro не пришёл»:** в кабинете
+ЮKassa HTTP-уведомления не были настроены ВООБЩЕ (страница «No link yet»,
+события не выбраны). Рель узнавал об оплате только когда клиент сам опрашивал
+`/relay/purchase/verify`; человек платил, закрывал приложение — деньги
+списаны, подписка никому не выдана (12 из 13 отменённых платежей в API —
+`payment_method = null`, то есть до выбора способа дело не дошло).
+
+Настройка в кабинете (Интеграция → HTTP-уведомления):
+
+- URL: `https://vault-msg.ru/relay/purchase/yk-notify`
+- события: `payment.succeeded`, `payment.canceled`, `refund.succeeded`
+  (`payment.waiting_for_capture` не нужен: касса одностадийная)
+
+Правила обработчика (не менять при правках):
+
+1. Тело уведомления — только ПОВОД. ЮKassa их не подписывает, подделать POST
+   может кто угодно, поэтому `succeeded` в теле ничего не даёт: рель берёт
+   `object.id`, спрашивает ЮKassa своим секретным ключом (`verify`) и выдаёт
+   Pro лишь по её ответу.
+2. Неизвестный платёж → 200 (иначе ЮKassa ретраит сутки). Битая форма тела
+   (нет `object.id`) → 400.
+3. Незавершённые ₽-оплаты персистятся (`PersistedState::pending_checkouts`
+   в `state.json`): уведомление может прийти уже после рестарта релея, и
+   «кому и какой план» должно найтись на диске, а не только в памяти.
+4. Второй, независимый путь к тому же результату — сторож
+   (`spawn_pending_sweeper`): раз в 2 минуты сам спрашивает провайдера. Выплата
+   не зависит от того, дошёл ли один HTTP-запрос.
+
+Проверка после деплоя:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
+  -d '{}' https://vault-msg.ru/relay/purchase/yk-notify        # 400 = роут есть
+# кабинет ЮKassa → Интеграция → HTTP-уведомления → «Отправить тестовое
+# уведомление»; в журнале релея должно быть 'yk-notify: неизвестный платёж'
+journalctl -u vault-relay -n 50 | grep yk-notify
+```
+
+Живая сквозная проверка — платёж на 1 ₽ со своего кошелька: после оплаты в
+журнале `yk-notify: оплата подтверждена провайдером, Pro выдан`, а
+`/admin/payments` показывает платёж. Диагностический платёж, созданный
+15.11.2026 (`328bbcaf-000f-5001-a000-13d5a8b1ec09`, 1 ₽), отменить через API
+нельзя — касса самозанятого отвечает `access denied`; он истечёт сам и в
+сверку НПД не попадёт (учитываются только `succeeded`).
 
 Код оплаты — это fp аккаунта, примаскированный по дизайну
 (`3a:5f:3c:1b:0e:15:4c:24:****`): маску снимать не нужно, рель регистрирует
