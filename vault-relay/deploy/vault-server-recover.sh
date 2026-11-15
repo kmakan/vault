@@ -23,6 +23,10 @@ mkdir -p "$(dirname "$LOG")" "$(dirname "$STAMP")" "$BACKUP_ROOT"
 
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
+# Часовая проба SSH поднимает этот скрипт, когда сайт ещё лежит: проверять
+# доступность сайта тогда бессмысленно, а войти и снять копию — уже можно.
+FORCE=0
+[ "${VAULT_RECOVER_FORCE:-0}" = "1" ] && FORCE=1
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >> "$LOG"; }
 notify() {
@@ -30,16 +34,22 @@ notify() {
   notify-send -u "${3:-normal}" "$1" "$2" 2>/dev/null || true
 }
 
-code=$(curl -sS -o /dev/null -m 10 -w '%{http_code}' "$SITE" 2>/dev/null || echo 000)
-if [ "$code" != "200" ]; then
-  exit 0                      # ещё лежит — это штатное состояние, не шумим
+if [ "$FORCE" != "1" ]; then
+  code=$(curl -sS -o /dev/null -m 10 -w '%{http_code}' "$SITE" 2>/dev/null || echo 000)
+  if [ "$code" != "200" ]; then
+    exit 0                    # ещё лежит — это штатное состояние, не шумим
+  fi
 fi
 
 if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$(date +%F)" ]; then
   exit 0                      # уже отработали сегодня
 fi
 
-log "сайт ответил 200 — начинаю подъём"
+if [ "$FORCE" = "1" ]; then
+  log "принудительный подъём по пробе SSH — проверяю вход"
+else
+  log "сайт ответил 200 — начинаю подъём"
+fi
 
 # --- удалённая часть -------------------------------------------------------
 # Пароль sudo передаём первой строкой в stdin, а не аргументом: в ps его не видно.
@@ -94,7 +104,10 @@ ssh_rc=$?
 printf '%s\n' "$report" >> "$LOG"
 
 if [ "$ssh_rc" -ne 0 ]; then
-  log "SSH не пустил (rc=$ssh_rc) — сайт жив, но внутрь не попали"
+  log "SSH не пустил (rc=$ssh_rc) — внутрь не попали"
+  if [ "$FORCE" = "1" ]; then
+    exit 2                    # часовую пробу это не удивляет: она сама логирует
+  fi
   # не долбим уведомлением каждые 3 минуты: не чаще раза в полчаса
   last="$HOME/.hermes/state/vault-recover-ssh-warn"
   now=$(date +%s)

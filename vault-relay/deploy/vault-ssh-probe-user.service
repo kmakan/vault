@@ -1,0 +1,9 @@
+[Unit]
+Description=Vault: часовая проба SSH — пускает ли сервер
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.hermes/scripts/vault-ssh-probe.sh
+TimeoutStartSec=120

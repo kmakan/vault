@@ -1,0 +1,11 @@
+[Unit]
+Description=Проба SSH к серверу раз в час (в :07)
+
+[Timer]
+OnCalendar=*:07:00
+Persistent=true
+AccuracySec=1min
+Unit=vault-ssh-probe.service
+
+[Install]
+WantedBy=timers.target
