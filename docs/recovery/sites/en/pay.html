@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pay for Vault Pro — Vault</title>
+<meta name="description" content="Buy Vault Pro on this site: bank card (YooKassa, RUB), SBP, SberPay or YuMoney. Enter the payment code from the app — your plan activates in the app automatically.">
+<meta name="robots" content="index, follow">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.tech/pay.html">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:720px;margin:0 auto;padding:0 24px}
+
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:24px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+
+main{padding:56px 0 80px}
+h1{font-size:clamp(28px,4vw,38px);font-weight:800;letter-spacing:-.02em;margin-bottom:12px}
+.lead{color:var(--muted);font-size:17px;max-width:720px;margin-bottom:32px}
+h2{font-size:17px;font-weight:700;margin:0 0 12px}
+p{margin-bottom:13px}
+.muted{color:var(--muted)}
+.note{font-size:14px;color:var(--muted)}
+
+.step{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:22px 24px;margin:0 0 16px}
+.step .num{font-size:11.5px;font-family:var(--font-mono);color:var(--gold);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+.fp{width:100%;background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:var(--font-mono);font-size:15px;padding:12px 14px;outline:none}
+.fp:focus{border-color:rgba(245,158,11,.5)}
+.months{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.month-btn{background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:10px 6px;text-align:center;cursor:pointer;font:inherit}
+.month-btn small{display:block;color:var(--muted);font-size:12.5px}
+.month-btn.sel{border-color:var(--gold);background:linear-gradient(180deg,rgba(245,158,11,.08),transparent)}
+.months-crypto{margin-top:10px;font-size:14px;color:var(--muted)}
+.methods{display:flex;flex-direction:column;gap:10px}
+.method{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--border);border-radius:10px;padding:12px 14px;cursor:pointer}
+.method.sel{border-color:var(--gold)}
+.method input{margin-top:6px;accent-color:var(--gold)}
+.method b{display:block;font-size:15px}
+.method span{font-size:13.5px;color:var(--muted)}
+.btn{display:block;width:100%;background:linear-gradient(135deg,var(--gold),#ef4444);border:none;border-radius:12px;color:#fff;font:inherit;font-weight:700;font-size:17px;padding:15px;cursor:pointer;margin-top:6px}
+.btn:disabled{opacity:.5;cursor:default}
+.msg{margin-top:14px;font-size:14.5px;border-radius:10px;padding:12px 14px;display:none}
+.msg.err{display:block;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35)}
+.msg.ok{display:block;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.4)}
+
+footer{border-top:1px solid var(--border);padding:40px 0 56px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px;flex-wrap:wrap}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+@media(max-width:640px){
+  .months{grid-template-columns:repeat(2,1fr)}
+  .nav-links{display:none}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M16 2 4 7v9c0 7.2 5.1 12.4 12 14 6.9-1.6 12-6.8 12-14V7L16 2z" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M11 15.5l3.5 3.5L21 12" stroke="#8b5cf6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Vault
+    </a>
+    <nav class="nav-links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="https://vault-msg.ru/pay.html">Оплата в ₽</a>
+      <a href="/#download">Download</a>
+      <a href="/terms.html">Terms</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <h1>Pay for Vault Pro</h1>
+    <p class="lead">The purchase is made here on the site, and the subscription activates in the app itself — right after the payment. Prices come from the server; payment opens the secure YooKassa checkout page (card, SBP, SberPay, YuMoney).</p>
+
+    <div class="step">
+      <div class="num">Step 1 · Payment code</div>
+      <h2>Enter the payment code from the app</h2>
+      <p class="note">Open Vault → Settings → Privacy → Pro plan → tap “Copy code”. It is your account fingerprint, not a password: it cannot be used to sign in — only to attach a plan you have already paid for.</p>
+      <p class="note">Don't have the app yet? <a href="https://vault-msg.ru/releases/vault-0.1.294.apk">Download Vault for Android</a> (arm64, free). In the build from this site (0.1.294) Pro is bought inside the app, with period buttons. The code below is for the store build: it has no purchase buttons (the store does not allow payment outside its own checkout), so payment happens here.</p>
+      <input class="fp" id="fp" autocomplete="off" spellcheck="false" placeholder="e.g. aa:bb:cc:dd:ee:ff:00:11:****">
+    </div>
+
+    <div class="step">
+      <div class="num">Step 2 · Duration</div>
+      <h2>Choose the duration</h2>
+      <div class="months" id="months"></div>
+      <div class="months-crypto" id="cryptoPrice" hidden></div>
+      <p class="note" id="catNote" hidden>The price list is unavailable — please reload the page. Prices are always computed by the server; this page never invents them.</p>
+    </div>
+
+    <div class="step">
+      <div class="num">Step 3 · Payment method</div>
+      <div class="methods" id="methods">
+        <label class="method sel" id="mCard">
+          <input type="radio" name="method" value="card" checked>
+          <span><b>Bank card</b><span>Roubles · secure checkout page · receipt by email</span></span>
+        </label>
+        <label class="method" id="mCrypto" hidden>
+          <input type="radio" name="method" value="crypto">
+          <span><b>Crypto</b><span id="cryptoAssets">USDT (TRC-20 / ERC-20), BTC, LTC · priced in USD</span></span>
+        </label>
+      </div>
+      <p class="note" id="cryptoOff" hidden>Crypto payment is rolled out on this channel separately — if the option is not shown, the card is available.</p>
+    </div>
+
+    <button class="btn" id="buy" disabled>Continue to payment</button>
+    <div class="msg" id="msg"></div>
+    <p class="note" style="margin-top:16px">After the payment return to the app: it fetches the subscription from the server by itself, nothing needs to be entered again. Questions — <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a>. Plan details — <a href="/pricing.html">Pricing</a>.</p>
+  </div>
+</main>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault</div>
+    <div class="links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/terms.html">Terms</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Web checkout: the page only shows what the server returns (/relay/plans is
+// the same catalog the app reads) and creates the payment session
+// (/relay/purchase/checkout). Prices, periods and entitlement live on the
+// server; this script stores nothing but the payment code (fp is not a
+// secret: it can only claim an already-paid plan, never sign in).
+(function () {
+  var LANG = 'en';
+  var STR = {
+    monthsLabel: function (m) { return m === 1 ? '1 month' : m + ' mo'; },
+    needFp: 'Enter the payment code from the app first.',
+    wait: 'Redirecting you to the payment page…',
+    noUrl: 'The checkout did not return a payment link. Try again or pick another method.',
+    badFp: 'Check the payment code: it comes from the app (Settings → Privacy → Pro plan).',
+    active: function (d) { return 'This account already has an active plan until ' + d + '. Return to the app — your plan is already applied.'; },
+    limited: 'Too many attempts. Please wait about an hour and try again.',
+    disabled: 'This payment method is unavailable right now. Choose another method or try later.',
+    offline: 'No connection to the server. Check your network and try again.',
+    unknown: 'The server rejected the request. Try later or write to vault-msg@ya.ru.'
+  };
+  var plans = null, crypto = null;
+  var months = 1, method = 'card';
+  var elFp = document.getElementById('fp');
+  var elMonths = document.getElementById('months');
+  var elCryptoPrice = document.getElementById('cryptoPrice');
+  var elMCard = document.getElementById('mCard');
+  var elMCrypto = document.getElementById('mCrypto');
+  var elCryptoOff = document.getElementById('cryptoOff');
+  var elCatNote = document.getElementById('catNote');
+  var elBuy = document.getElementById('buy');
+  var elMsg = document.getElementById('msg');
+
+  try { elFp.value = localStorage.getItem('vault_pay_code') || ''; } catch (e) {}
+  syncBuy();
+  elFp.addEventListener('input', function () {
+    try { localStorage.setItem('vault_pay_code', elFp.value.trim()); } catch (e) {}
+    hideMsg(); syncBuy();
+  });
+
+  fetch('/relay/plans').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !Array.isArray(d.plans) || !d.plans.length) { elCatNote.hidden = false; return; }
+    plans = d.plans;
+    crypto = d.crypto || null;
+    var saved = 0;
+    try { saved = parseInt(localStorage.getItem('vault_pay_months') || '1', 10); } catch (e) {}
+    if (saved && priceOf(saved)) months = saved;
+    if (crypto && crypto.enabled) elMCrypto.hidden = false; else elCryptoOff.hidden = false;
+    renderMonths();
+  }).catch(function () { elCatNote.hidden = false; });
+
+  function priceOf(m) {
+    if (!plans) return '';
+    var p = plans.filter(function (x) { return x.months === m; })[0];
+    return p ? (Math.round(p.kopecks / 100) + ' ₽') : '';
+  }
+  function cryptoPriceOf(m) {
+    if (!crypto || !Array.isArray(crypto.plans)) return '';
+    var p = crypto.plans.filter(function (x) { return x.months === m; })[0];
+    return p ? '$' + p.amount : '';
+  }
+  function renderMonths() {
+    elMonths.textContent = '';
+    plans.forEach(function (p) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'month-btn' + (p.months === months ? ' sel' : '');
+      var big = document.createElement('span');
+      big.textContent = STR.monthsLabel(p.months);
+      var s = document.createElement('small');
+      s.textContent = priceOf(p.months);
+      b.appendChild(big); b.appendChild(s);
+      b.addEventListener('click', function () {
+        months = p.months;
+        try { localStorage.setItem('vault_pay_months', String(months)); } catch (e) {}
+        renderMonths(); showCryptoPrice(); hideMsg();
+      });
+      elMonths.appendChild(b);
+    });
+    showCryptoPrice();
+  }
+  function showCryptoPrice() {
+    if (method === 'crypto' && crypto && crypto.enabled) {
+      elCryptoPrice.hidden = false;
+      elCryptoPrice.textContent = 'In crypto: ' + (cryptoPriceOf(months) || '—');
+    } else {
+      elCryptoPrice.hidden = true;
+    }
+  }
+
+  function pickMethod(m) {
+    method = m;
+    elMCard.classList.toggle('sel', m === 'card');
+    elMCrypto.classList.toggle('sel', m === 'crypto');
+    showCryptoPrice();
+  }
+  elMCard.addEventListener('click', function () { pickMethod('card'); elMCard.querySelector('input').checked = true; });
+  elMCrypto.addEventListener('click', function () { pickMethod('crypto'); elMCrypto.querySelector('input').checked = true; });
+
+  function syncBuy() { elBuy.disabled = !elFp.value.trim(); }
+  function hideMsg() { elMsg.className = 'msg'; elMsg.textContent = ''; }
+  function showMsg(kind, text) { elMsg.className = 'msg ' + kind; elMsg.textContent = text; }
+
+  function fmtDate(sec) {
+    try { return new Date(sec * 1000).toLocaleDateString('en-US'); }
+    catch (e) { return ''; }
+  }
+
+  elBuy.addEventListener('click', function () {
+    var fp = elFp.value.trim();
+    if (!fp) { showMsg('err', STR.needFp); return; }
+    elBuy.disabled = true;
+    hideMsg();
+    fetch('/relay/purchase/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fp: fp, plan: 'pro', months: months, method: method, lang: LANG })
+    }).then(function (res) {
+      return res.json().catch(function () { return null; }).then(function (b) { return { status: res.status, body: b }; });
+    }).then(function (r) {
+      if (r.status === 200 && r.body && r.body.payment_url) {
+        showMsg('ok', STR.wait);
+        window.location.assign(r.body.payment_url);
+        return;
+      }
+      elBuy.disabled = false; syncBuy();
+      if (r.status === 409) {
+        showMsg('ok', STR.active(fmtDate(r.body && r.body.paid_until)));
+      } else if (r.status === 422) {
+        showMsg('err', STR.badFp);
+      } else if (r.status === 429) {
+        showMsg('err', STR.limited);
+      } else if (r.status === 402) {
+        showMsg('err', STR.disabled);
+      } else {
+        showMsg('err', STR.unknown);
+      }
+    }).catch(function () {
+      elBuy.disabled = false; syncBuy();
+      showMsg('err', STR.offline);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

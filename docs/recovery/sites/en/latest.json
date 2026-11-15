@@ -1,0 +1,8 @@
+{
+  "version": "0.1.287",
+  "released": "2026-10-30",
+  "changelog": "Pro can be bought by period. The app now offers five periods — 1, 3, 6, 9 and 12 months — and the server, not the client, supplies the period and its price: ₽149 for a month, ₽447 for three, ₽894 for six, ₽1,341 for nine, ₽1,490 for a year (10 × monthly — the only discount). Checkout accepts exactly the periods the person sees on screen, so the plan picker and the payment can no longer drift apart.\n\nPayment opens a live YooKassa page; the app confirms the payment itself and activates Pro. If the page cannot be opened, the purchase does not start and the person sees why.\n\nUpdates preserve data: same signature, install over the previous build — chats, contacts, groups, channels, settings and purchased tokens stay in place.\n\nAcceptance: APK 0.1.287 on Android 15 (emulator), installed over 0.1.285, no crashes, five periods with server prices on screen, session and keys alive after the update.",
+  "apk_url": "https://vault-msg.ru/releases/vault-0.1.287.apk",
+  "desktop_url": "https://vault-msg.ru/releases/vault-desktop-0.1.287-linux-x86_64.tar.gz",
+  "notes": "Install the APK manually; store versions will follow later."
+}

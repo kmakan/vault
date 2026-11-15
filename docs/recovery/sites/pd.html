@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Обработка персональных данных — Vault</title>
+<meta name="description" content="Сведения об операторе персональных данных Vault: кто оператор, какие данные обрабатываются, правовые основания, где хранятся, как удалить, контакты ответственного.">
+<meta name="robots" content="index, follow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.ru/pd.html">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:860px;margin:0 auto;padding:0 24px}
+
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:26px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+
+main{padding:56px 0 80px}
+h1{font-size:34px;font-weight:800;letter-spacing:-.02em;margin-bottom:10px}
+.updated{color:var(--muted);font-size:14px;margin-bottom:34px}
+h2{font-size:21px;font-weight:700;margin:38px 0 12px;padding-top:8px}
+h2:first-of-type{margin-top:0}
+h3{font-size:16.5px;font-weight:650;margin:22px 0 8px}
+p{color:var(--text);margin-bottom:13px}
+ul,ol{margin:0 0 14px 22px}
+li{margin-bottom:7px}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin:16px 0}
+.card p:last-child{margin-bottom:0}
+.highlight{border-color:rgba(245,158,11,.35);background:linear-gradient(180deg,rgba(245,158,11,.05),transparent)}
+dl{display:grid;grid-template-columns:220px 1fr;gap:10px 18px;margin:0}
+dt{color:var(--muted);font-size:14px}
+dd{margin:0}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:14px 0}
+th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:none}
+code{font-family:var(--font-mono);font-size:13px;color:var(--gold);background:var(--bg-soft);padding:2px 6px;border-radius:5px}
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-soft)}
+
+footer{border-top:1px solid var(--border);padding:40px 0 56px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px;flex-wrap:wrap}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+@media(max-width:560px){
+  h1{font-size:27px}
+  h2{font-size:19px}
+  main{padding:36px 0 60px}
+  dl{grid-template-columns:1fr;gap:2px}
+  dt{margin-top:10px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M16 2 4 7v9c0 7.2 5.1 12.4 12 14 6.9-1.6 12-6.8 12-14V7L16 2z" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M11 15.5l3.5 3.5L21 12" stroke="#8b5cf6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Vault
+    </a>
+    <nav class="nav-links">
+      <a href="/#features">Возможности</a>
+      <a href="/#security">Безопасность</a>
+      <a href="/#download">Скачать</a>
+      <a href="/">Главная</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="container">
+
+  <h1>Обработка персональных данных</h1>
+  <p class="updated">Редакция от 10 ноября 2026 года. Дополняет <a href="/privacy.html">Политику конфиденциальности</a>.</p>
+
+  <div class="card highlight">
+    <p>Эта страница — краткие сведения об операторе персональных данных и об обработке данных в приложении Vault. Она нужна и пользователям, и магазинам приложений, которые запрашивают подтверждение соблюдения ФЗ-152.</p>
+  </div>
+
+  <h2>1. Оператор персональных данных</h2>
+  <div class="card">
+    <dl>
+      <dt>Оператор</dt>
+      <dd>Козлов Максим Анатольевич</dd>
+      <dt>Правовой статус</dt>
+      <dd>Физическое лицо, применяющее специальный налоговый режим «Налог на профессиональный доход» (самозанятый). Постановка на учёт 29.10.2026</dd>
+      <dt>ИНН</dt>
+      <dd><span class="mono">774338097699</span></dd>
+      <dt>Ответственный за организацию обработки ПДн</dt>
+      <dd>Козлов Максим Анатольевич — контакт: <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a></dd>
+      <dt>Контакт для обращений субъектов ПДн</dt>
+      <dd><a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> (ответ в течение 10 рабочих дней)</dd>
+      <dt>Уведомление в Роскомнадзор</dt>
+      <dd>Уведомление об обработке персональных данных (ст. 22 ФЗ-152) направлено в Роскомнадзор через сервис ЕСИА <strong>10.11.2026</strong>, номер уведомления <span class="mono">100494543</span>. Отдельно направлено уведомление о трансграничной передаче персональных данных (ст. 12 ФЗ-152) — <strong>10.11.2026</strong>, номер <span class="mono">100494565</span></dd>
+      <dt>Реестр операторов Роскомнадзора</dt>
+      <dd>Оператор включён в реестр операторов, осуществляющих обработку персональных данных (ст. 22 ФЗ-152): <strong>регистрационный номер 168588/77 от 10.11.2026</strong>. Проверить запись можно в реестре на портале Роскомнадзора (<a href="https://pd.rkn.gov.ru/operators-registry/operators-list/" rel="noopener">pd.rkn.gov.ru/operators-registry/operators-list</a>) по номеру уведомления <span class="mono">100494543</span>.</dd>
+      <dt>Место хранения данных</dt>
+      <dd>Российская Федерация (сервер доставки в Москве) и устройства пользователей</dd>
+    </dl>
+  </div>
+
+  <h2>2. Категории персональных данных</h2>
+  <ul>
+    <li>адрес электронной почты пользователя (он же идентификатор входа — отдельной учётной записи нет);</li>
+    <li>имя или псевдоним, указанные пользователем в профиле;</li>
+    <li>адреса электронной почты контактов, которые пользователь добавляет сам;</li>
+    <li>технический псевдонимный идентификатор доставки (производный от отпечатка открытого ключа);</li>
+    <li>IP-адрес (в виде хеша) и технические счётчики запросов;</li>
+    <li>пуш-токен устройства;</li>
+    <li>сведения о платежах: идентификатор платежа, сумма, дата, тариф, статус;</li>
+    <li>геолокация — только если пользователь сам отправляет SOS-сообщение (координаты подставляет устройство, сервис их не получает);</li>
+    <li>обращения в поддержку: адрес почты и содержание письма.</li>
+  </ul>
+  <p><strong>Не обрабатываются:</strong> специальные категории ПДн (раса, здоровье, политические взгляды и т. п.), биометрия, данные о судимости; содержание переписки и ключи шифрования (они остаются на устройстве).</p>
+
+  <h2>3. Цели обработки</h2>
+  <ul>
+    <li>доставка зашифрованных сообщений между пользователями (основная услуга);</li>
+    <li>работа сервиса доставки: маршрутизация конвертов, суточные лимиты, защита от спама и перегрузки;</li>
+    <li>push-уведомления о новых событиях (без содержания сообщений);</li>
+    <li>приём и учёт оплаты подписки, формирование чека (НПД);</li>
+    <li>ответы на обращения пользователей.</li>
+  </ul>
+  <p>Обработки для рекламы, маркетингового профилирования и аналитики нет; рекламных и аналитических SDK в приложении нет.</p>
+
+  <h2>4. Правовые основания</h2>
+  <ul>
+    <li>ч. 1 п. 5 ст. 6 ФЗ-152 — обработка необходима для исполнения договора, стороной которого является субъект (публичная оферта);</li>
+    <li>ч. 1 п. 1 ст. 6 ФЗ-152 — согласие субъекта для необязательных функций (SOS с координатами, поддержка, необязательные уведомления);</li>
+    <li>ч. 1 п. 2 ст. 6 ФЗ-152 и 422-ФЗ — исполнение обязанностей по налоговому учёту.</li>
+  </ul>
+
+  <h2>5. Как обрабатываются данные</h2>
+  <p>Смешанная обработка: с использованием средств автоматизации и без них. Действия: сбор, запись, систематизация, накопление, хранение, уточнение, извлечение, использование, передача (предоставление, доступ), блокирование, удаление, уничтожение.</p>
+  <p>Меры защиты: TLS при передаче; сквозное шифрование содержимого; ключи только на устройстве; доступ к серверу ограничен; зашифрованные конверты удаляются в течение 24 часов; секреты хранятся вне репозитория; при инциденте — уведомление Роскомнадзора в установленный срок (24 часа) и информирование затронутых пользователей.</p>
+
+  <h2>6. Передача третьим лицам и за пределы РФ</h2>
+  <ul>
+    <li>почтовый провайдер пользователя — обрабатывает письма как обычную почту;</li>
+    <li>платёжный провайдер — проводит платёж и формирует чек;</li>
+    <li>провайдер push-уведомлений — Google LLC (США), сервис Firebase Cloud Messaging: получает технический сигнал и псевдонимный токен устройства, без текста сообщений и без адреса почты;</li>
+    <li>уполномоченные органы — только по законному запросу.</li>
+  </ul>
+  <p>Данные не продаются и не передаются для рекламы.</p>
+  <p><strong>Трансграничная передача (ст. 12 ФЗ-152).</strong> Единственный получатель за пределами РФ — Google LLC (США), Firebase Cloud Messaging. Состав данных: пуш-токен устройства и технический сигнал «есть новое событие»; адрес почты, имя и содержание переписки не передаются. Цель — доставка уведомления при закрытом приложении. Правовые основания: исполнение договора с субъектом (ст. 6 ч. 1 п. 5) и согласие субъекта; сведения о передаче включаются в уведомление об обработке ПДн, подаваемое в Роскомнадзор. Отключение push в приложении или системе прекращает передачу.</p>
+
+  <h2>7. Сроки хранения</h2>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Данные</th><th>Срок</th></tr>
+    <tr><td>Зашифрованный конверт на релее</td><td>до 24 часов</td></tr>
+    <tr><td>Технические счётчики и хеш IP</td><td>до 30 суток (хеш IP в памяти — до перезапуска сервиса)</td></tr>
+    <tr><td>Пуш-токен</td><td>до перерегистрации, удаления приложения или отказа сервиса push</td></tr>
+    <tr><td>Записи о платежах</td><td>4 года (налоговое законодательство)</td></tr>
+    <tr><td>Обращения в поддержку</td><td>до завершения обращения и разумного срока после</td></tr>
+    <tr><td>Локальные данные на устройстве</td><td>пока пользователь их не удалит</td></tr>
+  </table>
+  </div>
+
+  <h2>8. Права субъекта ПДн и удаление</h2>
+  <p>Пользователь вправе получить сведения об обработке своих данных, потребовать их уточнения, блокирования или уничтожения, отозвать согласие. Обращение — на <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> с адреса, о котором идёт речь.</p>
+  <ul>
+    <li>локальные данные удаляются в приложении (Настройки → Приватность/Данные) или вместе с приложением;</li>
+    <li>серверные технические записи (псевдонимный идентификатор, пуш-токен) удаляются по обращению в течение 30 дней;</li>
+    <li>зашифрованные конверты удаляются автоматически в течение 24 часов;</li>
+    <li>платёжные записи хранятся в силу закона и досрочно не удаляются.</li>
+  </ul>
+
+  <h2>9. Сведения для магазинов приложений</h2>
+  <p>Для проверки соблюдения требований к обработке персональных данных (например, п. 5.2 Правил модерации RuStore):</p>
+  <ul>
+    <li>оператор ПДн определён, ответственный за обработку назначен (раздел 1);</li>
+    <li>политика конфиденциальности доступна по ссылке в карточке приложения и внутри приложения (Настройки → Приватность) — <a href="/privacy.html">/privacy.html</a>;</li>
+    <li>категории данных и цели их обработки раскрыты (разделы 2–3);</li>
+    <li>разрешения (камера, микрофон, геолокация, уведомления, файлы) обоснованы функциональностью и запрашиваются в момент использования (раздел 8 политики);</li>
+    <li>основания обработки указаны (раздел 4);</li>
+    <li>локализация соблюдена: сервер хранения — в РФ (раздел 6);</li>
+    <li>трансграничная передача раскрыта: получатель Google LLC (США) — только пуш-токен, без почты и содержания (раздел 6);</li>
+    <li>порядок удаления данных описан и доступен в приложении (раздел 8);</li>
+    <li>скрытого профилирования и рекламных/аналитических SDK нет (раздел 3).</li>
+  </ul>
+
+  <h2>10. Изменения</h2>
+  <p>Актуальная редакция — по адресу <a href="https://vault-msg.ru/pd.html">vault-msg.ru/pd.html</a>. При изменении сведений об операторе страница обновляется в тот же день.</p>
+
+</div>
+</main>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault · Самозанятый Козлов М. А. · ИНН 774338097699</div>
+    <div class="links">
+      <a href="/">Главная</a>
+      <a href="/privacy.html">Конфиденциальность</a>
+      <a href="/terms.html">Условия</a>
+      <a href="/requisites.html">Реквизиты</a>
+      <a href="mailto:vault-msg@ya.ru">Почта</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

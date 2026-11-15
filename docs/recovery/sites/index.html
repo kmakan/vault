@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vault — мессенджер, которому не нужен сервер</title>
+<meta name="description" content="Мгновенные зашифрованные сообщения через любую почту. Без серверов хранения, без метаданных, без слежки. Android и десктоп.">
+<meta property="og:title" content="Vault — мессенджер, которому не нужен сервер">
+<meta property="og:description" content="Мгновенные зашифрованные сообщения через любую почту. Без серверов, без метаданных, без слежки.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://vault-msg.ru">
+<meta property="og:image" content="/og-image.png">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.ru/">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:1080px;margin:0 auto;padding:0 24px}
+.center{text-align:center}
+
+/* ---------- header ---------- */
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:26px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:600;font-size:15px;border-radius:12px;padding:11px 22px;cursor:pointer;border:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:linear-gradient(135deg,var(--gold),#f97316);color:#1a1206;box-shadow:0 4px 24px rgba(245,158,11,.25)}
+.btn-primary:hover{box-shadow:0 6px 32px rgba(245,158,11,.4);text-decoration:none}
+.btn-ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover{border-color:var(--muted);text-decoration:none}
+
+/* ---------- hero ---------- */
+.hero{position:relative;padding:88px 0 72px;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:-40% 0 auto;height:520px;background:
+  radial-gradient(600px 300px at 20% 30%,rgba(245,158,11,.14),transparent 60%),
+  radial-gradient(600px 300px at 80% 20%,rgba(139,92,246,.14),transparent 60%);
+  pointer-events:none}
+.hero-grid{position:relative;display:grid;grid-template-columns:1.15fr .85fr;gap:48px;align-items:center}
+h1{font-size:clamp(32px,5vw,54px);line-height:1.15;font-weight:800;letter-spacing:-.02em}
+h1 .grad{background:linear-gradient(100deg,var(--gold),#f97316 45%,var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:clamp(17px,2.2vw,20px);color:var(--muted);margin:20px 0 30px;max-width:540px}
+.hero-cta{display:flex;gap:14px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 14px;margin-bottom:18px;background:var(--bg-soft)}
+.badge .dot{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 12px var(--gold)}
+.hero-art{position:relative}
+.hero-art .ring{position:absolute;inset:0;border-radius:50%;border:1px dashed rgba(139,92,246,.35);animation:spin 60s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hero-art .logo{position:relative;width:100%;max-width:340px;margin:0 auto;display:block;filter:drop-shadow(0 0 60px rgba(139,92,246,.25))}
+
+/* ---------- stats strip ---------- */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-top:56px}
+.stat{background:var(--bg-soft);padding:22px 18px;text-align:center}
+.stat b{display:block;font-size:26px;font-weight:800}
+.stat span{font-size:13px;color:var(--muted)}
+.stat:nth-child(1) b{color:var(--gold)}
+.stat:nth-child(2) b{color:var(--violet)}
+.stat:nth-child(3) b{color:#38bdf8}
+.stat:nth-child(4) b{color:#34d399}
+
+/* ---------- sections ---------- */
+section{padding:84px 0}
+section h2{font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.02em;margin-bottom:14px}
+section .sub{color:var(--muted);font-size:17px;max-width:640px;margin:0 auto 52px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:26px}
+.card h3{font-size:18px;font-weight:700;margin-bottom:8px}
+.card p{font-size:14.5px;color:var(--muted)}
+.card .icon{font-size:26px;margin-bottom:12px;display:block}
+.card code{font-family:var(--font-mono);font-size:12.5px;color:var(--gold);background:rgba(245,158,11,.08);padding:2px 6px;border-radius:6px}
+
+/* ---------- how it works ---------- */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;counter-reset:step}
+.step{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:26px}
+.step::before{counter-increment:step;content:counter(step,decimal-leading-zero);position:absolute;top:22px;right:24px;font-size:44px;font-weight:800;color:transparent;-webkit-text-stroke:1px var(--border);font-family:var(--font-mono)}
+.step h3{font-size:17px;font-weight:700;margin-bottom:8px;position:relative;z-index:1}
+.step p{font-size:14.5px;color:var(--muted)}
+.step .tag{position:relative;z-index:1;display:inline-block;font-size:11.5px;color:var(--gold);border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:2px 8px;margin-bottom:12px;font-family:var(--font-mono)}
+
+/* ---------- security table ---------- */
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-soft)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:640px}
+th,td{padding:14px 18px;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:none}
+td:first-child{font-weight:600;white-space:nowrap}
+td .mono{font-family:var(--font-mono);font-size:12.5px;color:var(--gold)}
+td .status{font-size:12px;color:#34d399}
+td .status.plan{color:var(--violet)}
+
+/* ---------- roadmap ---------- */
+.timeline{max-width:760px;margin:0 auto;position:relative}
+.timeline::before{content:"";position:absolute;left:19px;top:8px;bottom:8px;width:2px;background:linear-gradient(var(--gold),var(--violet))}
+.tl-item{position:relative;padding:0 0 34px 62px}
+.tl-item:last-child{padding-bottom:0}
+.tl-item::before{content:"";position:absolute;left:11px;top:5px;width:18px;height:18px;border-radius:50%;background:var(--bg);border:3px solid var(--gold)}
+.tl-item.done::before{background:var(--gold)}
+.tl-item.now::before{border-color:var(--violet);background:var(--violet);box-shadow:0 0 16px rgba(139,92,246,.6)}
+.tl-item h3{font-size:17px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tl-item .chip{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px}
+.chip.done{background:rgba(52,211,153,.12);color:#34d399}
+.chip.now{background:rgba(139,92,246,.15);color:#a78bfa}
+.chip.plan{background:rgba(139,92,246,.08);color:var(--muted)}
+.tl-item p{font-size:14.5px;color:var(--muted);margin-top:6px;max-width:560px}
+
+/* ---------- download ---------- */
+.download-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.dl-card{background:linear-gradient(180deg,var(--card),var(--bg-soft));border:1px solid var(--border);border-radius:var(--radius);padding:30px;text-align:center;transition:border-color .15s ease}
+.dl-card:hover{border-color:rgba(245,158,11,.4)}
+.dl-card .icon{font-size:34px}
+.dl-card h3{font-size:18px;font-weight:700;margin:12px 0 6px}
+.dl-card p{font-size:13.5px;color:var(--muted);margin-bottom:18px}
+.dl-card .req{font-size:12px;color:var(--muted);margin-top:12px}
+
+/* ---------- faq ---------- */
+details{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin-bottom:12px}
+details[open]{border-color:rgba(245,158,11,.35)}
+summary{cursor:pointer;font-weight:600;font-size:15.5px;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-size:20px;color:var(--muted);transition:transform .2s ease;flex:none}
+details[open] summary::after{transform:rotate(45deg);color:var(--gold)}
+details p{color:var(--muted);font-size:14.5px;margin-top:10px}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--border);padding:44px 0 60px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+/* ---------- responsive ---------- */
+@media(max-width:860px){
+  .hero-grid{grid-template-columns:1fr;text-align:center}
+  .lead{margin-left:auto;margin-right:auto}
+  .hero-cta{justify-content:center}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .grid3,.steps,.download-cards{grid-template-columns:1fr 1fr}
+  .nav-links{display:none}
+}
+@media(max-width:560px){
+  .grid3,.steps,.download-cards{grid-template-columns:1fr}
+  section{padding:64px 0}
+  .hero{padding:56px 0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="brand">
+      <svg viewBox="0 0 128 128" aria-hidden="true"><path fill="#f59e0b" d="M64 8c-19 0-36 8-48 20 6-4 12-6 20-6 24 0 44 20 44 44 0 6-1 12-4 17 8-6 15-15 18-25 4-14 1-29-8-41C76 11 70 8 64 8z"/><path fill="#8b5cf6" d="M64 120c19 0 36-8 48-20-6 4-12 6-20 6-24 0-44-20-44-44 0-6 1-12 4-17-8 6-15 15-18 25-4 14-1 29 8 41 6 6 12 9 22 9z"/></svg>
+      Vault
+    </div>
+    <nav class="nav-links">
+      <a href="#how">Как работает</a>
+      <a href="#features">Функции</a>
+      <a href="#pricing">Тарифы</a>
+      <a href="#guide">Руководство</a>
+      <a href="#security">Безопасность</a>
+      <a href="#roadmap">План развития</a>
+      <a href="#download">Скачать</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-primary" href="#download">Скачать</a>
+  </div>
+</header>
+
+<section class="hero" id="top">
+  <div class="container hero-grid">
+    <div>
+      <div class="badge"><span class="dot"></span> Релиз 0.1.294 · код открыт (AGPL-3.0)</div>
+      <h1>Мессенджер,<br>которому <span class="grad">не нужен сервер</span></h1>
+      <p class="lead">Vault шифрует сообщения на вашем устройстве и отправляет их обычным письмом — через любой почтовый аккаунт. Ни серверов хранения, ни логов, ни метаданных. Только вы и получатель.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#download">Скачать Vault</a>
+        <a class="btn btn-ghost" href="#how">Как это работает</a>
+      </div>
+    </div>
+    <div class="hero-art">
+      <div class="ring"></div>
+      <svg class="logo" role="img" aria-label="Vault logo" viewBox="0 0 128 128"><path fill="#f59e0b" d="M64 8c-19 0-36 8-48 20 6-4 12-6 20-6 24 0 44 20 44 44 0 6-1 12-4 17 8-6 15-15 18-25 4-14 1-29-8-41C76 11 70 8 64 8z"/><path fill="#8b5cf6" d="M64 120c19 0 36-8 48-20-6 4-12 6-20 6-24 0-44-20-44-44 0-6 1-12 4-17-8 6-15 15-18 25-4 14-1 29 8 41 6 6 12 9 22 9z"/></svg>
+    </div>
+  </div>
+  <div class="container">
+    <div class="stats">
+      <div class="stat"><b>0</b><span>серверов хранения</span></div>
+      <div class="stat"><b>2</b><span>платформы — Android и десктоп</span></div>
+      <div class="stat"><b>3</b><span>языка интерфейса</span></div>
+      <div class="stat"><b>E2E</b><span>шифрование каждого сообщения</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="container">
+    <h2 class="center">Как работает Vault</h2>
+    <p class="sub center">Серверной части просто нет. Транспорт — ваша почта, шифрование — ваше устройство.</p>
+    <div class="steps">
+      <div class="step">
+        <span class="tag">шаг 1</span>
+        <h3>Подключаете любую почту</h3>
+        <p>Gmail, Яндекс, Mail.ru, Zoho, собственный домен — любой аккаунт с IMAP/SMTP. Vault работает поверх существующей почты и не создаёт новой.</p>
+      </div>
+      <div class="step">
+        <span class="tag">шаг 2</span>
+        <h3>Обмениваетесь ключами</h3>
+        <p>Криптографические ключи генерируются на устройстве. Для верификации — QR-код или отпечаток ключа. Приватный ключ не покидает устройство.</p>
+      </div>
+      <div class="step">
+        <span class="tag">шаг 3</span>
+        <h3>Пишете как в обычном чате</h3>
+        <p>Сообщение шифруется и уходит письмом. У получателя расшифровывается автоматически. Для провайдера это просто непрозрачные данные.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="background:var(--bg-soft)">
+  <div class="container">
+    <h2 class="center">Функции</h2>
+    <p class="sub center">Всё, что нужно для повседневного общения — и ничего лишнего.</p>
+    <div class="grid3">
+      <div class="card"><span class="icon">🔐</span><h3>Группы до 50</h3><p>Зашифрованные групповые чаты с общим ключом группы.</p></div>
+      <div class="card"><span class="icon">📞</span><h3>Звонки (бета)</h3><p>Голосовые звонки и видеозвонки поверх почтовой учётной записи: кодек Opus, видео VP8, шифрование медиа-потока XChaCha20.</p></div>
+      <div class="card"><span class="icon">⏱️</span><h3>Исчезающие сообщения</h3><p>Сообщения, которые самоуничтожаются через заданное время.</p></div>
+      <div class="card"><span class="icon">🖼️</span><h3>Медиа и вложения</h3><p>Фото, документы, файлы — зашифрованно, без загрузки в облако.</p></div>
+      <div class="card"><span class="icon">📊</span><h3>Голосования</h3><p>Опросы в группах: до 10 вариантов, голоса зашифрованы, результаты видны всем.</p></div>
+      <div class="card"><span class="icon">🔋</span><h3>Экономный режим</h3><p>Мгновенная доставка через релей без постоянного фонового соединения: батарея целая, уведомления на месте. Пуши — через UnifiedPush, без Google-сервисов.</p></div>
+      <div class="card"><span class="icon">↪️</span><h3>Пересылка и черновики</h3><p>Пересылайте сообщения в другие чаты; недописанное сообщение сохранится и дождётся вас.</p></div>
+      <div class="card"><span class="icon">📍</span><h3>Гео и папки</h3><p>Отправка точки на карте (OpenStreetMap); папки для чатов, архив и «без звука» по каждому чату.</p></div>
+      <div class="card"><span class="icon">🎨</span><h3>6 тем оформления</h3><p>Тёмные, светлые и акцентные темы — от строгой до комфортной.</p></div>
+      <div class="card"><span class="icon">🌍</span><h3>3 языка</h3><p>Русский, английский, китайский — переключение прямо в приложении, без перезагрузки.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="guide">
+  <div class="container">
+    <h2 class="center">Руководство: установка и настройка</h2>
+    <p class="sub center">От установки до звонка — пять шагов. Вся настройка — в самом приложении, ничего регистрировать не нужно.</p>
+
+    <details open>
+      <summary>1. Установка приложения</summary>
+      <p><b>Android.</b> Скачайте APK со страницы «Скачать» (или в приложении: Настройки → Помощь → «Проверить обновление»). При установке система спросит разрешение «устанавливать из этого источника» — разрешите и подтвердите установку. Обновления: та же кнопка покажет новую версию и ссылку на APK.</p>
+      <p><b>Windows / Linux.</b> Распакуйте архив и запустите исполняемый файл. Установка не требуется, данные хранятся рядом с профилем пользователя.</p>
+      <p><b>Что лежит где.</b> Ключи шифрования, история чатов и настройки — только на вашем устройстве (локальная база SQLite). Ни на серверах Vault (их нет), ни в облаке их копий нет — сразу после первого запуска включите резервное копирование ключей в «Настройки → Ключи».</p>
+    </details>
+
+    <details>
+      <summary>2. Вход: ваша почта как транспорт</summary>
+      <p>Аккаунт — это ваш обычный email. Выберите провайдера из списка (Gmail, Яндекс, Mail.ru, Zoho, Outlook, iCloud, GMX, WEB.DE, Fastmail, Rambler и другие — серверы подставятся автоматически; для «Другого» впишите IMAP/SMTP вручную), введите адрес и пароль.</p>
+      <p>Для Gmail и iCloud может понадобиться «пароль приложения» вместо обычного — создайте его в настройках безопасности аккаунта провайдера. Пароль хранится только на вашем устройстве в зашифрованном виде; галочка «Запомнить на этом устройстве» включает автоматический вход.</p>
+      <p>Регистрация ни у Vault, ни где-либо ещё не нужна: письма ходят между вашими почтовыми ящиками, Vault-серверов не существует.</p>
+      <p><b>Совет: заведите отдельный «чистый» ящик.</b> Почта для Vault — только транспорт, и лучше, если это будет ящик, не используемый для обычной переписки: так списки писем, уведомления и фильтры провайдера не будут пересекаться с личной почтой, а вся переписка Vault будет лежать отдельно.</p>
+      <p><b>Почту можно сменить в любой момент.</b> Настройки → «Сменить почту»: контакты и группы сохранятся — ключи шифрования не привязаны к адресу. После смены отправьте сообщение или профиль, и собеседники узнают новый адрес автоматически.</p>
+    </details>
+
+    <details>
+      <summary>3. Ключи и добавление собеседника</summary>
+      <p>Ключи шифрования создаются автоматически при первом запуске. Чтобы начать переписку, добавьте собеседника — двумя способами:</p>
+      <p><b>QR-код (личная встреча).</b> Вы и собеседник открываете «Ключи» (🔗) и показываете/сканируете QR друг друга. Самый надёжный вариант: ключи не проходят через какую-либо сеть.</p>
+      <p><b>По id участника (на расстоянии).</b> Обменяйтесь кодами в любом удобном канале — при желании сверьте отпечаток ключа (40 шестнадцатеричных символов) голосом или при встрече.</p>
+      <p>После добавления отпечаток собеседника фиксируется: приложение предупредит, если ключ неожиданно изменится.</p>
+    </details>
+
+    <details>
+      <summary>4. Чаты: сообщения, файлы, группы</summary>
+      <p>Переписка устроена как в обычном мессенджере: сообщения доставляются через IMAP IDLE за секунды, статусы «отправлено/доставлено» видны под сообщением. Можно отвечать с цитатой, редактировать и удалять свои сообщения у всех участников.</p>
+      <p><b>«Удалить у меня».</b> Долгое нажатие (на телефоне) или правый клик (на компьютере) по любому сообщению — включая записи о звонках — открывает меню с пунктом «Удалить у меня»: сообщение исчезает только у вас, у собеседника остаётся. Так можно почистить чат от всего лишнего, не мешая другой стороне.</p>
+      <p><b>Вложения и голосовые.</b> Фото, документы, голосовые сообщения — шифруются так же, как текст, и не загружаются ни в какие облака.</p>
+      <p><b>Группы.</b> «+» в списке чатов → «Создать группу»: участники приглашаются по тем же ключам, ключ группы шифруется для каждого отдельно. До 50 участников, есть роли и закрепление сообщений.</p>
+      <p><b>Исчезающие сообщения.</b> В чате задайте таймер — сообщения будут удаляться у всех участников через выбранное время.</p>
+      <p><b>Автоочистка.</b> Настройки → Чаты: можно удалять с устройства сообщения старше 1/7/30/365 дней — история на устройстве, но не на почтовом сервере.</p>
+    </details>
+
+    <details>
+      <summary>Каналы: вещание для подписчиков</summary>
+      <p><b>Что это.</b> Канал — широковещательный чат: автор публикует посты, подписчики только читают. Подписчики не видят друг друга и не знают адрес автора; автор не знает адресов «анонимных» подписчиков — приватность в обе стороны, как и во всём Vault.</p>
+      <p><b>Создать.</b> Кнопка 📣 в шапке списка чатов → имя и описание. После создания нажмите «Поделиться» — скопируется ссылка подписки (vault://join-channel…): отправьте её в чат, группу или выложите где угодно.</p>
+      <p><b>Подписаться.</b> Кнопка 🔗 рядом с 📣 → вставьте ссылку канала. Подписка мгновенна: ключ канала приходит вместе со ссылкой, никакого подтверждения автору не нужно.</p>
+      <p><b>Доставка.</b> Посты летят через релей Vault (один конверт на всех подписчиков — мгновенно) и, если вы отправили автору «приветствие» (hello) или автор добавил вас вручную, дублируются почтой. Если релей недоступен, известные подписчики получают пост письмом — доставка не теряется. Уведомления о новых постах — как о групповых сообщениях.</p>
+      <p><b>Ограничения превью-версии.</b> Функция помечена как экспериментальная: пока только текстовые посты, без загрузки файлов в постах; аватар и описание канала настраивает автор (ссылка остаётся валидной после смены имени). Удаление канала убирает его только у вас (локальная подписка).</p>
+    </details>
+
+    <details>
+      <summary>Боты (экспериментально)</summary>
+      <p><b>Кто такой бот в Vault.</b> Это обычный аккаунт Vault — та же почта, те же ключи, тот же шифрованный формат. Никаких «ботовых API» и привилегий на сервере: переписка с ботом идёт по тем же E2E-каналам, что и с человеком. Отличие только на стороне бота: программа-слушатель расшифровывает входящие, отправляет их вашему ИИ-ассистенту и присылает ответ.</p>
+      <p><b>Как пользоваться.</b> Добавьте бота как обычный контакт (QR или ссылка-приглашение от владельца бота) и напишите ему — ответ придёт так же, как от человека, с той же задержкой доставки (релей — секунды, почта — минуты). Скриншоты, уведомления, пересылка — всё работает как в обычном чате.</p>
+      <p><b>Экспериментальный статус.</b> Публичного ассистента пока нет; вы можете подключить собственного бота (инструкция для разработчиков — в репозитории, режим <code>vault --listen</code>). Приватность: владелец бота видит ровно то же, что любой собеседник, — текст сообщений с момента обмена ключами; сервер Vault не видит ничего.</p>
+    </details>
+
+    <details>
+      <summary>5. Звонки (бета)</summary>
+      <p>Голосовые звонки работают поверх той же почтовой учётной записи, без отдельных серверов. Включите в «Настройки → Экспериментальные функции» переключатель звонков — в чате появится кнопка с телефонной трубкой.</p>
+      <p>Звонок: собеседник онлайн → гудки и разговор; оффлайн — увидит «Пропущенный звонок». Пропущенные и завершённые звонки фиксируются в чате как отдельные записи, их тоже можно убрать пунктом «Удалить у меня».</p>
+      <p><b>После принятия вызова разговор начинается не сразу.</b> Когда вы нажали «Принять», приложение устанавливает прямое шифрованное соединение между устройствами (обмен настройками сессии через почту): обычно это занимает несколько секунд, и на экране всё это время видно «Соединение…». Дождитесь, пока статус сменится на активный разговор — голос появится сразу после установления соединения. Это нормально и не означает, что звонок не работает.</p>
+      <p>Медиа-поток шифруется XChaCha20, кодек — Opus (как в WhatsApp). В настройках можно выбрать качество звука и рингтоны. Звонки — бета: на части сетей/устройств возможны ограничения.</p>
+      <p><b>Видео.</b> В активном звонке нажмите кнопку камеры в ряду управления — собеседник увидит вас, а вы его. Кадры идут по тому же защищённому пути, что и голос (VP8, E2E-шифрование), без отдельных серверов. Камера включается по желанию в каждом звонке; если камера недоступна или вы запретили к ней доступ — звонок остаётся голосовым, видео собеседника всё равно видно. Видео можно выключить той же кнопкой прямо во время разговора.</p>
+    </details>
+
+    <details>
+      <summary>Режимы доставки и уведомления</summary>
+      <p>Vault работает в двух режимах — переключатель «Экономный режим» в настройках.</p>
+      <p><b>Классический.</b> Приложение держит постоянное соединение с почтовым ящиком (IMAP IDLE): сообщения появляются за секунды, работает фоновая служба с иконкой в шторке. Доставку ускоряет релей Vault — шифрованная копия каждого сообщения идёт напрямую, кто первый доставил.</p>
+      <p><b>Экономный.</b> Фоновая служба и постоянное соединение отключаются — батарея почти не тратится. Доставка: релей + редкая проверка почты раз в минуту; пока приложение открыто — так же мгновенно, как в классике. Когда приложение закрыто, уведомления приходят системным пушем: поставьте любое UnifiedPush-приложение (например, ntfy) — Vault сам предложит настроить его при включении экономного режима. С 0.1.164 умный пуш: если приложение живёт и само проверяет релей, системный пуш не дублируется — ровно одно уведомление на сообщение.</p>
+      <p><b>Релей.</b> Ускоритель доставки (vault-msg.ru/relay) — единственный опциональный серверный компонент. Он видит только зашифрованные конверты и хранит их до 24 часов, потом удаляет; содержимое и адреса скрыты. Бесплатный лимит — 100 конвертов в сутки на аккаунт (обычному человеку хватает с запасом); при исчерпании доставка тихо продолжается по почте, без потери сообщений. Релей можно выключить в настройках — приложение продолжит работать чисто по почте.</p>
+    </details>
+
+    <details>
+      <summary>Резервные копии и перенос на новое устройство</summary>
+      <p>В «Настройки → Ключи» есть экспорт/импорт хранилища ключей, а также ключ восстановления (мнемоническая фраза). С его помощью на новом устройстве восстанавливаются ключи и доступ к аккаунту — история чатов при этом остаётся в почтовом ящике и локальных копиях.</p>
+    </details>
+
+    <details>
+      <summary>Голосования, пересылка, черновики, гео и папки</summary>
+      <p><b>Голосование.</b> Откройте группу и нажмите кнопку с диаграммой в ряду кнопок под полем ввода (в личных чатах кнопки опроса нет). Задайте вопрос и два или больше варианта (до 10) — кнопка «Отправить» активна, когда заполнены вопрос и минимум два варианта. Участники видят опрос карточкой в чате и голосуют одним нажатием; голос можно отдать один раз. Голос уходит отдельным зашифрованным письмом, итоги собираются в карточке опроса у всех участников.</p>
+      <p><b>Пересылка.</b> Долгое нажатие (на телефоне) или правый клик (на компьютере) по сообщению → «Переслать» → выберите чат из списка (контакты и группы, кроме текущего). Получатель увидит текст с пометкой «Переслано от …». Опросы и записи о звонках пересылать нельзя.</p>
+      <p><b>Черновики.</b> Недописанное сообщение не пропадает: при уходе в другой чат текст сохраняется для этого чата и восстанавливается в поле ввода, когда вы вернётесь. Черновики хранятся только на устройстве.</p>
+      <p><b>Гео-сообщение (Android).</b> Кнопка с меткой на карте под полем ввода отправляет текущую точку сообщением «Я здесь: …» со ссылкой на OpenStreetMap — ссылка кликабельна у всех получателей, включая другие платформы. Если определить местоположение не удалось, появится уведомление.</p>
+      <p><b>Папки чатов, архив, без звука.</b> Долгое нажатие (правый клик) по чату в списке → меню: «Без звука» (уведомления отключены), архив, «Папка» — выбрать существующую или создать новую (имя до 24 символов). Созданные папки появляются лентой чипов над списком чатов: тап по чипу фильтрует список по папке, повторный тап снимает фильтр.</p>
+      <p><b>Блокировка контакта.</b> Скройте нежелательного собеседника, не теряя переписку: долгое нажатие (правый клик) по чату в списке → «Заблокировать» — или правый клик по чужому сообщению (в том числе в группе) → «Заблокировать». В заблокированном чате появляется красный баннер, отправка сообщений отключена; новые сообщения и звонки от контакта не показываются и не уведомляются. В настройках группы у участника есть кнопка ⊘ — то же самое для сообщений только внутри группы. Блокировка работает на вашем устройстве (шифрование не позволяет серверу фильтровать письма) и действует на все адреса собеседника, включая смену почты. Разблокировать можно из того же меню или кнопкой на баннере в открытом чате. Сообщения, отправленные пока блок был активен, не восстанавливаются — они не сохранялись. Старая переписка остаётся видимой.</p>
+      <p><b>Зелёная точка «в сети».</b> У контакта в списке может гореть зелёная точка — собеседник сейчас в приложении. По умолчанию она выключена: включите «Настройки → Приватность → Показывать, что я онлайн» — и ваши собеседники будут видеть вашу активность (пассивно точка появляется, только если вы сами отправили сообщение). Сигнал идёт тем же зашифрованным каналом, что и сообщения, отдельным адресам получателей наружу ничего не раскрывается.</p>
+    </details>
+  </div>
+</section>
+
+<section id="security">
+  <div class="container">
+    <h2 class="center">Безопасность</h2>
+    <p class="sub center">Ни одного постороннего сервера между вами и получателем.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Слой</th><th>Технология</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>Обмен ключами</td><td><span class="mono">X25519</span> — эфемерный обмен, сеансовые ключи на диалог</td><td><span class="status">в релизе</span></td></tr>
+          <tr><td>Шифрование сообщений</td><td><span class="mono">XChaCha20-Poly1305</span> — AEAD с аутентификацией</td><td><span class="status">в релизе</span></td></tr>
+          <tr><td>Ключ шифрования диалога</td><td><span class="mono">X25519 + SHA-256 (HKDF-подобный)</span> — эфемерный обмен, сеансовые ключи</td><td><span class="status">в релизе</span></td></tr>
+          <tr><td>Медиа звонков</td><td><span class="mono">XChaCha20</span> — шифрование потока, голос Opus, видео VP8</td><td><span class="status">в релизе</span></td></tr>
+          <tr><td>Квантово-устойчивый обмен</td><td><span class="mono">ML-KEM-768 + X25519</span> — гибридная схема (FIPS 203)</td><td><span class="status">в релизе</span></td></tr>
+          <tr><td>Метаданные на сервере</td><td colspan="2">Отсутствуют: серверы — это ваши IMAP/SMTP, там только зашифрованные тела писем</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap" style="background:var(--bg-soft)">
+  <div class="container">
+    <h2 class="center">План развития</h2>
+    <p class="sub center">Прозрачно о том, что уже есть и что дальше.</p>
+    <div class="timeline">
+      <div class="tl-item done">
+        <h3>Ядро обмена <span class="chip done">готово</span></h3>
+        <p>Шифрование, контакты, QR-обмен ключами, группы, вложения, звонки (бета) — Android и десктоп.</p>
+      </div>
+      <div class="tl-item done">
+        <h3>Публичный релиз <span class="chip done">3 сентября</span></h3>
+        <p>Репозиторий открыт (github.com/kmakan/vault, AGPL-3.0), APK и установщики опубликованы, этот сайт, анонсы в тематических сообществах.</p>
+      </div>
+      <div class="tl-item done">
+        <h3>Квантово-устойчивое шифрование <span class="chip done">готово</span></h3>
+        <p>Гибридный обмен ключами ML-KEM-768 + X25519 (FIPS 203) — защита от атак квантовых компьютеров уже в релизе.</p>
+      </div>
+      <div class="tl-item">
+        <h3>Каналы и мини-приложения <span class="chip plan">в плане</span></h3>
+        <p>Платные каналы, маркетплейс мини-приложений, premium-функции — по дорожной карте 2026 года.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="container">
+    <h2 class="center">Скачать</h2>
+    <p class="sub center">Актуальная версия — 0.1.294 (14 ноября 2026). Обновления — в приложении: Настройки → Помощь → «Проверить обновления».</p>
+    <div class="download-cards">
+      <div class="dl-card">
+        <span class="icon">🤖</span>
+        <h3>Android</h3>
+        <p>APK, Android 7+ (minSdk 24)</p>
+        <a class="btn btn-primary" href="https://vault-msg.ru/releases/vault-0.1.294.apk">Скачать APK v0.1.294</a>
+        <div class="req">Подписан release-ключом · <a href="https://github.com/kmakan/vault/releases/tag/v0.1.294">другие сборки</a></div>
+        <div class="req">Подписка Pro покупается прямо в приложении: Настройки → «Приватность» → «Тариф Pro». Сайт оплаты — <a href="/pay.html">vault-msg.ru/pay.html</a> (для сборок из магазина)</div>
+      </div>
+      <div class="dl-card">
+        <span class="icon">💻</span>
+        <h3>Linux</h3>
+        <p>tar.gz · deb/rpm в релизах GitHub</p>
+        <a class="btn btn-primary" href="https://vault-msg.ru/releases/vault-desktop-0.1.294-linux-x86_64.tar.gz">Скачать v0.1.294</a>
+        <div class="req">Windows — в разработке</div>
+      </div>
+      <div class="dl-card">
+        <span class="icon">🍎</span>
+        <h3>macOS</h3>
+        <p>В разработке — следите за планом развития</p>
+        <a class="btn btn-ghost" href="#roadmap">План развития</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="container">
+    <h2 class="center">Тарифы</h2>
+    <p class="sub center">Приложение и обмен сообщениями бесплатны. Платные тарифы ускоряют доставку через релей и повышают лимиты; если лимит исчерпан, письма уходят обычной почтой.</p>
+    <div class="grid3">
+      <div class="card">
+        <h3>Free — 0 ₽</h3>
+        <p>До 100 действий релея в сутки, одно устройство. Шифрование и пост-квантовые ключи — бесплатно навсегда.</p>
+      </div>
+      <div class="card" style="border-color:rgba(245,158,11,.45)">
+        <h3>Pro — 149 ₽/мес</h3>
+        <p>Или 1 490 ₽ за год: до 1 000 действий релея в сутки, три устройства, поддержка по почте.</p>
+      </div>
+      <div class="card">
+        <h3>Business — 499 ₽/мес</h3>
+        <p>Или 4 990 ₽ за год: до 10 000 действий в сутки, десять устройств, хранение конверта 72 ч.</p>
+      </div>
+    </div>
+    <p class="center" style="margin-top:28px"><a class="btn btn-primary" href="/pricing.html">Подробнее о тарифах</a></p>
+  </div>
+</section>
+
+<section id="faq" style="background:var(--bg-soft)">
+  <div class="container">
+    <h2 class="center">Частые вопросы</h2>
+    <p class="sub center">Коротко — о том, что спрашивают чаще всего.</p>
+    <details>
+      <summary>Почему почта? Это же медленно</summary>
+      <p>Vault держит постоянное IMAP-соединение (IDLE), поэтому сообщения приходят так же быстро, как в обычном мессенджере. Почта — только транспорт: она ничего не хранит и не обрабатывает.</p>
+    </details>
+    <details>
+      <summary>Что видит почтовый провайдер?</summary>
+      <p>Только факт отправки письма между двумя адресами и размер зашифрованного блоба. Тема и тело письма не содержат осмысленных данных.</p>
+    </details>
+    <details>
+      <summary>Сколько это стоит?</summary>
+      <p>Приложение и обмен сообщениями бесплатны. Платные тарифы ускоряют доставку через релей: Pro — 149 ₽ в месяц или 1 490 ₽ в год (до 1 000 действий в сутки), Business — 499 ₽ в месяц или 4 990 ₽ в год (до 10 000 действий). Подробности — на странице <a href="/pricing.html">«Тарифы»</a>.</p>
+    </details>
+    <details>
+      <summary>А если почтовый провайдер заблокирует аккаунт?</summary>
+      <p>Аккаунт — ваш. В любой момент подключите другую почту: история переписки хранится локально на устройстве и не привязана к провайдеру.</p>
+    </details>
+    <details>
+      <summary>Чем это отличается от PGP?</summary>
+      <p>Vault работает как мессенджер: автоматический обмен ключами, группы, звонки, вложения — без ручного управления ключами. Криптография современная (XChaCha20-Poly1305), а не из 90-х.</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault. Шифрование — на устройстве. Серверов — ноль.</div>
+    <div class="links">
+      <a href="/pricing.html">Тарифы</a>
+      <a href="/offer.html">Оферта</a>
+      <a href="/requisites.html">Реквизиты</a>
+      <a href="/privacy.html">Конфиденциальность</a>
+      <a href="/pd.html">Персональные данные</a>
+      <a href="/terms.html">Условия</a>
+      <a href="https://github.com/kmakan/vault">Исходный код</a>
+      <a href="https://gitverse.ru/maksim/vault">Зеркало</a>
+      <a href="mailto:vault-msg@ya.ru">Почта</a>
+      <a href="https://vault-msg.tech">English site</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

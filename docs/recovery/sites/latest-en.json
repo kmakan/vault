@@ -1,0 +1,8 @@
+{
+  "version": "0.1.294",
+  "released": "2026-11-14",
+  "changelog": "Buying Pro is back inside the app: the “Pro plan” section shows period buttons again (1, 3, 6, 9 and 12 months) with prices served by the backend. Payment is by card via YooKassa (SBP, SberPay, YooMoney), and the subscription activates in the app automatically after a successful payment.\n\nNote about the previous build: 0.1.293 on the site was built in store mode — with no purchase buttons and no payment code, so Pro could not be bought from it. 0.1.294 is the direct-channel build: it has the purchase flow.\n\nThe Android 7–9 blank-screen fix from 0.1.293 is preserved: the bundle is pinned to ES2018 and the syntax check is part of the build itself.\n\nThe update preserves data: same signing key, installed over — chats, contacts, groups, channels, settings and purchased tokens stay in place.",
+  "apk_url": "https://vault-msg.ru/releases/vault-0.1.294.apk",
+  "desktop_url": "https://vault-msg.ru/releases/vault-desktop-0.1.294-linux-x86_64.tar.gz",
+  "notes": "Install the APK manually; store versions will follow later. The Linux build is 0.1.294."
+}

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Data Processing — Vault</title>
+<meta name="description" content="Vault data controller details: who the controller is, what data is processed, legal bases, storage location, deletion and contact of the responsible person.">
+<meta name="robots" content="index, follow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.tech/pd.html">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:860px;margin:0 auto;padding:0 24px}
+
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:26px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+
+main{padding:56px 0 80px}
+h1{font-size:34px;font-weight:800;letter-spacing:-.02em;margin-bottom:10px}
+.updated{color:var(--muted);font-size:14px;margin-bottom:34px}
+h2{font-size:21px;font-weight:700;margin:38px 0 12px;padding-top:8px}
+h2:first-of-type{margin-top:0}
+h3{font-size:16.5px;font-weight:650;margin:22px 0 8px}
+p{color:var(--text);margin-bottom:13px}
+ul,ol{margin:0 0 14px 22px}
+li{margin-bottom:7px}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin:16px 0}
+.card p:last-child{margin-bottom:0}
+.highlight{border-color:rgba(245,158,11,.35);background:linear-gradient(180deg,rgba(245,158,11,.05),transparent)}
+dl{display:grid;grid-template-columns:240px 1fr;gap:10px 18px;margin:0}
+dt{color:var(--muted);font-size:14px}
+dd{margin:0}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:14px 0}
+th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:none}
+code{font-family:var(--font-mono);font-size:13px;color:var(--gold);background:var(--bg-soft);padding:2px 6px;border-radius:5px}
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--bg-soft)}
+
+footer{border-top:1px solid var(--border);padding:40px 0 56px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px;flex-wrap:wrap}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+@media(max-width:560px){
+  h1{font-size:27px}
+  h2{font-size:19px}
+  main{padding:36px 0 60px}
+  dl{grid-template-columns:1fr;gap:2px}
+  dt{margin-top:10px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M16 2 4 7v9c0 7.2 5.1 12.4 12 14 6.9-1.6 12-6.8 12-14V7L16 2z" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M11 15.5l3.5 3.5L21 12" stroke="#8b5cf6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Vault
+    </a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a href="/#security">Security</a>
+      <a href="/#download">Download</a>
+      <a href="/">Home</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="container">
+
+  <h1>Personal Data Processing</h1>
+  <p class="updated">Revision dated 10 November 2026. Supplements the <a href="/privacy.html">Privacy Policy</a>.</p>
+
+  <div class="card highlight">
+    <p>This page summarises the data controller and personal data processing in the Vault app. It serves both users and app stores that request confirmation of compliance with Federal Law No. 152-FZ.</p>
+  </div>
+
+  <h2>1. Data controller</h2>
+  <div class="card">
+    <dl>
+      <dt>Controller</dt>
+      <dd>Maksim A. Kozlov</dd>
+      <dt>Legal status</dt>
+      <dd>Natural person applying the special tax regime “Professional Income Tax” (self-employed). Registered 29.10.2026</dd>
+      <dt>INN</dt>
+      <dd><span class="mono">774338097699</span></dd>
+      <dt>Person responsible for personal data processing</dt>
+      <dd>Maksim A. Kozlov — contact: <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a></dd>
+      <dt>Contact for data subject requests</dt>
+      <dd><a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> (reply within 10 business days)</dd>
+      <dt>Notification to Roskomnadzor</dt>
+      <dd>The personal data processing notification (Art. 22 of Law No. 152-FZ) was filed with Roskomnadzor via the ESIA service on <strong>10.11.2026</strong>, notification number <span class="mono">100494543</span>. A separate cross-border personal data transfer notification (Art. 12 of Law No. 152-FZ) was filed the same day, number <span class="mono">100494565</span></dd>
+      <dt>Roskomnadzor operators registry</dt>
+      <dd>The operator is entered in the registry of personal data operators (Art. 22 of Law No. 152-FZ): <strong>registration number 168588/77 dated 10.11.2026</strong>. The entry can be verified in the Roskomnadzor registry (<a href="https://pd.rkn.gov.ru/operators-registry/operators-list/" rel="noopener">pd.rkn.gov.ru/operators-registry/operators-list</a>) by notification number <span class="mono">100494543</span>.</dd>
+      <dt>Storage location</dt>
+      <dd>Russian Federation (delivery server in Moscow) and users' devices</dd>
+    </dl>
+  </div>
+
+  <h2>2. Categories of personal data</h2>
+  <ul>
+    <li>user's email address (also the sign-in identifier — there is no separate account);</li>
+    <li>name or nickname the user chooses for the profile;</li>
+    <li>email addresses of contacts the user adds;</li>
+    <li>technical pseudonymous delivery identifier (derived from the public key fingerprint);</li>
+    <li>IP address (hashed) and technical request counters;</li>
+    <li>device push token;</li>
+    <li>payment details: payment ID, amount, date, plan, status;</li>
+    <li>location — only if the user sends an SOS message (coordinates are inserted by the device; the service does not receive them);</li>
+    <li>support requests: email address and message content.</li>
+  </ul>
+  <p><strong>Not processed:</strong> special categories of personal data (race, health, political views, etc.), biometrics, criminal record data; conversation content and encryption keys (they remain on the device).</p>
+
+  <h2>3. Purposes</h2>
+  <ul>
+    <li>delivering encrypted messages between users (the core service);</li>
+    <li>operating the delivery service: envelope routing, daily quotas, spam and overload protection;</li>
+    <li>push notifications about new events (without message content);</li>
+    <li>accepting and recording subscription payments, issuing receipts (self-employed tax regime);</li>
+    <li>replying to user requests.</li>
+  </ul>
+  <p>There is no processing for advertising, marketing profiling or analytics; the app contains no advertising or analytics SDKs.</p>
+
+  <h2>4. Legal bases</h2>
+  <ul>
+    <li>Art. 6(1)(5) of Law No. 152-FZ — processing is necessary for a contract to which the data subject is a party (public offer);</li>
+    <li>Art. 6(1)(1) — consent for optional features (SOS with coordinates, support, optional notifications);</li>
+    <li>Art. 6(1)(2) and Law No. 422-FZ — compliance with tax accounting obligations.</li>
+  </ul>
+
+  <h2>5. How data is processed</h2>
+  <p>Mixed processing: with and without automation. Operations: collection, recording, systematisation, accumulation, storage, rectification, retrieval, use, transfer (provision, access), blocking, deletion, destruction.</p>
+  <p>Security measures: TLS in transit; end-to-end encryption of content; keys only on the device; restricted server access; encrypted envelopes deleted within 24 hours; secrets kept outside the repository; in case of an incident — notification to Roskomnadzor within the statutory period (24 hours) and notification of affected users.</p>
+
+  <h2>6. Third parties and cross-border transfer</h2>
+  <ul>
+    <li>the user's email provider — processes messages as ordinary email;</li>
+    <li>the payment provider — processes the payment and issues the receipt;</li>
+    <li>the push notification provider — Google LLC (USA), Firebase Cloud Messaging: receives the technical signal and pseudonymous device token, without message content and without the email address;</li>
+    <li>authorised bodies — only upon a lawful request.</li>
+  </ul>
+  <p>Data is never sold or shared for advertising.</p>
+  <p><strong>Cross-border transfer (Art. 12 of Federal Law No. 152-FZ).</strong> The only recipient outside Russia is Google LLC (USA), Firebase Cloud Messaging. Data involved: the device push token and a technical “new event” signal; the email address, name and message content are not transferred. Purpose: delivering a notification while the app is closed. Legal bases: performance of the contract with the data subject (Art. 6(1)(5)) and the subject's consent; the transfer is declared in the personal data processing notification filed with Roskomnadzor. Disabling push in the app or system stops the transfer.</p>
+
+  <h2>7. Retention</h2>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Data</th><th>Retention</th></tr>
+    <tr><td>Encrypted envelope on the relay</td><td>up to 24 hours</td></tr>
+    <tr><td>Technical counters and IP hash</td><td>up to 30 days (IP hash in memory — until service restart)</td></tr>
+    <tr><td>Push token</td><td>until re-registration, app uninstall or push service rejection</td></tr>
+    <tr><td>Payment records</td><td>4 years (tax law)</td></tr>
+    <tr><td>Support requests</td><td>until closed and for a reasonable period afterwards</td></tr>
+    <tr><td>Local data on the device</td><td>until the user deletes it</td></tr>
+  </table>
+  </div>
+
+  <h2>8. Data subject rights and deletion</h2>
+  <p>A user may request information about processing, demand rectification, blocking or destruction, and withdraw consent. Requests: <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> from the address concerned.</p>
+  <ul>
+    <li>local data is deleted in the app (Settings → Privacy/Data) or together with the app;</li>
+    <li>server-side technical records (pseudonymous identifier, push token) are deleted on request within 30 days;</li>
+    <li>encrypted envelopes are deleted automatically within 24 hours;</li>
+    <li>payment records are retained by law and are not deleted early.</li>
+  </ul>
+
+  <h2>9. Information for app stores</h2>
+  <p>For verification of personal data requirements (e.g. section 5.2 of the RuStore moderation rules):</p>
+  <ul>
+    <li>the data controller is identified and the responsible person is appointed (section 1);</li>
+    <li>the privacy policy is available from the store listing and inside the app (Settings → Privacy) — <a href="/privacy.html">/privacy.html</a>;</li>
+    <li>data categories and purposes are disclosed (sections 2–3);</li>
+    <li>permissions (camera, microphone, location, notifications, files) are justified by functionality and requested when used (section 8 of the policy);</li>
+    <li>legal bases are stated (section 4);</li>
+    <li>localisation is observed: the storage server is in Russia (section 6);</li>
+    <li>cross-border transfer is disclosed: recipient Google LLC (USA) — push token only, no email address or content (section 6);</li>
+    <li>the deletion procedure is described and available in the app (section 8);</li>
+    <li>there is no hidden profiling and no advertising/analytics SDKs (section 3).</li>
+  </ul>
+
+  <h2>10. Changes</h2>
+  <p>The current revision is at <a href="https://vault-msg.tech/pd.html">vault-msg.tech/pd.html</a>. Changes to controller details are published the same day.</p>
+
+</div>
+</main>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault · Self-employed M. A. Kozlov · INN 774338097699</div>
+    <div class="links">
+      <a href="/">Home</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/requisites.html">Details</a>
+      <a href="mailto:vault-msg@ya.ru">Email</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

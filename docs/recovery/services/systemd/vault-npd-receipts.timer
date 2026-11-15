@@ -1,0 +1,12 @@
+[Unit]
+Description=Vault NPD receipts reconciliation, hourly
+
+[Timer]
+# Раз в час, не на круглой минуте: сверка дешёвая (два запроса), а чек
+# должен появляться вскоре после оплаты, а не на следующий день.
+OnCalendar=*-*-* *:17:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

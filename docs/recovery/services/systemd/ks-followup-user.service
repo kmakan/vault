@@ -1,0 +1,9 @@
+[Unit]
+Description=King Servers: выводы и просьба о перезагрузке ВМ, если ответа нет к 18:30
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.hermes/scripts/ks-followup-send.py
+TimeoutStartSec=180

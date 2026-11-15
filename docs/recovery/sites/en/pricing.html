@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pricing — Vault</title>
+<meta name="description" content="Vault pricing: free messaging, Pro and Business plans for accelerated relay delivery. Prices, limits, payment and refund terms.">
+<meta name="robots" content="index, follow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.tech/pricing.html">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:960px;margin:0 auto;padding:0 24px}
+
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:24px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+
+main{padding:56px 0 80px}
+h1{font-size:clamp(28px,4vw,38px);font-weight:800;letter-spacing:-.02em;margin-bottom:12px}
+.lead{color:var(--muted);font-size:17px;max-width:720px;margin-bottom:40px}
+h2{font-size:22px;font-weight:700;margin:44px 0 14px}
+h2:first-of-type{margin-top:0}
+p{color:var(--text);margin-bottom:13px}
+ul,ol{margin:0 0 14px 22px}
+li{margin-bottom:7px}
+.muted{color:var(--muted)}
+.note{font-size:14px;color:var(--muted)}
+
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:28px 0 8px}
+.plan{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:26px;display:flex;flex-direction:column}
+.plan.pop{border-color:rgba(245,158,11,.45);box-shadow:0 8px 40px rgba(245,158,11,.08)}
+.plan .tag{font-size:11.5px;font-family:var(--font-mono);color:var(--gold);border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:2px 8px;align-self:flex-start;margin-bottom:12px}
+.plan h3{font-size:20px;font-weight:800;margin-bottom:4px}
+.plan .price{font-size:28px;font-weight:800;margin:6px 0 2px}
+.plan .price small{font-size:14px;font-weight:500;color:var(--muted)}
+.plan .year{font-size:13.5px;color:var(--muted);margin-bottom:16px}
+.plan ul{list-style:none;margin:0 0 18px;padding:0;font-size:14.5px}
+.plan li{position:relative;padding-left:22px;margin-bottom:8px;color:var(--text)}
+.plan li::before{content:"✓";position:absolute;left:0;color:#34d399;font-weight:700}
+.plan .foot{margin-top:auto;font-size:13px;color:var(--muted)}
+
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:16px 0 8px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:none}
+td:first-child{font-weight:600;white-space:nowrap}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin:16px 0}
+.card p:last-child{margin-bottom:0}
+.highlight{border-color:rgba(245,158,11,.35);background:linear-gradient(180deg,rgba(245,158,11,.05),transparent)}
+
+footer{border-top:1px solid var(--border);padding:40px 0 56px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px;flex-wrap:wrap}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+@media(max-width:760px){
+  .plans{grid-template-columns:1fr}
+  .nav-links{display:none}
+  table{display:block;overflow-x:auto}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M16 2 4 7v9c0 7.2 5.1 12.4 12 14 6.9-1.6 12-6.8 12-14V7L16 2z" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M11 15.5l3.5 3.5L21 12" stroke="#8b5cf6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Vault
+    </a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a href="/pricing.html">Pricing</a>
+      <a href="/#download">Download</a>
+      <a href="/offer.html">Offer</a>
+      <a href="/requisites.html">Legal details</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <h1>Pricing</h1>
+    <p class="lead">The app and encrypted messaging are free. Paid plans accelerate delivery through the Vault relay and raise daily limits. If a limit is reached or a plan is not paid, messages are not lost — they are delivered by regular email, just slower.</p>
+
+    <div class="plans">
+      <div class="plan">
+        <div class="tag">FREE</div>
+        <h3>Free</h3>
+        <div class="price">0 ₽</div>
+        <div class="year">forever</div>
+        <ul>
+          <li>Messaging over email</li>
+          <li>Up to 100 relay actions per day (messages and calls)</li>
+          <li>1 device</li>
+          <li>Encryption and post-quantum keys</li>
+        </ul>
+        <div class="foot">Relay: envelope stored for 24 h</div>
+      </div>
+
+      <div class="plan pop">
+        <div class="tag">PRO</div>
+        <h3>Pro</h3>
+        <div class="price">149 ₽ <small>/ month</small></div>
+        <div class="year">or 1,490 ₽ for 12 months</div>
+        <ul>
+          <li>Up to 1,000 relay actions per day</li>
+          <li>Up to 3 devices per subscription</li>
+          <li>Up to 1,000 channel posts per day</li>
+          <li>Priority delivery through the relay</li>
+          <li>Email support</li>
+        </ul>
+        <div class="foot">Buy on the site: <a href="/pay.html">Pay for Pro</a></div>
+      </div>
+
+      <div class="plan">
+        <div class="tag">BUSINESS</div>
+        <h3>Business</h3>
+        <div class="price">499 ₽ <small>/ month</small></div>
+        <div class="year">or 4,990 ₽ for 12 months</div>
+        <ul>
+          <li>Up to 10,000 relay actions per day</li>
+          <li>Up to 10 devices per subscription</li>
+          <li>Up to 10,000 channel posts per day</li>
+          <li>Envelope stored on the relay for 72 h</li>
+          <li>Email support with escalation</li>
+        </ul>
+        <div class="foot">For teams and busy channels</div>
+      </div>
+    </div>
+
+    <h2>What exactly you pay for</h2>
+    <p>The paid service is access to extended limits and priority delivery through the Vault relay for the subscription period. The relay is a server that accepts an encrypted envelope and hands it to the recipient within seconds, without waiting for the message to travel through mail servers. The relay cannot see message contents: it only receives ciphertext.</p>
+    <p>The app, encryption, email-based messaging and core features stay free. Payment does not grant access to messages, keys or history — it only affects delivery speed and limits.</p>
+
+    <h2>Plan limits</h2>
+    <table>
+      <tr><th>Limit</th><th>Free</th><th>Pro</th><th>Business</th></tr>
+      <tr><td>Relay actions per day</td><td>100</td><td>1,000</td><td>10,000</td></tr>
+      <tr><td>Channel posts per day</td><td>100</td><td>1,000</td><td>10,000</td></tr>
+      <tr><td>Devices per subscription</td><td>1</td><td>3</td><td>10</td></tr>
+      <tr><td>Envelope storage on the relay</td><td>24 h</td><td>24 h</td><td>72 h</td></tr>
+    </table>
+    <p class="note">A "relay action" is one message sent through the relay or one call credential issued. The limit applies to the sender, not the recipient.</p>
+
+    <h2>How to pay</h2>
+    <ol>
+      <li>Open the app → Settings → Privacy → Pro plan and copy the payment code.</li>
+      <li>On the <a href="/pay.html">payment page</a> paste that code, choose a period — 1, 3, 6, 9 or 12 months — and pay by card (RUB, YooKassa).</li>
+      <li>Complete the payment on the secure provider page.</li>
+      <li>Return to the app: the subscription is fetched from the server automatically, no need to enter anything again.</li>
+    </ol>
+    <p class="note">For 3, 6 and 9 months the price is billed monthly; the discount applies only to the annual period (12 months for the price of 10). Exact prices are always computed by the server — the site and the app show the same number. Crypto orders are priced in US dollars.</p>
+    <p>Payments are accepted in Russian rubles. VAT is not applicable: the provider uses the special tax regime "Tax on Professional Income" (self-employed). A receipt is generated in the "My Tax" app.</p>
+    <p>Payment questions: <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a>.</p>
+
+    <h2>Access and delivery</h2>
+    <div class="card highlight">
+      <p><b>No shipping required.</b> The service is provided remotely: plan access is activated in the app automatically as soon as payment is confirmed. There is no physical delivery or pickup.</p>
+    </div>
+    <p>If access is not activated within 15 minutes after payment, email <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> with the payment date and amount. We will activate it manually.</p>
+
+    <h2>Term and renewal</h2>
+    <p>A subscription is valid for the period you choose at payment — 1, 3, 6, 9 or 12 months from the payment date. There is no automatic renewal: when the term ends, the plan reverts to free limits. To extend, pay again. Purchased days do not expire: if you pay for an extension in advance, the term is added to the current one.</p>
+
+    <h2>Refunds</h2>
+    <p>If the service was not provided (access not activated, duplicate payment, relay unavailable due to our fault), the amount paid is refunded in full. If a subscription was paid but not used, you may cancel and receive a full refund within 14 days of payment. For later cancellations, the unused period is refunded upon request.</p>
+    <p>Send a request to <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> with the payment date and amount. Refunds are made to the original payment method within 10 business days of receiving the request. Full terms are in the <a href="/offer.html">public offer</a>.</p>
+
+    <h2>Documents</h2>
+    <ul>
+      <li><a href="/offer.html">Public offer</a> — terms of paid services.</li>
+      <li><a href="/terms.html">Terms of Use</a> — rules for using the app.</li>
+      <li><a href="/privacy.html">Privacy Policy</a> — what data is processed.</li>
+      <li><a href="/requisites.html">Provider details</a> — name, tax ID, contacts.</li>
+    </ul>
+  </div>
+</main>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault · Self-employed Kozlov M. A. · INN 774338097699</div>
+    <div class="links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/offer.html">Offer</a>
+      <a href="/requisites.html">Legal details</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/terms.html">Terms</a>
+      <a href="mailto:vault-msg@ya.ru">Email</a>
+      <a href="https://vault-msg.ru">Русский сайт</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

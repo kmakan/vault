@@ -1,0 +1,14 @@
+[Unit]
+Description=Vault NPD receipts reconciliation, hourly (домашний IP)
+
+[Timer]
+# Раз в час, не на круглой минуте: сверка дешёвая (два запроса), а чек
+# должен появляться вскоре после оплаты, а не на следующий день.
+OnCalendar=*-*-* *:17:00
+# Машина владельца может быть выключена — догоняем пропущенный запуск
+# после включения, а не теряем сверку.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

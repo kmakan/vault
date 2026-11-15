@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vault — the messenger that needs no server</title>
+<meta name="description" content="Instant end-to-end encrypted messages over any email account. No storage servers, no metadata, no tracking. Android and desktop.">
+<meta property="og:title" content="Vault — the messenger that needs no server">
+<meta property="og:description" content="Instant end-to-end encrypted messages over any email account. No storage servers, no metadata, no tracking.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://vault-msg.tech">
+<meta property="og:image" content="/og-image.png">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.tech/">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:1080px;margin:0 auto;padding:0 24px}
+.center{text-align:center}
+
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:26px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:600;font-size:15px;border-radius:12px;padding:11px 22px;cursor:pointer;border:none;transition:transform .15s ease,box-shadow .15s ease,background .15s ease}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:linear-gradient(135deg,var(--gold),#f97316);color:#1a1206;box-shadow:0 4px 24px rgba(245,158,11,.25)}
+.btn-primary:hover{box-shadow:0 6px 32px rgba(245,158,11,.4);text-decoration:none}
+.btn-ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover{border-color:var(--muted);text-decoration:none}
+
+.hero{position:relative;padding:88px 0 72px;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:-40% 0 auto;height:520px;background:
+  radial-gradient(600px 300px at 20% 30%,rgba(245,158,11,.14),transparent 60%),
+  radial-gradient(600px 300px at 80% 20%,rgba(139,92,246,.14),transparent 60%);
+  pointer-events:none}
+.hero-grid{position:relative;display:grid;grid-template-columns:1.15fr .85fr;gap:48px;align-items:center}
+h1{font-size:clamp(32px,5vw,54px);line-height:1.15;font-weight:800;letter-spacing:-.02em}
+h1 .grad{background:linear-gradient(100deg,var(--gold),#f97316 45%,var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:clamp(17px,2.2vw,20px);color:var(--muted);margin:20px 0 30px;max-width:540px}
+.hero-cta{display:flex;gap:14px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 14px;margin-bottom:18px;background:var(--bg-soft)}
+.badge .dot{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 12px var(--gold)}
+.hero-art{position:relative}
+.hero-art .ring{position:absolute;inset:0;border-radius:50%;border:1px dashed rgba(139,92,246,.35);animation:spin 60s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hero-art .logo{position:relative;width:100%;max-width:340px;margin:0 auto;display:block;filter:drop-shadow(0 0 60px rgba(139,92,246,.25))}
+
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-top:56px}
+.stat{background:var(--bg-soft);padding:22px 18px;text-align:center}
+.stat b{display:block;font-size:26px;font-weight:800}
+.stat span{font-size:13px;color:var(--muted)}
+.stat:nth-child(1) b{color:var(--gold)}
+.stat:nth-child(2) b{color:var(--violet)}
+.stat:nth-child(3) b{color:#38bdf8}
+.stat:nth-child(4) b{color:#34d399}
+
+section{padding:84px 0}
+section h2{font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.02em;margin-bottom:14px}
+section .sub{color:var(--muted);font-size:17px;max-width:640px;margin:0 auto 52px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:26px}
+.card h3{font-size:18px;font-weight:700;margin-bottom:8px}
+.card p{font-size:14.5px;color:var(--muted)}
+.card .icon{font-size:26px;margin-bottom:12px;display:block}
+
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;counter-reset:step}
+.step{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:26px}
+.step::before{counter-increment:step;content:counter(step,decimal-leading-zero);position:absolute;top:22px;right:24px;font-size:44px;font-weight:800;color:transparent;-webkit-text-stroke:1px var(--border);font-family:var(--font-mono)}
+.step h3{font-size:17px;font-weight:700;margin-bottom:8px;position:relative;z-index:1}
+.step p{font-size:14.5px;color:var(--muted)}
+.step .tag{position:relative;z-index:1;display:inline-block;font-size:11.5px;color:var(--gold);border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:2px 8px;margin-bottom:12px;font-family:var(--font-mono)}
+
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-soft)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:640px}
+th,td{padding:14px 18px;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:none}
+td:first-child{font-weight:600;white-space:nowrap}
+td .mono{font-family:var(--font-mono);font-size:12.5px;color:var(--gold)}
+td .status{font-size:12px;color:#34d399}
+td .status.plan{color:var(--violet)}
+
+.timeline{max-width:760px;margin:0 auto;position:relative}
+.timeline::before{content:"";position:absolute;left:19px;top:8px;bottom:8px;width:2px;background:linear-gradient(var(--gold),var(--violet))}
+.tl-item{position:relative;padding:0 0 34px 62px}
+.tl-item:last-child{padding-bottom:0}
+.tl-item::before{content:"";position:absolute;left:11px;top:5px;width:18px;height:18px;border-radius:50%;background:var(--bg);border:3px solid var(--gold)}
+.tl-item.done::before{background:var(--gold)}
+.tl-item.now::before{border-color:var(--violet);background:var(--violet);box-shadow:0 0 16px rgba(139,92,246,.6)}
+.tl-item h3{font-size:17px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tl-item .chip{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:99px}
+.chip.done{background:rgba(52,211,153,.12);color:#34d399}
+.chip.now{background:rgba(139,92,246,.15);color:#a78bfa}
+.chip.plan{background:rgba(139,92,246,.08);color:var(--muted)}
+.tl-item p{font-size:14.5px;color:var(--muted);margin-top:6px;max-width:560px}
+
+.download-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.dl-card{background:linear-gradient(180deg,var(--card),var(--bg-soft));border:1px solid var(--border);border-radius:var(--radius);padding:30px;text-align:center;transition:border-color .15s ease}
+.dl-card:hover{border-color:rgba(245,158,11,.4)}
+.dl-card .icon{font-size:34px}
+.dl-card h3{font-size:18px;font-weight:700;margin:12px 0 6px}
+.dl-card p{font-size:13.5px;color:var(--muted);margin-bottom:18px}
+.dl-card .req{font-size:12px;color:var(--muted);margin-top:12px}
+
+details{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin-bottom:12px}
+details[open]{border-color:rgba(245,158,11,.35)}
+summary{cursor:pointer;font-weight:600;font-size:15.5px;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-size:20px;color:var(--muted);transition:transform .2s ease;flex:none}
+details[open] summary::after{transform:rotate(45deg);color:var(--gold)}
+details p{color:var(--muted);font-size:14.5px;margin-top:10px}
+
+footer{border-top:1px solid var(--border);padding:44px 0 60px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+@media(max-width:860px){
+  .hero-grid{grid-template-columns:1fr;text-align:center}
+  .lead{margin-left:auto;margin-right:auto}
+  .hero-cta{justify-content:center}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .grid3,.steps,.download-cards{grid-template-columns:1fr 1fr}
+  .nav-links{display:none}
+}
+@media(max-width:560px){
+  .grid3,.steps,.download-cards{grid-template-columns:1fr}
+  section{padding:64px 0}
+  .hero{padding:56px 0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="brand">
+      <svg viewBox="0 0 128 128" aria-hidden="true"><path fill="#f59e0b" d="M64 8c-19 0-36 8-48 20 6-4 12-6 20-6 24 0 44 20 44 44 0 6-1 12-4 17 8-6 15-15 18-25 4-14 1-29-8-41C76 11 70 8 64 8z"/><path fill="#8b5cf6" d="M64 120c19 0 36-8 48-20-6 4-12 6-20 6-24 0-44-20-44-44 0-6 1-12 4-17-8 6-15 15-18 25-4 14-1 29 8 41 6 6 12 9 22 9z"/></svg>
+      Vault
+    </div>
+    <nav class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#guide">Guide</a>
+      <a href="#security">Security</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#download">Download</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-primary" href="#download">Download</a>
+  </div>
+</header>
+
+<section class="hero" id="top">
+  <div class="container hero-grid">
+    <div>
+      <div class="badge"><span class="dot"></span> Release 0.1.294 · source code is public (AGPL-3.0)</div>
+      <h1>The messenger<br>that <span class="grad">needs no server</span></h1>
+      <p class="lead">Vault encrypts messages on your device and delivers them as ordinary email — through any mail account. No storage servers, no logs, no metadata. Just you and the recipient.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#download">Download Vault</a>
+        <a class="btn btn-ghost" href="#how">How it works</a>
+      </div>
+    </div>
+    <div class="hero-art">
+      <div class="ring"></div>
+      <svg class="logo" role="img" aria-label="Vault logo" viewBox="0 0 128 128"><path fill="#f59e0b" d="M64 8c-19 0-36 8-48 20 6-4 12-6 20-6 24 0 44 20 44 44 0 6-1 12-4 17 8-6 15-15 18-25 4-14 1-29-8-41C76 11 70 8 64 8z"/><path fill="#8b5cf6" d="M64 120c19 0 36-8 48-20-6 4-12 6-20 6-24 0-44-20-44-44 0-6 1-12 4-17-8 6-15 15-18 25-4 14-1 29 8 41 6 6 12 9 22 9z"/></svg>
+    </div>
+  </div>
+  <div class="container">
+    <div class="stats">
+      <div class="stat"><b>0</b><span>storage servers</span></div>
+      <div class="stat"><b>2</b><span>platforms — Android & desktop</span></div>
+      <div class="stat"><b>3</b><span>interface languages</span></div>
+      <div class="stat"><b>E2E</b><span>encryption on every message</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="container">
+    <h2 class="center">How Vault works</h2>
+    <p class="sub center">There is simply no server side. Your email is the transport, your device does the encryption.</p>
+    <div class="steps">
+      <div class="step">
+        <span class="tag">step 1</span>
+        <h3>Connect any mailbox</h3>
+        <p>Gmail, Outlook, Zoho, your own domain — any account with IMAP/SMTP. Vault runs on top of your existing email and creates nothing new.</p>
+      </div>
+      <div class="step">
+        <span class="tag">step 2</span>
+        <h3>Exchange keys</h3>
+        <p>Cryptographic keys are generated on your device. Verify contacts via QR code or key fingerprint. The private key never leaves the device.</p>
+      </div>
+      <div class="step">
+        <span class="tag">step 3</span>
+        <h3>Chat like in any messenger</h3>
+        <p>A message gets encrypted and sent as an email. The recipient's app decrypts it automatically. To the mail provider it's just opaque data.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="background:var(--bg-soft)">
+  <div class="container">
+    <h2 class="center">Features</h2>
+    <p class="sub center">Everything you need for daily conversations — and nothing you don't.</p>
+    <div class="grid3">
+      <div class="card"><span class="icon">🔐</span><h3>Groups up to 50</h3><p>Encrypted group chats with a shared group key.</p></div>
+      <div class="card"><span class="icon">📞</span><h3>Voice &amp; video calls (beta)</h3><p>Voice and video calls over the same mail account: Opus codec, VP8 video, XChaCha20-encrypted media stream.</p></div>
+      <div class="card"><span class="icon">⏱️</span><h3>Disappearing messages</h3><p>Messages that self-destruct after a set time.</p></div>
+      <div class="card"><span class="icon">🖼️</span><h3>Media & attachments</h3><p>Photos, documents, files — encrypted, never uploaded to a cloud.</p></div>
+      <div class="card"><span class="icon">📊</span><h3>Polls</h3><p>Polls in chats and groups: up to 10 options, votes are encrypted, results visible to everyone.</p></div>
+      <div class="card"><span class="icon">🔋</span><h3>Eco mode</h3><p>Instant delivery via relay without a permanent background connection: battery stays full, notifications stay on. Pushes via UnifiedPush — no Google services involved.</p></div>
+      <div class="card"><span class="icon">↪️</span><h3>Forwarding & drafts</h3><p>Forward messages to other chats; an unfinished message is saved and waits for you.</p></div>
+      <div class="card"><span class="icon">📍</span><h3>Location & folders</h3><p>Share a map point (OpenStreetMap); chat folders, archive and per-chat mute.</p></div>
+      <div class="card"><span class="icon">🎨</span><h3>6 themes</h3><p>Dark, light and accent themes — from strict to cozy.</p></div>
+      <div class="card"><span class="icon">🌍</span><h3>3 languages</h3><p>English, Russian, Chinese — switch right in the app, no restart.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="guide">
+  <div class="container">
+    <h2 class="center">Guide: installation and setup</h2>
+    <p class="sub center">From install to your first call in five steps. Everything is configured inside the app — no sign-ups anywhere.</p>
+
+    <details open>
+      <summary>1. Install the app</summary>
+      <p><b>Android.</b> Download the APK from the "Download" section (or inside the app: Settings → Help → "Check for updates"). When the system asks to allow installs from this source, allow it and confirm. Updates: the same button shows the new version and a link to the APK.</p>
+      <p><b>Windows / Linux.</b> Unpack the archive and run the executable. No installation required; data lives in your user profile.</p>
+      <p><b>What lives where.</b> Encryption keys, chat history and settings are stored only on your device (a local SQLite database). There are no Vault servers and no cloud copies — right after the first launch, enable key backup in "Settings → Keys".</p>
+    </details>
+
+    <details>
+      <summary>2. Sign in: your email is the transport</summary>
+      <p>Your account is a regular email address. Pick a provider (Gmail, Yandex, Mail.ru, Zoho, Outlook, iCloud, GMX, WEB.DE, Fastmail, Rambler and more — servers are filled in automatically; for "Other" enter IMAP/SMTP manually) and enter your address and password.</p>
+      <p>Gmail and iCloud may require an "app password" instead of the regular one — create it in your provider's security settings. The password is stored encrypted on your device only; "Remember on this device" enables automatic sign-in.</p>
+      <p>No registration with Vault or anyone else: messages travel between your mailboxes, Vault servers do not exist.</p>
+      <p><b>Tip: use a separate, clean mailbox.</b> Email is only a transport for Vault, so it works best with a mailbox you don't use for regular correspondence: provider notifications, filters and mail lists stay separate from your personal mail, and all Vault messages live in one place.</p>
+      <p><b>You can change your email at any time.</b> Settings → "Change email": contacts and groups are kept — encryption keys are not tied to the address. After switching, send a message or your profile and your contacts learn the new address automatically.</p>
+    </details>
+
+    <details>
+      <summary>3. Keys and adding a contact</summary>
+      <p>Encryption keys are generated automatically at first launch. To start a chat, add the other person in one of two ways:</p>
+      <p><b>QR code (in person).</b> Both of you open "Keys" (🔗) and show/scan each other's QR. The most secure option: keys never cross any network.</p>
+      <p><b>By member id (remotely).</b> Exchange codes over any channel — optionally verify the key fingerprint (40 hex characters) by voice or in person.</p>
+      <p>After adding, the contact's fingerprint is pinned: the app warns you if the key unexpectedly changes.</p>
+    </details>
+
+    <details>
+      <summary>4. Chats: messages, files, groups</summary>
+      <p>Chatting works like any messenger: IMAP IDLE delivers messages in seconds, sent/delivered status shows under each message. You can reply with a quote, edit and delete your own messages for everyone.</p>
+      <p><b>"Delete for me".</b> Long-press (phone) or right-click (desktop) any message — including call records — to open the menu with "Delete for me": the message disappears only on your side, the other person keeps it. Clean up your chat without touching theirs.</p>
+      <p><b>Attachments and voice.</b> Photos, documents and voice messages are encrypted exactly like text and never uploaded to any cloud.</p>
+      <p><b>Groups.</b> "+" in the chat list → "Create group": members are invited with the same keys, the group key is encrypted for each member separately. Up to 50 members, with roles and message pinning.</p>
+      <p><b>Disappearing messages.</b> Set a timer in the chat — messages get deleted for all participants after the chosen time.</p>
+      <p><b>Auto-clean.</b> Settings → Chats: automatically remove messages older than 1/7/30/365 days from this device — history stays out of the mailbox.</p>
+    </details>
+
+    <details>
+      <summary>Channels: broadcast to your subscribers</summary>
+      <p><b>What it is.</b> A channel is a broadcast chat: the author publishes posts, subscribers only read. Subscribers can't see each other and don't know the author's address; the author doesn't know the addresses of "anonymous" subscribers — privacy both ways, like everything else in Vault.</p>
+      <p><b>Create.</b> The 📣 button in the chat-list header → name and description. After creation press "Share" — the subscribe link (vault://join-channel…) is copied: send it in a chat, a group, or post it anywhere.</p>
+      <p><b>Subscribe.</b> The 🔗 button next to 📣 → paste the channel link. Subscribing is instant: the channel key comes inside the link, no approval from the author is needed.</p>
+      <p><b>Delivery.</b> Posts travel through the Vault relay (one envelope for all subscribers — instant) and, if you sent the author a "hello" or were added manually, are duplicated by email. If the relay is down, known subscribers still get the post by mail — delivery is never lost. New-post notifications work like group messages.</p>
+      <p><b>Preview limitations.</b> The feature is marked experimental: text posts only, no file attachments in posts yet; the author edits the avatar and description (the subscribe link stays valid after a rename). Deleting a channel removes it only on your device (local subscription).</p>
+    </details>
+
+    <details>
+      <summary>Bots (experimental)</summary>
+      <p><b>What a Vault bot is.</b> A regular Vault account — same email, same keys, same encrypted format. No special bot APIs, no server privileges: a chat with a bot runs over the very same E2E channels as a chat with a person. The difference lives on the bot's side: a listener program decrypts incoming messages, forwards them to your AI assistant and sends the reply back.</p>
+      <p><b>How to use.</b> Add the bot as a normal contact (QR or invite link from the bot's owner) and write to it — replies arrive just like from a human, with the same delivery latency (relay: seconds, email: minutes). Notifications, forwarding and search all work as in a regular chat.</p>
+      <p><b>Experimental status.</b> There is no public assistant yet; you can connect your own bot (developer instructions in the repository, <code>vault --listen</code> mode). Privacy: the bot's owner sees exactly what any other contact sees — the message text after key exchange; the Vault server sees nothing.</p>
+    </details>
+
+    <details>
+      <summary>5. Calls (beta)</summary>
+      <p>Voice calls run over the same email account, with no separate servers. Enable the calls switch in "Settings → Experimental features" — a phone button appears in the chat.</p>
+      <p>Calling: if the person is online you get ringing tones and a live call; if offline they will see a "Missed call". Missed and completed calls appear in the chat as records, which can also be removed with "Delete for me".</p>
+      <p><b>The conversation does not start immediately after accepting.</b> When you tap "Accept", the app establishes a direct encrypted connection between the two devices (session setup is exchanged via email): this usually takes a few seconds, with "Connecting…" shown on screen. Wait until the status changes to the active call — audio starts as soon as the connection is established. This is normal and does not mean the call is broken.</p>
+      <p>The media stream is encrypted with XChaCha20, the codec is Opus (same as WhatsApp). Sound quality and ringtones are configurable. Calls are beta: some networks/devices may have limitations.</p>
+      <p><b>Video.</b> During an active call, tap the camera button in the control row — the other person sees you and you see them. Frames travel over the same protected path as voice (VP8, E2E-encrypted), with no separate servers. The camera is enabled per call as you choose; if the camera is unavailable or you deny access, the call stays voice-only and you can still see the other person's video. Video can be turned off with the same button mid-call.</p>
+    </details>
+
+    <details>
+      <summary>Delivery modes and notifications</summary>
+      <p>Vault runs in two modes — the "Eco mode" toggle in settings.</p>
+      <p><b>Classic.</b> The app keeps a permanent connection to your mailbox (IMAP IDLE): messages arrive within seconds, a background service with a status-bar icon runs. Delivery is accelerated by the Vault relay — an encrypted copy of every message travels directly, whichever route delivers first wins.</p>
+      <p><b>Eco.</b> The background service and the permanent connection are switched off — battery drain is minimal. Delivery: relay plus a once-a-minute mailbox check; while the app is open it is just as instant as in classic mode. When the app is closed, notifications arrive as a system push: install any UnifiedPush app (e.g. ntfy) — Vault will offer to set it up when you enable eco mode. Since 0.1.164 the push is smart: if the app is alive and polling the relay itself, the system push is not duplicated — exactly one notification per message.</p>
+      <p><b>Relay.</b> The delivery accelerator (vault-msg.ru/relay) — the only optional server component. It only ever sees encrypted envelopes and keeps them for up to 24 hours, then deletes them; content and addresses stay hidden. The free tier is 100 envelopes per day per account (plenty for a human); when exhausted, delivery silently continues over email — no message is ever lost. The relay can be disabled in settings — the app keeps working over pure email.</p>
+    </details>
+
+    <details>
+      <summary>Backups and moving to a new device</summary>
+      <p>"Settings → Keys" offers key-store export/import plus a recovery key (mnemonic phrase). It restores your keys and account access on a new device — chat history stays in the mailbox and local copies.</p>
+    </details>
+
+    <details>
+      <summary>Polls, forwarding, drafts, location and folders</summary>
+      <p><b>Polls.</b> In an open chat tap the bar-chart button in the row under the input field. Enter a question and two or more options (up to 10) — the "Send" button activates once the question and at least two options are filled in. Participants see the poll as a card in the chat and vote with one tap; one vote per person. Each vote is delivered as a separate encrypted email, and the running totals are aggregated in the poll card for everyone.</p>
+      <p><b>Forwarding.</b> Long-press (on the phone) or right-click (on the desktop) a message → "Forward" → pick a chat from the list (contacts and groups, except the current one). The recipient sees the text with a "Forwarded from …" mark. Polls and call records cannot be forwarded.</p>
+      <p><b>Drafts.</b> An unfinished message never disappears: when you switch to another chat the text is saved for that chat and restored in the input field when you come back. Drafts live only on your device.</p>
+      <p><b>Location message (Android).</b> The map-pin button under the input field sends your current point as an "I'm here: …" message with an OpenStreetMap link — the link is clickable for every recipient, including other platforms. If the location cannot be determined, a notice appears.</p>
+      <p><b>Chat folders, archive, mute.</b> Long-press (right-click) a chat in the list → menu: "Mute" (notifications off), archive, "Folder" — pick an existing folder or create a new one (name up to 24 characters). Folders show as a chip strip above the chat list: tapping a chip filters the list to that folder, tapping again clears the filter.</p>
+      <p><b>Blocking a contact.</b> Hide an unwanted correspondent without losing your history: long-press (right-click) a chat in the list → "Block" — or right-click someone else's message (including in a group) → "Block". A red banner appears in the blocked chat, sending is disabled; new messages and calls from that contact are neither shown nor notified about. In group settings each participant has a ⊘ button — the same, scoped to that group's messages. The block works on your device (end-to-end encryption leaves the server unable to filter mail) and follows all of the contact's addresses, including after they change their email. Unblock from the same menu or via the button on the banner in the open chat. Messages sent while the block was active are not restored — they were never saved. Your old history stays visible.</p>
+      <p><b>Green “online” dot.</b> A contact may show a green dot — they are using the app right now. It is off by default: enable “Settings → Privacy → Show that I'm online” and your contacts will see your activity (passively the dot only appears if you have just sent a message yourself). The signal travels over the same encrypted channel as messages; nothing about individual recipients is revealed to outsiders.</p>
+    </details>
+  </div>
+</section>
+
+<section id="security">
+  <div class="container">
+    <h2 class="center">Security</h2>
+    <p class="sub center">Not a single third-party server between you and your recipient.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layer</th><th>Technology</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Key exchange</td><td><span class="mono">X25519</span> — ephemeral exchange, session keys per conversation</td><td><span class="status">in release</span></td></tr>
+          <tr><td>Message encryption</td><td><span class="mono">XChaCha20-Poly1305</span> — authenticated AEAD</td><td><span class="status">in release</span></td></tr>
+          <tr><td>Conversation key derivation</td><td><span class="mono">X25519 + SHA-256 (HKDF-like)</span> — ephemeral exchange, session keys</td><td><span class="status">in release</span></td></tr>
+          <tr><td>Call media</td><td><span class="mono">XChaCha20</span> — stream encryption, Opus voice, VP8 video</td><td><span class="status">in release</span></td></tr>
+          <tr><td>Quantum-resistant exchange</td><td><span class="mono">ML-KEM-768 + X25519</span> — hybrid scheme (FIPS 203)</td><td><span class="status">in release</span></td></tr>
+          <tr><td>Server-side metadata</td><td colspan="2">None: the only servers are your own IMAP/SMTP, holding nothing but encrypted blobs</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap" style="background:var(--bg-soft)">
+  <div class="container">
+    <h2 class="center">Roadmap</h2>
+    <p class="sub center">Transparent about what's done and what comes next.</p>
+    <div class="timeline">
+      <div class="tl-item done">
+        <h3>Messaging core <span class="chip done">done</span></h3>
+        <p>Encryption, contacts, QR key exchange, groups, attachments, calls (beta) — Android and desktop.</p>
+      </div>
+      <div class="tl-item done">
+        <h3>Public release <span class="chip done">Sept 3</span></h3>
+        <p>Repository is public (github.com/kmakan/vault, AGPL-3.0), APK and installers published, this website, announcements in privacy communities.</p>
+      </div>
+      <div class="tl-item done">
+        <h3>Quantum-resistant encryption <span class="chip done">done</span></h3>
+        <p>Hybrid ML-KEM-768 + X25519 key exchange (FIPS 203) — quantum computer attack protection shipped in the release.</p>
+      </div>
+      <div class="tl-item">
+        <h3>Channels & mini-apps <span class="chip plan">planned</span></h3>
+        <p>Paid channels, mini-app marketplace, premium features — per the 2026 roadmap.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="container">
+    <h2 class="center">Download</h2>
+    <p class="sub center">Current version — 0.1.294 (14 November 2026). Updates in-app: Settings → Help → "Check for updates".</p>
+    <div class="download-cards">
+      <div class="dl-card">
+        <span class="icon">🤖</span>
+        <h3>Android</h3>
+        <p>APK, Android 7+ (minSdk 24)</p>
+        <a class="btn btn-primary" href="https://vault-msg.ru/releases/vault-0.1.294.apk">Download APK v0.1.294</a>
+        <div class="req">Signed with release key · <a href="https://github.com/kmakan/vault/releases/tag/v0.1.294">more builds</a></div>
+        <div class="req">The Pro plan is bought inside the app: Settings → Privacy → “Pro plan”. Web checkout — <a href="/pay.html">vault-msg.tech/pay.html</a> (for store builds)</div>
+      </div>
+      <div class="dl-card">
+        <span class="icon">💻</span>
+        <h3>Linux</h3>
+        <p>tar.gz · deb/rpm in GitHub releases</p>
+        <a class="btn btn-primary" href="https://vault-msg.ru/releases/vault-desktop-0.1.294-linux-x86_64.tar.gz">Download v0.1.294</a>
+        <div class="req">Windows — in development</div>
+      </div>
+      <div class="dl-card">
+        <span class="icon">🍎</span>
+        <h3>macOS</h3>
+        <p>In development — follow the roadmap</p>
+        <a class="btn btn-ghost" href="#roadmap">Roadmap</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="container">
+    <h2 class="center">Pricing</h2>
+    <p class="sub center">The app and messaging are free. Paid plans accelerate relay delivery and raise limits; when a limit is reached, messages still go out by regular email.</p>
+    <div class="grid3">
+      <div class="card">
+        <h3>Free — 0 ₽</h3>
+        <p>Up to 100 relay actions per day, one device. Encryption and post-quantum keys are free forever.</p>
+      </div>
+      <div class="card" style="border-color:rgba(245,158,11,.45)">
+        <h3>Pro — 149 ₽/mo</h3>
+        <p>Or 1,490 ₽ per year: up to 1,000 relay actions per day, three devices, email support.</p>
+      </div>
+      <div class="card">
+        <h3>Business — 499 ₽/mo</h3>
+        <p>Or 4,990 ₽ per year: up to 10,000 actions per day, ten devices, 72 h envelope storage.</p>
+      </div>
+    </div>
+    <p class="center" style="margin-top:28px"><a class="btn btn-primary" href="/pricing.html">More about plans</a></p>
+  </div>
+</section>
+
+<section id="faq" style="background:var(--bg-soft)">
+  <div class="container">
+    <h2 class="center">FAQ</h2>
+    <p class="sub center">Short answers to the most common questions.</p>
+    <details>
+      <summary>Email? Isn't that slow?</summary>
+      <p>Vault keeps a persistent IMAP connection (IDLE), so messages arrive as fast as in any regular messenger. Email is only the transport: it stores and processes nothing.</p>
+    </details>
+    <details>
+      <summary>What does my mail provider see?</summary>
+      <p>Only the fact of an email between two addresses and the size of an encrypted blob. Subject and body carry no meaningful data.</p>
+    </details>
+    <details>
+      <summary>What does it cost?</summary>
+      <p>The app and messaging are free. Paid plans accelerate relay delivery: Pro — 149 ₽ per month or 1,490 ₽ per year (up to 1,000 actions per day), Business — 499 ₽ per month or 4,990 ₽ per year (up to 10,000 actions). See the <a href="/pricing.html">Pricing</a> page for details.</p>
+    </details>
+    <details>
+      <summary>What if my mail provider blocks the account?</summary>
+      <p>The account is yours. Connect another mailbox at any time: chat history lives locally on your device and is not tied to a provider.</p>
+    </details>
+    <details>
+      <summary>How is this different from PGP?</summary>
+      <p>Vault works like a messenger: automatic key exchange, groups, calls, attachments — no manual key management. The cryptography is modern (XChaCha20-Poly1305), not from the 90s.</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault. Encryption — on your device. Servers — zero.</div>
+    <div class="links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/offer.html">Offer</a>
+      <a href="/requisites.html">Legal details</a>
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/pd.html">Personal data</a>
+      <a href="/terms.html">Terms of Use</a>
+      <a href="https://github.com/kmakan/vault">Source code</a>
+      <a href="https://gitverse.ru/maksim/vault">Mirror</a>
+      <a href="mailto:vault-msg@ya.ru">Email</a>
+      <a href="https://vault-msg.ru">Русский сайт</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

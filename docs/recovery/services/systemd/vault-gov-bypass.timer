@@ -1,0 +1,10 @@
+[Unit]
+Description=Vault: обновление обхода гос-хостов (после Amnezia и раз в 10 мин)
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

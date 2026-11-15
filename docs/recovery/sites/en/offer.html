@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Public Offer — Vault</title>
+<meta name="description" content="Public offer for Vault paid services: Pro and Business plans, payment procedure, access provisioning, refunds, provider details.">
+<meta name="robots" content="index, follow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://vault-msg.tech/offer.html">
+<style>
+:root{
+  --bg:#0b0f17;
+  --bg-soft:#0f1522;
+  --card:#131a2a;
+  --border:#1f2940;
+  --gold:#f59e0b;
+  --violet:#8b5cf6;
+  --text:#e7ecf5;
+  --muted:#8b93a7;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;
+  --font-mono:ui-monospace,'JetBrains Mono','Fira Code',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:860px;margin:0 auto;padding:0 24px}
+
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:20px;color:var(--text)}
+.brand svg{width:32px;height:32px;flex:none}
+.nav-links{display:flex;gap:26px;font-size:14.5px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
+
+main{padding:56px 0 80px}
+h1{font-size:34px;font-weight:800;letter-spacing:-.02em;margin-bottom:10px}
+.updated{color:var(--muted);font-size:14px;margin-bottom:34px}
+h2{font-size:21px;font-weight:700;margin:38px 0 12px;padding-top:8px}
+h2:first-of-type{margin-top:0}
+p{color:var(--text);margin-bottom:13px}
+ul,ol{margin:0 0 14px 22px}
+li{margin-bottom:7px}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin:16px 0}
+.card p:last-child{margin-bottom:0}
+.highlight{border-color:rgba(245,158,11,.35);background:linear-gradient(180deg,rgba(245,158,11,.05),transparent)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:16px 0}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:none}
+
+footer{border-top:1px solid var(--border);padding:40px 0 56px;color:var(--muted);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap}
+.foot .links{display:flex;gap:22px;flex-wrap:wrap}
+.foot a{color:var(--muted)}
+.foot a:hover{color:var(--text)}
+
+@media(max-width:560px){
+  h1{font-size:26px}
+  h2{font-size:19px}
+  main{padding:36px 0 60px}
+  .nav-links{display:none}
+  table{display:block;overflow-x:auto}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <a class="brand" href="/">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M16 2 4 7v9c0 7.2 5.1 12.4 12 14 6.9-1.6 12-6.8 12-14V7L16 2z" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M11 15.5l3.5 3.5L21 12" stroke="#8b5cf6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Vault
+    </a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a href="/pricing.html">Pricing</a>
+      <a href="/#download">Download</a>
+      <a href="/requisites.html">Legal details</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="container">
+    <h1>Public Offer</h1>
+    <p class="updated">Version of 29 October 2026. The Russian-language version of this document prevails; this translation is provided for convenience.</p>
+
+    <h2>1. General</h2>
+    <p>1.1. This document is a public offer by Maxim Anatolyevich Kozlov, who applies the special tax regime "Tax on Professional Income" (self-employed), INN 774338097699 (the "Provider"), addressed to any capable person (the "User") wishing to use Vault paid services.</p>
+    <p>1.2. The offer is published at <a href="https://vault-msg.tech">vault-msg.tech</a> and <a href="https://vault-msg.ru/offer.html">vault-msg.ru</a>. Acceptance is payment for the selected plan. From the moment of payment, the contract is concluded on the terms of this offer.</p>
+    <p>1.3. By paying, the User confirms that they have read the offer, accept its terms and are at least 18 years old.</p>
+
+    <h2>2. Definitions</h2>
+    <ul>
+      <li><b>App</b> — the Vault program for Android and desktop systems, distributed free of charge.</li>
+      <li><b>Relay</b> — the Provider's server that accepts an encrypted envelope (ciphertext) and delivers it to the recipient faster.</li>
+      <li><b>Plan</b> — a set of limits and relay access conditions (Free, Pro, Business).</li>
+      <li><b>Subscription</b> — the right to use a paid plan for the paid period.</li>
+    </ul>
+
+    <h2>3. Subject</h2>
+    <p>3.1. The Provider grants the User paid access to extended limits and priority delivery through the relay for the subscription period, and the User pays for that access.</p>
+    <p>3.2. The app, encryption, messaging through the Users' mail servers and other free features are provided free of charge and are not the subject of this offer. Payment does not grant access to message contents, encryption keys or message history.</p>
+    <p>3.3. The service is provided remotely through the app; no physical delivery, pickup or personal presence is required.</p>
+
+    <h2>4. Plans and prices</h2>
+    <table>
+      <tr><th>Plan</th><th>Price</th><th>Relay actions per day</th><th>Devices</th></tr>
+      <tr><td>Free</td><td>0 ₽</td><td>100</td><td>1</td></tr>
+      <tr><td>Pro</td><td>149 ₽ per month or 1,490 ₽ for 12 months</td><td>1,000</td><td>3</td></tr>
+      <tr><td>Business</td><td>499 ₽ per month or 4,990 ₽ for 12 months</td><td>10,000</td><td>10</td></tr>
+    </table>
+    <p>4.1. Prices are in Russian rubles and include all applicable taxes. VAT is not applicable: the Provider applies the special tax regime "Tax on Professional Income".</p>
+    <p>4.2. Full plan descriptions and limits are published at <a href="/pricing.html">Pricing</a>.</p>
+    <p>4.3. The Provider may change prices and plan contents. Changes do not apply to an already paid subscription period.</p>
+    <p>4.4. Pro and Business are available for periods of 1, 3, 6, 9 and 12 months. The price for 1, 3, 6 and 9 months is billed monthly (monthly price × number of months); the discount applies only to the annual period (12 months at the price of 10).</p>
+
+    <h2>5. Payment</h2>
+    <p>5.1. Payment is made in the app through the secure YooKassa payment page (YooMoney NBCO LLC): by bank card, SBP, SberPay or YooMoney.</p>
+    <p>5.2. The User pays for the selected plan and period (1, 3, 6, 9 or 12 months) in the amount shown on the payment page.</p>
+    <p>5.3. The Provider generates a receipt in the "My Tax" app in accordance with the tax on professional income legislation. Payment data is stored by YooKassa under its rules.</p>
+    <p>5.4. If payment succeeded but access was not activated, the User contacts <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> with the payment date and amount; the Provider activates access manually.</p>
+
+    <h2>6. Provision of access</h2>
+    <div class="card highlight">
+      <p><b>No shipping required.</b> The service is provided remotely: plan access is activated in the app automatically as soon as payment is confirmed by the payment service. There is no physical delivery or pickup.</p>
+    </div>
+    <p>6.1. The service is provided within 15 minutes after payment confirmation. Access is normally activated within seconds.</p>
+    <p>6.2. If activation takes longer than 15 minutes and the User contacts support, the subscription is extended by the delay period.</p>
+
+    <h2>7. Term and renewal</h2>
+    <p>7.1. The subscription is valid for the selected period — 1, 3, 6, 9 or 12 months — from activation.</p>
+    <p>7.2. There is no automatic renewal or automatic charging. When the term ends, the plan reverts to free limits; data and message history are retained.</p>
+    <p>7.3. If an extension is paid before the current term ends, the new term is added to the remaining period.</p>
+
+    <h2>8. Refunds</h2>
+    <p>8.1. If the service was not provided (access not activated, duplicate payment, relay unavailable due to the Provider's fault), the amount paid is refunded in full.</p>
+    <p>8.2. If a subscription was paid but not used, the User may cancel and receive a full refund within 14 calendar days of payment. For later cancellations, the cost of the unused period is refunded upon request.</p>
+    <p>8.3. A refund request is sent to <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a> and must include the payment date and amount and the User's contact details.</p>
+    <p>8.4. Refunds are made to the original payment method within 10 business days of receiving the request.</p>
+
+    <h2>9. Rights and obligations</h2>
+    <p>9.1. The Provider undertakes to keep the relay operating within the paid plan, activate access within the stated time and respond to support requests.</p>
+    <p>9.2. The User undertakes to use the services lawfully, not to disrupt the relay and not to interfere with the service.</p>
+    <p>9.3. The User is responsible for their own mailbox and for the safety of passwords and encryption keys.</p>
+
+    <h2>10. Liability</h2>
+    <p>10.1. The service is provided "as is" to the extent permitted by consumer protection law. The Provider is not responsible for the operation of the Users' mail providers or for third-party blocking of mail accounts.</p>
+    <p>10.2. The Provider cannot read message contents: the relay processes ciphertext only.</p>
+    <p>10.3. The Provider's liability is limited to the amount actually paid by the User for the relevant subscription period.</p>
+
+    <h2>11. Personal data</h2>
+    <p>11.1. To provide the service and generate receipts, the Provider processes minimal data: email address, payment details and subscription term. Processing is described in the <a href="/privacy.html">Privacy Policy</a>.</p>
+    <p>11.2. Data required for payment is processed by YooKassa under its rules.</p>
+
+    <h2>12. Changes and disputes</h2>
+    <p>12.1. The Provider may amend the offer by publishing a new version on this page. Changes do not worsen the terms of already paid subscriptions.</p>
+    <p>12.2. Disputes are resolved through correspondence; failing agreement — under the laws of the Russian Federation.</p>
+
+    <h2>13. Provider details</h2>
+    <div class="card">
+      <p><b>Maxim Anatolyevich Kozlov</b><br>
+      Tax status: self-employed (Tax on Professional Income)<br>
+      INN: 774338097699<br>
+      Email: <a href="mailto:vault-msg@ya.ru">vault-msg@ya.ru</a><br>
+      Website: <a href="https://vault-msg.tech">vault-msg.tech</a> · <a href="https://vault-msg.ru">vault-msg.ru</a><br>
+      Payments: YooKassa (YooMoney NBCO LLC)</p>
+      <p class="muted">Banking details for invoice payments are available upon request at the email above.</p>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="container foot">
+    <div>© 2026 Vault · Self-employed Kozlov M. A. · INN 774338097699</div>
+    <div class="links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/offer.html">Offer</a>
+      <a href="/requisites.html">Legal details</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/terms.html">Terms</a>
+      <a href="mailto:vault-msg@ya.ru">Email</a>
+      <a href="https://vault-msg.ru">Русский сайт</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

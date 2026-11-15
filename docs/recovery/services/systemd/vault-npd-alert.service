@@ -1,0 +1,9 @@
+[Unit]
+Description=Vault NPD receipts — оповещение об отказе сверки/выдачи чеков
+# Ставится в ~/.config/systemd/user/ рядом с vault-npd-receipts.service.
+# Срабатывает по OnFailure= из юнита сверки. Дедуп — 6 ч, чтобы поднятый
+# надолго VPN не спамил: одна беда — одно сообщение.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.hermes/scripts/vault-npd-alert.sh

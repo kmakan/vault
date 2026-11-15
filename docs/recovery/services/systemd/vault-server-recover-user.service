@@ -1,0 +1,9 @@
+[Unit]
+Description=Vault: подъём после аварии VPS (проверки, рестарты, офсайт-копия)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.hermes/scripts/vault-server-recover.sh
+TimeoutStartSec=300

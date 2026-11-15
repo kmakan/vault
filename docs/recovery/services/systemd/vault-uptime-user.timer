@@ -1,0 +1,12 @@
+[Unit]
+Description=Vault: проверка доступности сайтов (уведомление при изменении)
+
+[Timer]
+# Раз в 5 минут: сервер может подняться в любую минуту, а проверка дешёвая
+# (пять HTTP-запросов с таймаутом 12 с).
+OnCalendar=*:2/5
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

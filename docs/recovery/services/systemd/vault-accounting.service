@@ -1,0 +1,13 @@
+[Unit]
+Description=Vault accounting digest (income, receipts, NPD tax)
+Wants=network-online.target
+After=network-online.target vault-relay.service
+
+[Service]
+Type=oneshot
+User=maksim
+WorkingDirectory=/home/maksim/vault-relay
+EnvironmentFile=/home/maksim/vault-relay/env
+EnvironmentFile=-/home/maksim/vault-relay/accounting.env
+Environment=VAULT_ACCOUNTING_DIGEST_FILE=/home/maksim/vault-relay/accounting-digest.txt
+ExecStart=/usr/bin/python3 /home/maksim/vault-relay/accounting-digest.py

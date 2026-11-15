@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Vault accounting digest at 09:00 MSK (server clock is UTC)
+
+[Timer]
+# 06:00 UTC = 09:00 MSK (Москва без перехода на летнее время).
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
