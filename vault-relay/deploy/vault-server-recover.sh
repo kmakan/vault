@@ -151,6 +151,10 @@ bad=$(printf '%s\n' "$report" | grep -cE '^(nginx|vault-relay): (inactive|failed
 health=$(printf '%s\n' "$report" | grep -A1 '== health релея' | tail -1 | cut -c1-80)
 
 echo "$(date +%F)" > "$STAMP"
+# Сторож одноразовый: снимаем себя с расписания, иначе на следующий день
+# повторил бы «сервер ожил» на живом сервере. Ставит его обратно сторож
+# доступности, когда сайты уходят в DOWN.
+systemctl --user disable --now vault-server-recover.timer 2>/dev/null || true
 log "подъём завершён: проблемных сервисов $bad, health: $health, копия $dest"
 
 if [ "$bad" -gt 0 ]; then

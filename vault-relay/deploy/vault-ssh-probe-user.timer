@@ -1,8 +1,8 @@
 [Unit]
-Description=Проба SSH к серверу раз в час (в :07)
+Description=Проба SSH к серверу 4 раза в сутки (в :07)
 
 [Timer]
-OnCalendar=*:07:00
+OnCalendar=*-*-* 00,06,12,18:07:00
 Persistent=true
 AccuracySec=1min
 Unit=vault-ssh-probe.service

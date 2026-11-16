@@ -40,6 +40,13 @@ done
 
 echo "$(date -Is) изменилось:$changed" >> "$LOG"
 
+# Авария VPS: ставим на расписание сторож подъёма. Он одноразовый — после
+# отработанного подъёма снимает себя сам, поэтому вхолостую не висит.
+if [ "$DRY" = 0 ] && printf '%s\n' "$changed" | grep -qE ' (vault-ru|vault-en):OK→DOWN'; then
+  systemctl --user enable --now vault-server-recover.timer 2>/dev/null || true
+  echo "$(date -Is) сторож подъёма поставлен на расписание" >> "$LOG"
+fi
+
 if [ "$DRY" = 0 ]; then
   if [ "$down" -eq 0 ] && [ "$up" -gt 0 ]; then
     notify-send -u normal "Vault: сайты снова отвечают" "изменилось:$changed" 2>/dev/null || true
