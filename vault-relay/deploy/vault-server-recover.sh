@@ -96,6 +96,10 @@ journalctl -p err -b --no-pager 2>/dev/null | tail -20 || true
 say "== состояние релея"
 ls -la "$HOME/vault-relay"/vault-relay-state.json* 2>/dev/null | tail -5
 ls -la "$HOME"/vault-relay/*.db "$HOME"/vault-relay/*.sqlite* 2>/dev/null | tail -5
+# Отчёт — не проверка: его код возврата ничего не значит. При `set -o pipefail`
+# последний ls по несуществующему glob'у даёт 2, и это выглядело как «SSH не
+# пустил», хотя отчёт снят целиком (подъём 16.11 зацикливался на этом).
+exit 0
 REMOTE
   } | ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10 server 'bash -s' 2>&1
 )
@@ -129,7 +133,10 @@ dest="$BACKUP_ROOT/$(date +%F-%H%M)"
 mkdir -p "$dest"
 chmod 700 "$dest"
 rsync -az --ignore-missing-args -e 'ssh -o BatchMode=yes -o ConnectTimeout=15' \
-  server:'vault-relay/vault-relay-state.json* vault-relay/*.db vault-relay/*.sqlite* vault-relay/env' \
+  server:'vault-relay/vault-relay-state.json*' \
+  server:'vault-relay/*.db' \
+  server:'vault-relay/*.sqlite*' \
+  server:'vault-relay/env' \
   "$dest"/ 2>>"$LOG"
 rsync_rc=$?
 if [ "$rsync_rc" -eq 0 ] || [ "$rsync_rc" -eq 24 ]; then
