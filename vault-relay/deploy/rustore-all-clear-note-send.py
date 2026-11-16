@@ -78,6 +78,7 @@ def main() -> int:
                      f"{type(e).__name__}: {e}", "critical")
         return 2
 
+    first.save_sent_copy(msg, env)
     os.makedirs(os.path.dirname(SENT_THIS), exist_ok=True)
     with open(SENT_THIS, "w", encoding="utf-8") as f:
         f.write(datetime.now().isoformat(timespec="seconds") + "\n")
