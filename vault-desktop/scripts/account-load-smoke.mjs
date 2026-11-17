@@ -57,6 +57,9 @@ function makeDeps(over = {}) {
     setContacts: (v) => { s.contacts = v; },
     setContactAliases: (v) => { s.aliases = v; },
     setGroups: (v) => { s.groups = v; },
+    groups: () => s.groups,
+    currentGroup: () => s.currentGroup || null,
+    setCurrentGroup: (g) => { s.currentGroup = g; s.currentGroupSets = (s.currentGroupSets || 0) + 1; },
     setUserAvatarUrl: (v) => { s.avatarUrl = v; },
     setTombstonesCache: (v) => { s.tombstones = v; },
     setMidTombstonesCache: (v) => { s.midTombstones = v; },
@@ -102,6 +105,44 @@ function makeDeps(over = {}) {
   const deps = makeDeps({ loadGroupsData: async () => ({ newContacts: [] }) });
   await A.loadGroups(deps);
   check('группы: без групп состояние не трогаем', deps.s.groups.length === 0, deps.s.groups);
+}
+// Открытая группа после перечитывания: состав меняется, объект группы новый.
+// Без перестановки currentGroup шапка показывает старый счётчик (приёмка 17.11).
+{
+  const old = { id: 'g1', members: [] };
+  const deps = makeDeps();
+  deps.s.currentGroup = old;
+  await A.loadGroups(deps);
+  check('открытая группа переставлена на свежий объект',
+    deps.s.currentGroup !== old && deps.s.currentGroup.id === 'g1', deps.s.currentGroup);
+  check('перестановка сделана один раз', deps.s.currentGroupSets === 1, deps.s.currentGroupSets);
+}
+{
+  const old = { id: 'g2' };
+  const deps = makeDeps({
+    loadGroupsData: async () => ({
+      groups: [{ id: 'g1' }, { id: 'g2' }], keys: {}, avatars: {}, icons: [], newContacts: [],
+    }),
+  });
+  deps.s.currentGroup = old;
+  await A.loadGroups(deps);
+  check('переставляется именно ОТКРЫТАЯ группа, а не первая в списке',
+    deps.s.currentGroup !== old && deps.s.currentGroup.id === 'g2', deps.s.currentGroup);
+}
+{
+  const deps = makeDeps();
+  deps.s.currentGroup = null;
+  await A.loadGroups(deps);
+  check('группа закрыта → currentGroup не открывается сам',
+    deps.s.currentGroup === null && !deps.s.currentGroupSets, deps.s.currentGroup);
+}
+{
+  const old = { id: 'g-нет-в-списке' };
+  const deps = makeDeps();
+  deps.s.currentGroup = old;
+  await A.loadGroups(deps);
+  check('группы нет в списке → прежний объект не подменяется чужой',
+    deps.s.currentGroup === old, deps.s.currentGroup);
 }
 
 // ── Профиль при смене почты ────────────────────────────────────────────

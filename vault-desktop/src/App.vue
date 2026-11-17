@@ -339,8 +339,9 @@
               <Icon name="ban" :size="14" />
               {{ isIgnored(msgSenderEmail(messageMenu.msg) || (activeChatType === 'chat' ? activeChat : '')) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
             </button>
-            <!-- §8.3 UGC (модерация RuStore): жалоба на контент — письмо
-                 в поддержку (mailto, серверной жалоб-инфраструктуры нет). -->
+            <!-- §8.3 UGC (модерация RuStore): жалоба на контент уходит письмом
+                 из приложения на ящик оператора (SMTP моста); почтовый клиент
+                 устройства нужен только как запасной путь. -->
             <button v-if="!messageMenu.msg.callEvent && messageMenu.msg.from !== 'me' && !messageMenu.msg.deleted" @click="reportMessageContent(messageMenu.msg); messageMenu = null">
               <Icon name="alert" :size="14" /> {{ t('settings_report_content') || 'Пожаловаться' }}
             </button>
@@ -2094,7 +2095,7 @@ export default {
         setShowEmojiPicker: (v) => { this.showEmojiPicker = v; },
       };
     },
-    // Контракт жалобы на контент (ADR-005 W3): тип, сборка письма, открытие.
+    // Контракт жалобы на контент (ADR-005 W3): тип, сборка письма, отправка.
     reportContentDeps() {
       return {
         tr: (key) => uiStore.tr(key),
@@ -2102,6 +2103,12 @@ export default {
         activeChat: () => this.activeChat,
         activeChatType: () => this.activeChatType,
         msgSenderEmail: (msg) => this.msgSenderEmail(msg),
+        // §3.5: жалоба уходит письмом из приложения, а не через почтовый
+        // клиент устройства (mailto на чистом Android ничего не открывает).
+        // Логика адреса и текста — в features/report-content.js.
+        sendReport: (subject, body) =>
+          api.sendEmail('local', { to: ReportContent.OPERATOR_EMAIL, subject, body }),
+        notify: (text) => uiStore.toast(text),
         openExternalUrl: (url) => this.openExternalUrl(url),
       };
     },
@@ -2132,6 +2139,10 @@ export default {
         setContacts: (v) => { this.contacts = v; },
         setContactAliases: (v) => { this.contactAliases = v; },
         setGroups: (v) => { this.groups = v; },
+        groups: () => this.groups,
+        currentGroup: () => this.currentGroup,
+        // Сеттер currentGroup заодно перечитывает права группы.
+        setCurrentGroup: (g) => { this.currentGroup = g; },
         setUserAvatarUrl: (v) => { this.userAvatarUrl = v; },
         setTombstonesCache: (v) => { this.tombstonesCache = v; },
         setMidTombstonesCache: (v) => { this.midTombstonesCache = v; },
@@ -3843,20 +3854,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ADR-003 Этап 3: сбор и применение разнесены (features/groups-load.js).
     // Присваивания идут ПОСЛЕ сбора, и groups применяется только если invoke
     // отработал: иначе поле осталось бы прежним, как и в оригинале.
-    async loadGroups() {
-      await AccountLoadFeature.loadGroups(this.accountLoadDeps);
-      // Перечитывание заменяет объекты групп новыми (setGroups). Открытая
-      // группа осталась бы ссылкой на прежний объект и показывала старый
-      // состав: приглашённый участник появлялся в groups.json, но счётчик в
-      // шапке не менялся до повторного открытия чата (приёмка 17.11).
-      // Переставляем currentGroup на свежую запись — сеттер заодно
-      // перечитывает права.
-      const cur = this.currentGroup;
-      if (cur) {
-        const fresh = (this.groups || []).find((g) => g.id === cur.id);
-        if (fresh && fresh !== cur) this.currentGroup = fresh;
-      }
-    },
+    async loadGroups() { return AccountLoadFeature.loadGroups(this.accountLoadDeps); },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
     channelPostsToMessages(ch) { return ChannelsFeature.channelPostsToMessages(ch); },
     async selectChannel(ch) { return ChannelsFeature.selectChannel(ch, this.channelsDeps); },

@@ -33,10 +33,23 @@ export async function loadGroups(deps) {
     requestGroupAvatarHeal: deps.requestGroupAvatarHeal,
   });
   if (r.groups) deps.setGroups(r.groups);
+  repointCurrentGroup(deps);
   deps.groupsStore.mergeGroupKeys(r.keys || {});
   deps.groupsStore.mergeGroupAvatars(r.avatars || {});
   deps.groupsStore.mergeGroupIcons(r.icons);
   for (const c of r.newContacts) deps.contacts().push(c);
+}
+
+// Перечитывание групп заменяет объекты групп новыми (setGroups). Открытая
+// группа осталась бы ссылкой на прежний объект и показывала старый состав:
+// приглашённый участник появлялся в groups.json, но счётчик в шапке не менялся
+// до повторного открытия чата (приёмка 17.11.2026). Перестановка живёт здесь,
+// а не в App.vue: компонент только отдаёт владельцев состояния (ADR-005 W3).
+export function repointCurrentGroup(deps) {
+  const cur = deps.currentGroup();
+  if (!cur) return;
+  const fresh = (deps.groups() || []).find((g) => g && g.id === cur.id);
+  if (fresh && fresh !== cur) deps.setCurrentGroup(fresh);
 }
 
 // Смена СВОЕЙ почты: переименовать старый адрес в группах, где мы участник

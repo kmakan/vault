@@ -592,6 +592,7 @@ export default {
   report_content_sender: '发送者邮箱',
   report_content_time: '时间',
   report_content_msg_id: '消息ID',
+  report_content_sent: '举报已发送',
   settings_restart_hint: '。请重新启动应用。',
   recovery_spam_toast: '恢复密钥已保存到您的邮箱。请检查垃圾邮件：如果 Vault 的邮件进入了垃圾邮件，请将其移至收件箱，否则将被删除',
   recovery_spam_folder: '托管信件位于文件夹：',

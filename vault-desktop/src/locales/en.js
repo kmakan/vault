@@ -602,6 +602,7 @@ export default {
   report_content_sender: 'Sender email',
   report_content_time: 'Time',
   report_content_msg_id: 'Message ID',
+  report_content_sent: 'Report sent',
   settings_restart_hint: '. Restart the app.',
   recovery_spam_toast: 'Recovery key saved to your mailbox. CHECK SPAM: if the Vault letter landed there, move it to Inbox, otherwise it will be deleted',
   recovery_spam_folder: 'Escrow letter found in folder: ',

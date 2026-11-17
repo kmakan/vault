@@ -61,9 +61,10 @@ lines = R.buildReportLines({ type: 'x', msg: {}, sender: '-' }, () => '');
 ok('переводчик вернул пустое → запасной текст, а не пустая строка',
   lines[0] === 'Тип: x');
 
-// ── mailto ─────────────────────────────────────────────────────────────
+// ── mailto (запасной путь) ─────────────────────────────────────────────
 const url = R.buildReportMailto('Жалоба на контент', lines);
-ok('адрес поддержки зашит и не подменён', url.startsWith('mailto:vault-msg@ya.ru?'));
+ok('адрес оператора один и тот же в коде и в ссылке',
+  R.OPERATOR_EMAIL === 'vault-msg@ya.ru' && url.startsWith('mailto:' + R.OPERATOR_EMAIL + '?'));
 ok('тема в subject', url.includes('subject=' + encodeURIComponent('Жалоба на контент')));
 ok('текст в body, переносы строк закодированы',
   url.includes('body=' + encodeURIComponent(lines.join('\n'))));
@@ -75,6 +76,47 @@ ok('спецсимволы в теме экранированы',
   tricky.includes(encodeURIComponent('Жалоба: 100% & more #1')));
 ok('и в сырой ссылке нет неэкранированных & из темы',
   (tricky.match(/&/g) || []).length === 1);
+
+// ── Поток жалобы: сначала отправка из приложения, mailto — только отказ ─
+// 12.11 при разборе §3.5 выяснилось: mailto-intent на чистом Android никуда
+// не ведёт (обработчика может не быть), и жалоба молча терялась. Поэтому
+// основной путь — штатный SMTP моста, а почтовый клиент — запасной.
+{
+  const sent = [], notified = [], opened = [];
+  const deps = {
+    tr: (k) => ({ report_content_prompt: 'Тип', report_content_subject: 'Жалоба',
+      report_content_sent: 'Отправлено' }[k]),
+    prompt: async () => 'спам',
+    msgSenderEmail: () => 'a@b.ru',
+    activeChatType: () => 'chat',
+    activeChat: () => 'a@b.ru',
+    sendReport: async (subject, body) => { sent.push({ subject, body }); },
+    notify: (m) => notified.push(m),
+    openExternalUrl: async (u) => { opened.push(u); },
+  };
+  await R.reportMessageContent(deps, { time: '10:00', id: 'm-1' });
+  ok('жалоба уходит письмом ИЗ ПРИЛОЖЕНИЯ, почтовый клиент не открывается',
+    sent.length === 1 && opened.length === 0);
+  ok('тема письма — переведённая', sent[0].subject === 'Жалоба');
+  ok('в теле — строки жалобы', sent[0].body.includes('ID сообщения: m-1')
+    && sent[0].body.includes('Email отправителя: a@b.ru'));
+  ok('успех показан пользователю', notified.length === 1);
+
+  sent.length = 0; opened.length = 0; notified.length = 0;
+  await R.reportMessageContent(
+    { ...deps, sendReport: async () => { throw new Error('SMTP down'); } },
+    { time: '10:00', id: 'm-2' });
+  ok('SMTP отказал → открывается почтовый клиент с готовым письмом',
+    opened.length === 1 && opened[0].startsWith('mailto:' + R.OPERATOR_EMAIL));
+  ok('при отказе SMTP пользователю не врут «отправлено»', notified.length === 0);
+  ok('прочерк вместо подстановки в теле запасного письма',
+    decodeURIComponent(opened[0]).includes('ID сообщения: m-2'));
+
+  sent.length = 0; opened.length = 0; notified.length = 0;
+  await R.reportMessageContent({ ...deps, prompt: async () => null }, {});
+  ok('отмена пользователем → ни письма, ни mailto, ни уведомления',
+    sent.length === 0 && opened.length === 0 && notified.length === 0);
+}
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

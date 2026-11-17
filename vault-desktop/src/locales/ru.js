@@ -603,6 +603,7 @@ export default {
   report_content_sender: 'Email отправителя',
   report_content_time: 'Время',
   report_content_msg_id: 'ID сообщения',
+  report_content_sent: 'Жалоба отправлена',
   settings_restart_hint: '. Перезапустите приложение.',
   recovery_spam_toast: 'Ключ сохранён в ящик. ПРОВЕРЬТЕ СПАМ: если письмо от Vault попало туда — переложите его во «Входящие», иначе оно будет удалено',
   recovery_spam_folder: 'Эскроу-письмо найдено в папке: ',

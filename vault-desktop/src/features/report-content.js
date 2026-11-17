@@ -42,15 +42,27 @@ export function buildReportLines({ type, msg, sender }, t) {
   ];
 }
 
-// mailto со собранным текстом. Адрес поддержки зашит в коде — он не меняется от
-// пользователя и не должен приходить из настроек.
+// Ящик оператора (тот же, что в «Помощи» и в блоке «Данные и ПДн»): жалоба
+// уходит туда, а не в личную почту владельца. Адрес зашит в коде — он не
+// зависит от пользователя и не должен приходить из настроек.
+export const OPERATOR_EMAIL = 'vault-msg@ya.ru';
+
+// mailto со собранным текстом — ЗАПАСНОЙ путь, когда письмо из приложения
+// отправить не удалось (нет соединения с SMTP). Адрес здесь тот же самый.
 export function buildReportMailto(subject, lines) {
-  return 'mailto:vault-msg@ya.ru?subject=' + encodeURIComponent(subject)
+  return 'mailto:' + OPERATOR_EMAIL + '?subject=' + encodeURIComponent(subject)
     + '&body=' + encodeURIComponent(lines.join('\n'));
 }
 
-// Поток жалобы на контент: спрашиваем тип, собираем письмо и открываем
-// почтовое приложение. Отмена пользователя (null из prompt) — не ошибка.
+// Поток жалобы на контент: спрашиваем тип, собираем письмо и ОТПРАВЛЯЕМ ЕГО
+// ИЗ ПРИЛОЖЕНИЯ через штатный SMTP-мост. Внешний почтовый клиент не нужен:
+// 12.11 при разборе жалоб для RuStore §3.5 выяснилось, что mailto-intent на
+// чистом Android никуда не ведёт (обработчика может не быть вовсе), и жалоба
+// молча терялась. На телефоне это выглядело как «нажал — ничего не произошло».
+//
+// mailto остаётся запасным путём: если SMTP недоступен (нет сети, сессия
+// разорвана), письмо всё равно можно отправить вручную — лучше, чем потерять
+// жалобу. Отмена пользователя (null из prompt) — не ошибка.
 export async function reportMessageContent(deps, msg) {
   const type = await deps.prompt(
     deps.tr('report_content_prompt') || 'Тип жалобы (спам / оскорбления / другое):',
@@ -59,9 +71,14 @@ export async function reportMessageContent(deps, msg) {
   const sender = deps.msgSenderEmail(msg)
     || (deps.activeChatType() === 'chat' ? deps.activeChat() : '')
     || '-';
-  const tr = (k) => deps.tr(k);
-  const lines = buildReportLines({ type, msg, sender }, tr);
-  const url = buildReportMailto(
-    deps.tr('report_content_subject') || 'Жалоба на контент — Vault', lines);
-  await deps.openExternalUrl(url);
+  const lines = buildReportLines({ type, msg, sender }, deps.tr);
+  const subject = deps.tr('report_content_subject') || 'Жалоба на контент — Vault';
+  try {
+    await deps.sendReport(subject, lines.join('\n'));
+    if (deps.notify) deps.notify(deps.tr('report_content_sent') || 'Жалоба отправлена');
+    return;
+  } catch (e) {
+    console.warn('[report] in-app send failed, falling back to mailto:', e);
+  }
+  await deps.openExternalUrl(buildReportMailto(subject, lines));
 }
