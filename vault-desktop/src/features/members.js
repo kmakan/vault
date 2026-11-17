@@ -70,10 +70,16 @@ export async function inviteSelectedMembers(deps) {
           if (!groupKeys.length) throw new Error('No group key');
           const enc = await crypto.encryptGroupKeyForUser(groupKeys[0], peerPub);
           await api.inviteGroupMember(group.id, email, enc, deps.publicKey());
-          // Помечаем локально как «приглашён» в списке участников (появится после accept).
-          const members = group.members || [];
-          if (!members.some(m => m.email === email)) {
-            members.push({ email, role: 'Member', invited: true });
+          // «Приглашён» фиксируем НА ДИСКЕ (groups.json), а не только в массиве
+          // в памяти: следующий loadGroups() перечитывает файл и стирал
+          // добавленного в память участника — после перезапуска группа снова
+          // оказывалась с одним человеком (проверено 17.11 на эмуляторе:
+          // пригласили, перезапустили — участник исчез). mark_invited
+          // идемпотентен и создаёт запись, если её нет.
+          try {
+            await invoke('groups_mark_invited', { groupId: group.id, email });
+          } catch (e) {
+            console.warn('mark_invited failed:', e);
           }
           sent.push(email);
         } catch (e) {

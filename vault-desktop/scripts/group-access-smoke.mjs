@@ -165,5 +165,24 @@ try { refreshRes = await store.refresh(null); } catch (e) { refreshThrown = e; }
 ok('refresh с открытой группой, но без идентичности — без вызова моста',
   refreshThrown === null && refreshRes === null && st.calls.length === 1);
 
+// ── liveState: мутации обязаны идти через подменённый state ────────────
+// App.vue делает `store.state = reactive(store.state)`. Модуль, который пишет
+// в захваченный сырой объект, прокси не будит: computed `groupAccess` остаётся
+// null навсегда, и кнопка «Добавить участника» не появляется у создателя
+// группы (дефект найден 17.11 на эмуляторе, 0.1.295). Проверяем сам обмен:
+// каждая запись должна пройти через set-ловушку прокси.
+reset();
+const rawState = store.state;
+const writes = [];
+store.state = new Proxy(rawState, {
+  get(t, k) { return t[k]; },
+  set(t, k, v) { writes.push(k); t[k] = v; return true; },
+});
+await store.select({ id: 'g9' }, identity);
+ok('сброс и ответ пишут права через прокси, а не мимо него',
+  writes.filter((k) => k === 'access').length >= 2 && rawState.access !== null);
+ok('открытая группа тоже пишется через прокси', writes.includes('groupId'));
+store.state = rawState;
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

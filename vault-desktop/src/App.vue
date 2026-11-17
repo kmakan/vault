@@ -750,7 +750,7 @@
 
     <!-- Members list (список участников группы по клику на счётчик) -->
     <div v-if="showMembersList && currentGroup" class="modal-overlay" @click.self="showMembersList = false">
-      <div class="modal-settings">
+      <div class="modal-settings invite-popup-panel">
         <button class="modal-close-x" @click="showMembersList = false"><Icon name="x" :size="20" /></button>
         <h3 class="invite-popup-title">{{ (currentGroup.members || []).length }} {{ membersLabel((currentGroup.members || []).length) }}</h3>
         <div class="member-list">
@@ -3843,7 +3843,20 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ADR-003 Этап 3: сбор и применение разнесены (features/groups-load.js).
     // Присваивания идут ПОСЛЕ сбора, и groups применяется только если invoke
     // отработал: иначе поле осталось бы прежним, как и в оригинале.
-    async loadGroups() { return AccountLoadFeature.loadGroups(this.accountLoadDeps); },
+    async loadGroups() {
+      await AccountLoadFeature.loadGroups(this.accountLoadDeps);
+      // Перечитывание заменяет объекты групп новыми (setGroups). Открытая
+      // группа осталась бы ссылкой на прежний объект и показывала старый
+      // состав: приглашённый участник появлялся в groups.json, но счётчик в
+      // шапке не менялся до повторного открытия чата (приёмка 17.11).
+      // Переставляем currentGroup на свежую запись — сеттер заодно
+      // перечитывает права.
+      const cur = this.currentGroup;
+      if (cur) {
+        const fresh = (this.groups || []).find((g) => g.id === cur.id);
+        if (fresh && fresh !== cur) this.currentGroup = fresh;
+      }
+    },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
     channelPostsToMessages(ch) { return ChannelsFeature.channelPostsToMessages(ch); },
     async selectChannel(ch) { return ChannelsFeature.selectChannel(ch, this.channelsDeps); },

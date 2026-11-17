@@ -22,6 +22,14 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export function createGroupAccessStore() {
+  // ВАЖНО: мутации идут ТОЛЬКО через `this.state`, а не через захваченный
+  // объект. `liveState(groupAccessStore)` в App.vue заменяет `store.state` на
+  // reactive-прокси, но замыкание продолжает смотреть в СЫРОЙ объект: запись
+  // мимо прокси не будит ни один computed, и `groupAccess` навсегда остаётся
+  // тем, что прочитали при первом рендере (null). Так кнопка «Добавить
+  // участника» не появлялась у создателя группы, хотя мост отвечал
+  // `can_manage: true`. Тот же класс регрессии, что в identity-store
+  // (18.10.2026) — там он уже описан.
   const state = {
     groupId: null,
     // { is_mine, is_creator, is_admin, can_manage, members: [...] } либо null,
@@ -32,7 +40,7 @@ export function createGroupAccessStore() {
   // он ехал. Иначе быстрое переключение A → B показало бы права A на группе B.
   let seq = 0;
 
-  async function fetchAccess(groupId, identity) {
+  async function fetchAccess(store, groupId, identity) {
     const ticket = ++seq;
     const me = identity();
     let access = null;
@@ -46,8 +54,8 @@ export function createGroupAccessStore() {
     } catch (e) {
       console.warn('[group-access] groups_access failed:', e);
     }
-    if (ticket !== seq || state.groupId !== groupId) return null;
-    state.access = access;
+    if (ticket !== seq || store.state.groupId !== groupId) return null;
+    store.state.access = access;
     return access;
   }
 
@@ -58,23 +66,23 @@ export function createGroupAccessStore() {
     // заново. `identity` — функция, отдающая { email, fingerprint, aliases }.
     select(group, identity) {
       const groupId = (group && group.id) || null;
-      state.groupId = groupId;
-      state.access = null;
+      this.state.groupId = groupId;
+      this.state.access = null;
       if (!groupId || typeof identity !== 'function') return Promise.resolve(null);
-      return fetchAccess(groupId, identity);
+      return fetchAccess(this, groupId, identity);
     },
 
     // Перечитать права открытой группы: после смены состава или роли.
     refresh(identity) {
-      if (!state.groupId || typeof identity !== 'function') return Promise.resolve(null);
-      return fetchAccess(state.groupId, identity);
+      if (!this.state.groupId || typeof identity !== 'function') return Promise.resolve(null);
+      return fetchAccess(this, this.state.groupId, identity);
     },
 
     // Сброс закрывает группу; номер запроса сдвигать не нужно — устаревший
     // ответ отбрасывается уже потому, что `state.groupId` больше не совпадает.
     clear() {
-      state.groupId = null;
-      state.access = null;
+      this.state.groupId = null;
+      this.state.access = null;
     },
   };
 }

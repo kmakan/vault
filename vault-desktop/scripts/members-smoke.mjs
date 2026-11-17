@@ -145,7 +145,8 @@ const { w: ctx5, deps: deps5 } = makeWorld({
 });
 await inviteSelectedMembers(deps5);
 check('тот же fingerprint → groups_rename_member вызван',
-  invokeMock.calls.length === 1 && invokeMock.calls[0][1].oldEmail === 'old@x.ru');
+  invokeMock.calls.some(([cmd, args]) => cmd === 'groups_rename_member' && args.oldEmail === 'old@x.ru'),
+  invokeMock.calls);
 check('после миграции адрес в составе обновлён', stale.email === 'new@x.ru');
 
 // 6. Несколько участников: смешанные sent/skipped
@@ -203,14 +204,18 @@ reset();
   check('состав перечитывается с диска (loadGroups + loadChannels)', groups === 1 && channels === 1, { groups, channels });
 }
 
-// 10. Приглашённый помечается в составе участников (появится после accept)
+// 10. Приглашённый фиксируется НА ДИСКЕ (groups.json), а не только в памяти:
+// иначе следующий loadGroups() стирает его, и после перезапуска группа снова
+// с одним участником (дефект 17.11).
 {
   reset();
   const group = { id: 'G1', members: [] };
   const { deps } = makeWorld({ currentGroup: group, addMemberSelected: ['new@x.ru'] });
   await inviteSelectedMembers(deps);
-  check('участник помечен «invited» в составе группы',
-    group.members.length === 1 && group.members[0].invited === true, group.members);
+  check('«приглашён» записан в groups.json через groups_mark_invited',
+    invokeMock.calls.some(([cmd, args]) => cmd === 'groups_mark_invited'
+      && args.groupId === 'G1' && args.email === 'new@x.ru'), invokeMock.calls);
+  check('в памяти состав не подменяется (источник — файл)', group.members.length === 0, group.members);
 }
 
 // 11. Ошибка отправки попадает в отчёт

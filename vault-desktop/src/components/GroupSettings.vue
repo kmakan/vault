@@ -292,8 +292,15 @@ async function onGroupAvatarSelected(e) {
 
 .group-settings__name {
   display: flex;
+  /* Длинный ID группы (grp_ + 16 hex) не влезал в строку: имя, ID и счётчик
+     стояли в одну линию без переноса, и на телефоне «2 участника» уезжало
+     за край панели (видно на приёмке 17.11). Перенос и min-width:0 — чтобы
+     блок мог сжиматься, а не выпирать. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .group-name {
@@ -306,9 +313,12 @@ async function onGroupAvatarSelected(e) {
   font-size: 11px;
   color: var(--text-muted, #888);
   font-family: monospace;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .group-settings__meta {
+  flex-basis: 100%;
   font-size: 12px;
   color: var(--text-secondary, #aaa);
   margin-top: 4px;
@@ -372,6 +382,11 @@ async function onGroupAvatarSelected(e) {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* У приглашённого участника в строке помещаются имя, метка «приглашён»,
+     роль, выбор роли и две кнопки. На телефоне это не влезало: имя сжималось
+     до нулевой ширины (видно на приёмке 17.11). Разрешаем перенос — кнопки
+     уходят на вторую строку, имя остаётся читаемым. */
+  flex-wrap: wrap;
   padding: 8px;
   border-radius: 8px;
   background: var(--bg-primary, #0d0d1a);
@@ -382,8 +397,12 @@ async function onGroupAvatarSelected(e) {
 }
 
 .member-item__info {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
+  /* Имя и метки — в одну строку с переносом: иначе «приглашён» и роль
+     выдавливали имя в ноль (overflow:hidden + nowrap). */
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 
 .member-item__email {
@@ -421,6 +440,8 @@ async function onGroupAvatarSelected(e) {
 .member-item__actions {
   display: flex;
   gap: 4px;
+  /* Если кнопки уехали на вторую строку — держим их у правого края. */
+  margin-left: auto;
 }
 
 .btn-sm {
