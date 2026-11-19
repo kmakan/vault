@@ -1,0 +1,9 @@
+{
+  "name": "vault-sfera",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vault Sfera — workspace (Rust-ядро + тонкий JS-адаптер)",
+  "scripts": {
+    "test:contract": "node scripts/contract-check.mjs"
+  }
+}

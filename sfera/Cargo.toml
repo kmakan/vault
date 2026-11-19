@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/social-model",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"
+publish = false
