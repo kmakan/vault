@@ -7,6 +7,7 @@
 
 pub mod canonical;
 pub mod identity;
+pub mod post;
 
 pub use identity::Fingerprint;
 

@@ -15,3 +15,7 @@ serde_json = "1"
 # Канонический JSON (RFC 8785 / JCS) — устоявшаяся реализация, а не самописный
 # сортировщик ключей: перестановка полей не должна ломать подпись.
 serde_jcs = "0.1"
+# Подпись поста — тот же ed25519-dalek v2 и verify_strict, что в мессенджере
+# (vault-desktop/src-tauri/src/channel_signing.rs), не второй алгоритм.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"

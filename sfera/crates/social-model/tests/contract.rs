@@ -3,7 +3,11 @@
 //! фронтом — подпись поста перестанет проверяться на одной из сторон.
 
 use serde_json::Value;
-use social_model::{canonical::canonical_string, Author, Fingerprint};
+use social_model::{
+    canonical::canonical_string,
+    post::{public_key_hex, sign, verify, PostPayload},
+    Author, Fingerprint,
+};
 
 const FIXTURE: &str = include_str!("fixtures/author-contract.json");
 
@@ -31,8 +35,34 @@ fn canonical_post_matches_fixture() {
 #[test]
 fn author_serializes_to_fingerprint_string() {
     // fp в JSON — строка, не объект и не email.
-    let fp = Fingerprint::from_str("02:00:00:00:00:00:00:00:****");
+    let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture is json");
+    let fp = Fingerprint::from_str(fixture["author"]["fp"].as_str().unwrap());
     let json = serde_json::to_string(&fp).unwrap();
-    assert_eq!(json, r#""02:00:00:00:00:00:00:00:****""#);
+    assert_eq!(json, format!("\"{}\"", fp.as_str()));
     assert!(!json.contains('@'));
+}
+
+#[test]
+fn signature_contract_matches_fixture() {
+    // Подпись из фикстуры (сделана этим же кодом) проверяется; seed даёт тот же
+    // pub_key, что записан в авторе. Это якорь для JS-стороны контракта.
+    let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture is json");
+    let seed = fixture["signing"]["seed_hex"].as_str().unwrap();
+    let sig = fixture["signing"]["sig_hex"].as_str().unwrap();
+    let pub_key = fixture["author"]["pub_key"].as_str().unwrap();
+
+    assert_eq!(public_key_hex(seed).unwrap(), pub_key);
+
+    let payload: PostPayload = serde_json::from_value(fixture["post"].clone()).unwrap();
+    assert!(verify(&payload, sig), "fixture signature must verify");
+    assert_eq!(sign(seed, &payload).unwrap(), sig, "signature is deterministic");
+}
+
+#[test]
+fn fixture_signature_rejects_tampered_body() {
+    let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture is json");
+    let sig = fixture["signing"]["sig_hex"].as_str().unwrap();
+    let mut payload: PostPayload = serde_json::from_value(fixture["post"].clone()).unwrap();
+    payload.body = "подмена".to_string();
+    assert!(!verify(&payload, sig));
 }

@@ -1,17 +1,23 @@
 {
-  "description": "Контракт identity и канонического JSON Sfera. Одна фикстура читается Rust (social-model) и JS (sfera).",
+  "description": "Контракт identity, канонического JSON и подписи Sfera. Одна фикстура читается Rust (social-model) и JS (sfera).",
   "author": {
-    "pub_key": "0200000000000000000000000000000000000000000000000000000000000000",
-    "fp": "02:00:00:00:00:00:00:00:****"
+    "pub_key": "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc",
+    "fp": "ce:cc:15:07:dc:1d:dd:72:****"
+  },
+  "signing": {
+    "seed_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+    "domain": "sfera-post:v1\u0000",
+    "sig_hex": "21fab6bac635e9f4e8feb85bdcab178532e73d972244f15f99288a614c157d1b50631178a041e2e16e97dbd66fe8137241b581d32e1b84fa673a671602eb1606"
   },
   "post": {
     "type": "social_post",
     "v": 1,
     "author": {
-      "fp": "02:00:00:00:00:00:00:00:****",
-      "pub_key": "0200000000000000000000000000000000000000000000000000000000000000"
+      "fp": "ce:cc:15:07:dc:1d:dd:72:****",
+      "pub_key": "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc"
     },
+    "ts": 1795000000,
     "body": "тест"
   },
-  "canonical_post": "{\"author\":{\"fp\":\"02:00:00:00:00:00:00:00:****\",\"pub_key\":\"0200000000000000000000000000000000000000000000000000000000000000\"},\"body\":\"тест\",\"type\":\"social_post\",\"v\":1}"
+  "canonical_post": "{\"author\":{\"fp\":\"ce:cc:15:07:dc:1d:dd:72:****\",\"pub_key\":\"cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc\"},\"body\":\"тест\",\"ts\":1795000000,\"type\":\"social_post\",\"v\":1}"
 }
