@@ -2,6 +2,10 @@
 resolver = "2"
 members = [
     "crates/social-model",
+    "crates/storage-api",
+    "crates/storage-conformance",
+    "crates/storage-local",
+    "crates/social-media",
 ]
 
 [workspace.package]

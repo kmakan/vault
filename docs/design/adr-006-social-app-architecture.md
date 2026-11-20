@@ -211,19 +211,44 @@ E2E-конверте**. Пост — это типизированное соо�
 
 ### 5.1 Формат блоба
 
+Конкретная раскладка (все целые — little-endian; заголовок ровно 71 байт):
+
 ```
-VAULTBLOB1 | ver=1 | chunk_size=4MiB | blob_id(32) | nonce_prefix(16) | chunks...
-chunk i: XChaCha20-Poly1305(file_key, nonce = nonce_prefix || i, aad = blob_id || i || total)
+offset size field
+0      10    magic = b"VAULTBLOB1"
+10     1     ver = 1
+11     4     chunk_size(u32)           // по умолчанию 4 MiB, но хранится в заголовке
+15     32    blob_id = SHA256(ciphertext)
+47     16    nonce_prefix              // 16 случайных байт на блоб
+63     8     total(u64)                // длина plaintext в байтах
+71     ...   chunks (подряд):
+
+chunk i: ct_i = XChaCha20-Poly1305(file_key,
+             nonce = nonce_prefix || i(u64)      // 16 + 8 = 24 байта
+             aad   = AAD_DOMAIN || nonce_prefix || i(u64) || total(u64))
+         |ct_i| = |pt_i| + 16 (Poly1305 tag)
+         |pt_i| = min(chunk_size, total - i*chunk_size); pt_0..n-1, n = ceil(total/chunk_size)
+AAD_DOMAIN = b"vaultblob:v1\0"
 ```
+
+**Почему в AAD стоит `nonce_prefix`, а не `blob_id`.** В черновике было
+`aad = blob_id || i || total`, но это циклическая зависимость: `blob_id` есть
+SHA-256 шифротекста, то есть **результат** шифрования, и он не может одновременно
+быть **входом** в это же шифрование. `nonce_prefix` — случайный на блоб и
+известен до шифрования; он даёт ровно то же свойство «чанк из блоба A не вставишь
+в блоб B» (подмена ломает AAD), без цикла. `blob_id` остаётся чисто адресом:
+SHA-256 шифротекста, который уходит в `Locator`.
 
 - `file_key` — случайные 32 байта на файл; в пост попадает в завёрнутом виде
   (ключом аудитории или ключом получателя).
 - Чанки независимы → **Range-запросы и стриминг**: плеер запрашивает нужный
   кусок, не скачивая файл целиком. Это же — фундамент будущего видеохостинга и
   стриминга.
-- Миниатюра — отдельный маленький блоб, ключ = `HKDF(file_key, "thumb")`.
+- Миниатюра — отдельный маленький блоб, ключ =
+  `HKDF-SHA256(ikm=file_key, salt=none, info="vaultblob:thumb:v1", L=32)`.
 - `blob_id` — SHA-256 **шифротекста**: провайдер не может сопоставить одинаковые
-  файлы, дедупликация сознательно принесена в жертву приватности.
+  файлы, дедупликация сознательно принесена в жертву приватности. Для двух
+  шифрований одного plaintext с разными `file_key`/`nonce_prefix` ID различаются.
 
 ### 5.2 Доступ: capability URL + ключ в конверте
 
@@ -441,6 +466,7 @@ whisper/
       social-post/       # сборка/подпись/валидация поста
       social-media/      # формат блоба, чанкованный AEAD, миниатюры, манифест
       storage-api/       # BlobStore, Locator, BlobId, StorageError
+      storage-conformance/ # единый набор проверок семантики для любого адаптера
       storage-local/     # папка устройства (desktop) / SAF (Android)
       storage-webdav/    # Nextcloud/ownCloud
       storage-s3/        # Selectel/VK/MinIO
