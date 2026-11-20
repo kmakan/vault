@@ -130,3 +130,30 @@ jobs:
       - name: Check Tauri
         working-directory: vault-desktop
         run: npx tauri build
+
+  # ADR-006 §9.4: изменение общего ядра обязано прогонять тесты ОБОИХ
+  # приложений. Иначе правка в vault-core ломает Sfera незаметно для CI,
+  # потому что её тесты до сих пор не запускались ни в одной джобе.
+  kernel-consumers:
+    name: Kernel consumers (vault-core → messenger + Sfera)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            vault-core
+            sfera
+      - name: Kernel tests
+        working-directory: vault-core
+        run: cargo test
+      - name: Sfera tests
+        working-directory: sfera
+        run: cargo test --workspace
+      - name: Sfera contract gates
+        working-directory: sfera
+        run: npm run test:contract
+      - name: Messenger depends on kernel
+        working-directory: vault-desktop/src-tauri
+        run: cargo check --lib
