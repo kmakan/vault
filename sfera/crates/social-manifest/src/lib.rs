@@ -87,6 +87,44 @@ impl Manifest {
     }
 }
 
+/// Память рабочей локации: ключ `blob_id` → `store_id`, который сработал.
+/// Порядок в манифесте — предпочтение, а не истина (§5.3): запомненный
+/// рабочий провайдер пробуется первым, но при отказе остальные не теряются.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocatorMemory {
+    working: std::collections::BTreeMap<String, String>,
+}
+
+impl LocatorMemory {
+    fn key(blob: &BlobId) -> String {
+        blob.to_hex()
+    }
+
+    /// Упорядочить локации: сначала запомненная рабочая, затем остальные
+    /// в исходном порядке манифеста (детерминированно).
+    pub fn ordered<'a>(&self, blob: &BlobId, locators: &'a [Locator]) -> Vec<&'a Locator> {
+        let preferred = self.working.get(&Self::key(blob));
+        let mut out: Vec<&Locator> = locators.iter().collect();
+        if let Some(store) = preferred {
+            out.sort_by_key(|l| if l.store_id == *store { 0 } else { 1 });
+        }
+        out
+    }
+
+    /// Запомнить рабочую локацию после успешного чтения.
+    pub fn remember(&mut self, blob: &BlobId, store_id: &str) {
+        self.working.insert(Self::key(blob), store_id.to_string());
+    }
+
+    pub fn forget(&mut self, blob: &BlobId) {
+        self.working.remove(&Self::key(blob));
+    }
+
+    pub fn known(&self, blob: &BlobId) -> Option<&str> {
+        self.working.get(&Self::key(blob)).map(String::as_str)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +183,36 @@ mod tests {
         let mut m = Manifest::new("post-1", vec![entry()]);
         m.v = 99;
         assert_eq!(m.validate().unwrap_err(), ManifestError::UnsupportedVersion);
+    }
+
+    fn two_locators() -> Vec<Locator> {
+        let b = id(1);
+        vec![
+            Locator { store_id: "device".into(), uri: "/a".into(), blob_id: b },
+            Locator { store_id: "nextcloud".into(), uri: "/b".into(), blob_id: b },
+        ]
+    }
+
+    #[test]
+    fn memory_puts_working_locator_first() {
+        let b = id(1);
+        let locs = two_locators();
+        let mut mem = LocatorMemory::default();
+        assert_eq!(mem.ordered(&b, &locs)[0].store_id, "device");
+        mem.remember(&b, "nextcloud");
+        assert_eq!(mem.ordered(&b, &locs)[0].store_id, "nextcloud");
+        assert_eq!(mem.known(&b), Some("nextcloud"));
+    }
+
+    #[test]
+    fn forgetting_returns_to_manifest_order() {
+        let b = id(1);
+        let locs = two_locators();
+        let mut mem = LocatorMemory::default();
+        mem.remember(&b, "nextcloud");
+        mem.forget(&b);
+        assert_eq!(mem.ordered(&b, &locs)[0].store_id, "device");
+        assert!(mem.known(&b).is_none());
     }
 
     #[test]
