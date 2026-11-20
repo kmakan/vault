@@ -1,0 +1,10 @@
+[package]
+name = "storage-providers"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: каталог пресетов хранилищ, решение в Rust (ADR-006 §6.1)"
+
+[dependencies]
+storage-api = { path = "../storage-api" }

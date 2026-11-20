@@ -3380,6 +3380,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "storage-providers"
+version = "0.1.0"
+dependencies = [
+ "storage-api",
+]
+
+[[package]]
 name = "storage-s3"
 version = "0.1.0"
 dependencies = [
