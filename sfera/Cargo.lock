@@ -3298,6 +3298,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-ports-impl"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "social-audience",
+ "social-contacts",
+ "social-model",
+ "social-ports",
+ "social-rights",
+]
+
+[[package]]
 name = "social-post"
 version = "0.1.0"
 dependencies = [

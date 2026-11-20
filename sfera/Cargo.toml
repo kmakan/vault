@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/social-model",
     "crates/social-ports",
+    "crates/social-ports-impl",
     "crates/social-device",
     "crates/social-link",
     "crates/social-repo",
