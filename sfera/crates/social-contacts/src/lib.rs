@@ -5,7 +5,7 @@
 //! него, нет. Здесь — чистые переходы; доставка конвертов живёт в
 //! `social-delivery`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use social_model::Fingerprint;
 use social_rights::{RelationState, Role, RoleOverrides};
@@ -172,11 +172,60 @@ pub fn can_send_request(policy: RequestPolicy, has_valid_invite: bool) -> bool {
 #[derive(Clone, Debug, Default)]
 pub struct ContactBook {
     records: BTreeMap<String, ContactRecord>,
+    /// Уже обработанные nonce заявок и выдач: ключ `from|to|nonce`.
+    /// ADR-006 §7.5: повторная доставка не создаёт второй контакт и не выдаёт
+    /// ключ дважды. Без этого реестра повтор письма = повторная выдача.
+    seen_nonces: BTreeSet<String>,
+}
+
+/// Итог приёма заявки. `Duplicate` — тот же `(from, to, nonce)` уже был.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestOutcome {
+    Accepted,
+    Duplicate,
+}
+
+fn nonce_key(from: &Fingerprint, to: &Fingerprint, nonce: &str) -> String {
+    format!("{}|{}|{}", from.as_str(), to.as_str(), nonce)
 }
 
 impl ContactBook {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Принять заявку с дедупом по `(from, to, nonce)`.
+    /// Повторная доставка того же письма — `Duplicate`, состояние не меняется.
+    pub fn accept_request(
+        &mut self,
+        req: &ContactRequest,
+    ) -> Result<RequestOutcome, ContactError> {
+        let key = nonce_key(&req.from, &req.to, &req.nonce);
+        if self.seen_nonces.contains(&key) {
+            return Ok(RequestOutcome::Duplicate);
+        }
+        let current = self.state_of(&req.from);
+        let next = transition(current, &ContactAction::Request)?;
+        if next != current {
+            let mut record = self
+                .get(&req.from)
+                .cloned()
+                .unwrap_or_else(|| ContactRecord::contact(req.from.clone(), Role::Acquaintance, Vec::new(), false));
+            record.state = next;
+            self.upsert(record);
+        }
+        self.seen_nonces.insert(key);
+        Ok(RequestOutcome::Accepted)
+    }
+
+    /// Отметить nonce как обработанный (для выдач ключей/истории).
+    /// `false` — уже был: повторную выдачу делать нельзя.
+    pub fn mark_nonce(&mut self, from: &Fingerprint, to: &Fingerprint, nonce: &str) -> bool {
+        self.seen_nonces.insert(nonce_key(from, to, nonce))
+    }
+
+    pub fn nonce_seen(&self, from: &Fingerprint, to: &Fingerprint, nonce: &str) -> bool {
+        self.seen_nonces.contains(&nonce_key(from, to, nonce))
     }
 
     pub fn upsert(&mut self, record: ContactRecord) {

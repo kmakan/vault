@@ -2,7 +2,7 @@
 
 use social_contacts::{
     can_send_request, transition, ContactAction, ContactBook, ContactError, ContactRecord,
-    ContactRequest, RequestPolicy,
+    ContactRequest, RequestPolicy, RequestOutcome,
 };
 use social_model::Fingerprint;
 use social_rights::{RelationState, Role};
@@ -159,4 +159,51 @@ fn record_serializes_with_defaults() {
     // overrides по умолчанию пуст и не ломает разбор.
     let back: ContactRecord = serde_json::from_value(json).unwrap();
     assert_eq!(back, r);
+}
+
+// ── Идемпотентность заявок по (from, to, nonce), ADR-006 §7.5 ──────────────
+
+#[test]
+fn same_nonce_is_duplicate_and_does_not_change_state() {
+    let mut book = ContactBook::new();
+    let req = ContactRequest::new(fp(1), fp(2), 100, "n-1", "привет").unwrap();
+
+    assert_eq!(book.accept_request(&req).unwrap(), RequestOutcome::Accepted);
+    assert_eq!(book.state_of(&fp(1)), RelationState::Requested);
+
+    // Повторная доставка того же письма — Duplicate, состояние не меняется.
+    assert_eq!(book.accept_request(&req).unwrap(), RequestOutcome::Duplicate);
+    assert_eq!(book.state_of(&fp(1)), RelationState::Requested);
+}
+
+#[test]
+fn different_nonce_is_new_request() {
+    let mut book = ContactBook::new();
+    let a = ContactRequest::new(fp(1), fp(2), 100, "n-1", "раз").unwrap();
+    let b = ContactRequest::new(fp(1), fp(2), 200, "n-2", "два").unwrap();
+    assert_eq!(book.accept_request(&a).unwrap(), RequestOutcome::Accepted);
+    assert_eq!(book.accept_request(&b).unwrap(), RequestOutcome::Accepted);
+}
+
+#[test]
+fn blocked_sender_nonce_is_recorded_but_state_stays_blocked() {
+    let mut book = ContactBook::new();
+    let mut rec = ContactRecord::blocked(fp(1));
+    rec.state = RelationState::Blocked;
+    book.upsert(rec);
+
+    let req = ContactRequest::new(fp(1), fp(2), 100, "n-b", "спам").unwrap();
+    assert_eq!(book.accept_request(&req).unwrap(), RequestOutcome::Accepted);
+    assert_eq!(book.state_of(&fp(1)), RelationState::Blocked);
+    // Nonce записан: второй раз то же письмо — Duplicate.
+    assert_eq!(book.accept_request(&req).unwrap(), RequestOutcome::Duplicate);
+}
+
+#[test]
+fn mark_nonce_prevents_double_grant() {
+    let mut book = ContactBook::new();
+    assert!(book.mark_nonce(&fp(1), &fp(2), "grant-1"));
+    assert!(!book.mark_nonce(&fp(1), &fp(2), "grant-1"), "повторная выдача запрещена");
+    assert!(book.nonce_seen(&fp(1), &fp(2), "grant-1"));
+    assert!(!book.nonce_seen(&fp(1), &fp(2), "grant-2"));
 }
