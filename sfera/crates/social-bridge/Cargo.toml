@@ -1,0 +1,20 @@
+[package]
+name = "social-bridge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: связка корня с device/link/repo/history (ADR-006 §9)"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-device = { path = "../social-device" }
+social-link = { path = "../social-link" }
+social-repo = { path = "../social-repo" }
+social-history = { path = "../social-history" }
+social-contacts = { path = "../social-contacts" }
+social-rights = { path = "../social-rights" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+hex = "0.4"

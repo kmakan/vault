@@ -3151,6 +3151,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-bridge"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "social-contacts",
+ "social-device",
+ "social-history",
+ "social-link",
+ "social-model",
+ "social-repo",
+ "social-rights",
+]
+
+[[package]]
 name = "social-contacts"
 version = "0.1.0"
 dependencies = [

@@ -6,6 +6,7 @@ members = [
     "crates/social-link",
     "crates/social-repo",
     "crates/social-history",
+    "crates/social-bridge",
     "crates/storage-api",
     "crates/storage-providers",
     "crates/storage-factory",
