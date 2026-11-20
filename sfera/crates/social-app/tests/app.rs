@@ -37,6 +37,14 @@ fn audience(id: &str) -> PostAudience {
 }
 
 #[test]
+fn identity_debug_redacts_seed() {
+    let identity = Identity::from_seed(SEED).unwrap();
+    let debug = format!("{identity:?}");
+    assert!(!debug.contains(SEED));
+    assert!(debug.contains("<redacted>"));
+}
+
+#[test]
 fn published_post_goes_to_outbox_then_into_feed() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(Quota::new(60, 10_000, 10, 0), dir.path());

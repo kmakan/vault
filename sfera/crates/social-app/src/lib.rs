@@ -11,18 +11,28 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use social_audience::{AudienceKeys, MembershipChange};
-use social_contacts::{ContactBook, ContactRecord};
-use social_feed::{Feed, PostId};
-use social_model::{post as signing, Author, Fingerprint};
-use social_post::{compose, PostAudience, PostError, SignedPost};
-use social_profile::{
-    compose as compose_profile, AvatarRef, ProfileBook, ProfileError, ProfileLink,
-    UpsertOutcome as ProfileUpsert,
-};
-use social_rights::{Access, Audience};
-use social_sync::{ingest, DrainReport, Outbox, OutboxItem, Quota, QuotaError, RetryPolicy, SyncReport};
+use social_audience::AudienceKeys;
+use social_contacts::ContactBook;
+use social_feed::Feed;
+use social_model::post as signing;
+use social_post::{compose, PostError};
+use social_profile::{compose as compose_profile, ProfileBook, ProfileError};
+use social_sync::{ingest, DrainReport, Outbox, Quota, QuotaError, RetryPolicy};
 use storage_api::BlobStore;
+
+// Типы домена реэкспортируются корнем: social-ffi → social-app, не в обход.
+pub use social_audience::MembershipChange;
+pub use social_contacts::ContactRecord;
+pub use social_feed::PostId;
+pub use social_model::{Author, Fingerprint};
+pub use social_post::{MediaRef, PostAudience, SignedPost};
+pub use social_profile::{
+    AvatarRef, ProfileLink, SignedProfile,
+};
+pub use social_profile::UpsertOutcome as ProfileUpsertOutcome;
+pub use social_rights::{Access, Audience, Role};
+pub use social_sync::{OutboxItem, SyncReport};
+pub use storage_api::{StoreCaps, StoreKind};
 
 /// Локальная идентичность приложения: seed приватного ключа и производный
 /// автор. Seed не попадает в `Debug`.
@@ -163,6 +173,15 @@ impl SferaApp {
         self.audiences.insert(keys.audience_id().to_string(), keys);
     }
 
+    /// Создать аудиторию с заданным составом: конструктор живёт в
+    /// `social-audience`, корень только вызывает его.
+    pub fn create_audience<I>(&mut self, id: impl Into<String>, members: I)
+    where
+        I: IntoIterator<Item = Fingerprint>,
+    {
+        self.put_audience(AudienceKeys::new(id, members));
+    }
+
     /// Применить состав аудитории; ротацию решает `social-audience`.
     pub fn set_audience_members<I>(
         &mut self,
@@ -228,7 +247,7 @@ impl SferaApp {
         avatar: Option<AvatarRef>,
         links: Vec<ProfileLink>,
         now: u64,
-    ) -> Result<ProfileUpsert, AppError> {
+    ) -> Result<ProfileUpsertOutcome, AppError> {
         let signed = compose_profile(
             &self.identity.seed_hex,
             ts,
@@ -244,12 +263,12 @@ impl SferaApp {
     }
 
     /// Принять чужой профиль; «новее побеждает» решает `social-profile`.
-    pub fn receive_profile(&mut self, signed: social_profile::SignedProfile) -> Result<ProfileUpsert, AppError> {
+    pub fn receive_profile(&mut self, signed: SignedProfile) -> Result<ProfileUpsertOutcome, AppError> {
         Ok(self.profiles.upsert(signed)?)
     }
 
     /// Профиль по отпечатку (для показа контактам).
-    pub fn profile_of(&self, fp: &Fingerprint) -> Option<&social_profile::SignedProfile> {
+    pub fn profile_of(&self, fp: &Fingerprint) -> Option<&SignedProfile> {
         self.profiles.get(fp)
     }
 
@@ -276,20 +295,5 @@ impl SferaApp {
     /// чем именно отправляется конверт.
     pub fn sync_outbox(&mut self, now: u64, send: impl FnMut(&OutboxItem) -> bool) -> DrainReport {
         self.outbox.drain_due(now, send)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SEED: &str = "0100000000000000000000000000000000000000000000000000000000000000";
-
-    #[test]
-    fn identity_debug_redacts_seed() {
-        let identity = Identity::from_seed(SEED).unwrap();
-        let debug = format!("{identity:?}");
-        assert!(!debug.contains(SEED));
-        assert!(debug.contains("<redacted>"));
     }
 }
