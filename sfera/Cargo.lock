@@ -3211,6 +3211,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-history"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "social-contacts",
+ "social-model",
+]
+
+[[package]]
 name = "social-link"
 version = "0.1.0"
 dependencies = [
