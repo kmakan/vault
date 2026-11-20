@@ -3290,6 +3290,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-offline"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "social-ports"
 version = "0.1.0"
 dependencies = [

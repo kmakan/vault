@@ -1,0 +1,10 @@
+[package]
+name = "social-offline"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: офлайн-состояние и честный UI-статус (ADR-006 §7.3)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
