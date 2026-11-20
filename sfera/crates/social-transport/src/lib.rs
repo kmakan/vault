@@ -112,6 +112,15 @@ impl CompositeTransport {
         Self { email, relay }
     }
 
+    /// Замыкание для `Outbox::drain_due`. Старые записи без адреса/конверта
+    /// считаются провалом: они уйдут в ретраи, а не «тихо отправятся».
+    pub fn drain_sender(&self) -> impl Fn(&social_sync::OutboxItem) -> bool + '_ {
+        move |item| match envelope_from_item(item) {
+            Some(env) => self.send(&env),
+            None => false,
+        }
+    }
+
     /// Доставить конверт. Email обязателен; relay — дубль, который не спасает
     /// при падении основной доставки (§7.1). Возвращает `true`, только если
     /// конверт принят основной системой.
@@ -199,6 +208,28 @@ mod tests {
         let env = envelope_from_item(&item).unwrap();
         assert_eq!(env.id, "new");
         assert!(env.relay_mirror);
+    }
+
+    #[test]
+    fn drain_sender_rejects_old_item_and_sends_new_one() {
+        let c = CompositeTransport::new(
+            Box::new(EmailTransport::new(|e| e.payload == "CONV1")),
+            None,
+        );
+        let sender = c.drain_sender();
+        let old = social_sync::OutboxItem {
+            id: "old".into(), payload_len: 5, attempts: 0, next_attempt_at: 0,
+            state: social_sync::OutboxState::Pending,
+            to: None, envelope: None, relay_mirror: false,
+        };
+        assert!(!sender(&old), "старая запись не должна тихо считаться отправленной");
+        let new = social_sync::OutboxItem {
+            id: "new".into(), payload_len: 5, attempts: 0, next_attempt_at: 0,
+            state: social_sync::OutboxState::Pending,
+            to: Some("a@example".into()), envelope: Some("CONV1".into()),
+            relay_mirror: false,
+        };
+        assert!(sender(&new));
     }
 
     #[test]
