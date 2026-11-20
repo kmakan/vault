@@ -8,6 +8,7 @@ members = [
     "crates/social-media",
     "crates/social-rights",
     "crates/social-contacts",
+    "crates/social-audience",
 ]
 
 [workspace.package]
