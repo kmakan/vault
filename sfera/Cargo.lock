@@ -851,6 +851,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-delivery"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "rand",
+ "social-audience",
+ "social-model",
+ "vault-core",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "social-media"
 version = "0.1.0"
 dependencies = [

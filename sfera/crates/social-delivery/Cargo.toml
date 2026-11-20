@@ -1,0 +1,19 @@
+[package]
+name = "social-delivery"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: адресная обёртка ключа аудитории (ADR-006 §4, §7.1)"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-audience = { path = "../social-audience" }
+# Общий E2E-примитив Vault (PQ-hybrid) — не второй шифр, а тот же, что в
+# мессенджере. Ключ аудитории обёртывается адресно каждому участнику.
+vault-core = { path = "../../../vault-core" }
+hex = "0.4"
+
+[dev-dependencies]
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand = "0.8"
