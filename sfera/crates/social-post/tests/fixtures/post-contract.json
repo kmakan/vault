@@ -1,0 +1,32 @@
+{
+  "canonical_post": "{\"audience\":{\"epoch\":3,\"id\":\"aud_work\",\"spec\":{\"id\":\"work\",\"kind\":\"sphere\"}},\"author\":{\"fp\":\"ce:cc:15:07:dc:1d:dd:72:****\",\"pub_key\":\"cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc\"},\"body\":\"Привет из Sfera\",\"media\":[{\"blob_id\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"mime\":\"image/jpeg\",\"size\":12345,\"thumb_blob_id\":\"2222222222222222222222222222222222222222222222222222222222222222\"}],\"ts\":1795000000,\"type\":\"social_post\",\"v\":1}",
+  "domain": "sfera-post:v1\u0000",
+  "post": {
+    "audience": {
+      "epoch": 3,
+      "id": "aud_work",
+      "spec": {
+        "id": "work",
+        "kind": "sphere"
+      }
+    },
+    "author": {
+      "fp": "ce:cc:15:07:dc:1d:dd:72:****",
+      "pub_key": "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc"
+    },
+    "body": "Привет из Sfera",
+    "media": [
+      {
+        "blob_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "mime": "image/jpeg",
+        "size": 12345,
+        "thumb_blob_id": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ],
+    "ts": 1795000000,
+    "type": "social_post",
+    "v": 1
+  },
+  "seed_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+  "sig_hex": "07cce505b9f4b44122e689d1f0d346bcd2935da36a10044f0afb02761d544d80d4d726f145eab5d729ed34ae0e851fe28b928ac0b0320511e10ccaa78842990a"
+}

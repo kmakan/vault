@@ -1,0 +1,17 @@
+[package]
+name = "social-post"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: сборка, подпись и проверка поста с аудиторией и медиа (ADR-006 §3)"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-rights = { path = "../social-rights" }
+storage-api = { path = "../storage-api" }
+serde = { version = "1", features = ["derive"] }
+hex = "0.4"
+
+[dev-dependencies]
+serde_json = "1"

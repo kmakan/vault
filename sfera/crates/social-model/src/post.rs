@@ -28,22 +28,34 @@ pub struct PostPayload {
     pub body: String,
 }
 
-/// Байты, которые подписываются: домен ‖ канонический JSON.payload.
-pub fn signing_input(payload: &PostPayload) -> Result<Vec<u8>, String> {
-    let json = canonical_bytes(payload)?;
+/// Байты, которые подписываются: домен ‖ канонический JSON значения.
+///
+/// Обобщено на любое `Serialize`, чтобы богатый пост (аудитория, медиа)
+/// подписывался ТЕМ ЖЕ правилом и доменом, а не второй копией алгоритма.
+pub fn signing_input_value<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    let json = canonical_bytes(value)?;
     let mut buf = Vec::with_capacity(SIGN_DOMAIN.len() + json.len());
     buf.extend_from_slice(SIGN_DOMAIN);
     buf.extend_from_slice(&json);
     Ok(buf)
 }
 
-/// Подписать тело поста приватным ключом (hex, 32 байта seed).
-/// Возвращает hex подписи (64 байта) для поля `sig`.
-pub fn sign(seed_hex: &str, payload: &PostPayload) -> Result<String, String> {
+/// Байты подписи простого `PostPayload` (совместимая обёртка).
+pub fn signing_input(payload: &PostPayload) -> Result<Vec<u8>, String> {
+    signing_input_value(payload)
+}
+
+/// Подписать любое канонизируемое значение приватным ключом (hex, 32 байта).
+pub fn sign_value<T: serde::Serialize>(seed_hex: &str, value: &T) -> Result<String, String> {
     let seed = hex_to_32(seed_hex)?;
     let sk = SigningKey::from_bytes(&seed);
-    let sig = sk.sign(&signing_input(payload)?);
+    let sig = sk.sign(&signing_input_value(value)?);
     Ok(hex::encode(sig.to_bytes()))
+}
+
+/// Подписать тело простого поста.
+pub fn sign(seed_hex: &str, payload: &PostPayload) -> Result<String, String> {
+    sign_value(seed_hex, payload)
 }
 
 /// Публичный ключ (hex) из приватного — для публикации в `Author.pub_key`.
@@ -61,7 +73,7 @@ pub fn public_key_hex(seed_hex: &str) -> Result<String, String> {
 /// 3. `author.fp` = отпечаток из `author.pub_key`: нельзя подписаться одним
 ///    ключом, а назваться другим fingerprint.
 /// 4. Подпись проверяется `verify_strict` по каноническому JSON.payload.
-pub fn verify(payload: &PostPayload, sig_hex: &str) -> bool {
+pub fn verify_value<T: serde::Serialize>(value: &T, author: &Author, sig_hex: &str) -> bool {
     let sig_raw = match hex::decode(sig_hex.trim()) {
         Ok(v) => v,
         Err(_) => return false,
@@ -73,7 +85,7 @@ pub fn verify(payload: &PostPayload, sig_hex: &str) -> bool {
         return false;
     };
 
-    let pk_raw = match hex::decode(payload.author.pub_key.trim()) {
+    let pk_raw = match hex::decode(author.pub_key.trim()) {
         Ok(v) => v,
         Err(_) => return false,
     };
@@ -85,18 +97,23 @@ pub fn verify(payload: &PostPayload, sig_hex: &str) -> bool {
     };
 
     // fp обязан выводиться из того же pub_key, которым проверяется подпись.
-    let derived_fp = match Fingerprint::from_public_key_hex(&payload.author.pub_key) {
+    let derived_fp = match Fingerprint::from_public_key_hex(&author.pub_key) {
         Ok(fp) => fp,
         Err(_) => return false,
     };
-    if !payload.author.fp.same(&derived_fp) {
+    if !author.fp.same(&derived_fp) {
         return false;
     }
 
-    let Ok(input) = signing_input(payload) else {
+    let Ok(input) = signing_input_value(value) else {
         return false;
     };
     vk.verify_strict(&input, &sig).is_ok()
+}
+
+/// Проверка подписи простого поста (совместимая обёртка).
+pub fn verify(payload: &PostPayload, sig_hex: &str) -> bool {
+    verify_value(payload, &payload.author, sig_hex)
 }
 
 fn hex_to_32(s: &str) -> Result<[u8; 32], String> {

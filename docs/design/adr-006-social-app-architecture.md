@@ -80,31 +80,35 @@ E2E-конверте**. Пост — это типизированное соо�
 {
   "v": 1,
   "type": "social_post",
-  "id": "pst_<hex>",
-  "author": "<xx:xx:…:**** — идентификатор автора: отпечаток публичного ключа>",
-  "author_pub": "<ed25519, base64url — открытый ключ для проверки sig>",
-  "device": "dev_<hex>",
+  "author": {
+    "fp": "xx:xx:…:****",
+    "pub_key": "<ed25519 hex, 32 байта>"
+  },
   "ts": 1795000000,
-  "audience": { "id": "aud_<hex>", "kind": "all_contacts|sphere|selected|all_except", "epoch": 3 },
+  "audience": {
+    "id": "aud_<hex>",
+    "epoch": 3,
+    "spec": { "kind": "all_contacts|sphere|selected|all_except", "...": "параметры вида" }
+  },
   "body": "текст или markdown",
   "media": [
     {
-      "blob": "blb_<sha256(ciphertext)>",
-      "key": "<32B, base64url>",
-      "size": 1048576,
+      "blob_id": "<sha256(ciphertext), hex 64>",
+      "thumb_blob_id": "<...>",
       "mime": "image/jpeg",
-      "width": 2048, "height": 1536,
-      "thumb": "blb_<...>",
-      "chunks": 1,
-      "locators": [
-        { "provider": "webdav", "url": "https://.../vault/blobs/blb_..." },
-        { "provider": "vault",  "url": "https://storage.vault-msg.ru/b/..." }
-      ]
+      "size": 1048576
     }
-  ],
-  "sig": "<ed25519 над каноническим JSON>"
+  ]
 }
 ```
+
+**Подпись лежит рядом, а не внутри.** Подписывается JCS этой формы (без
+`sig`), а сам `sig` хранится в `SignedPost { post, sig }` — иначе подпись была
+бы самозависимой. `id`, `device`, `locators`, `width/height`, `chunks` —
+дополнительные поля следующих версий; опциональные поля сериализуются только
+когда заданы, поэтому подпись уже опубликованных постов не ломается.
+Реализовано в `social-post`: `PostV1`, `compose`, `sign_post`, `verify_post`
+(подпись — та же `sign_value`/`verify_value` и домен `sfera-post:v1\0`).
 
 Другие типы: `social_profile`, `social_sphere`, `social_reaction`,
 `social_comment` (фаза 2), `social_contact_request`, `social_contact_accept`,
