@@ -24,6 +24,9 @@ pub struct WebDavConfig {
     pub store_id: String,
     pub username: String,
     pub password: String,
+    /// OAuth Bearer-токен (Яндекс Диск). Хранится в OS keychain, не здесь.
+    /// Передаётся в конфиг на время команды и не сериализуется в `Locator`.
+    pub bearer_token: Option<String>,
     /// Максимальный размер одного блоба; 0 означает «без ограничения адаптера».
     pub max_file_bytes: u64,
 }
@@ -35,6 +38,7 @@ impl WebDavConfig {
             store_id: store_id.into(),
             username: String::new(),
             password: String::new(),
+            bearer_token: None,
             max_file_bytes: 0,
         }
     }
@@ -42,6 +46,16 @@ impl WebDavConfig {
     pub fn with_basic_auth(mut self, user: impl Into<String>, pass: impl Into<String>) -> Self {
         self.username = user.into();
         self.password = pass.into();
+        self.bearer_token = None;
+        self
+    }
+
+    /// OAuth-авторизация (Яндекс Диск, будущий Google Drive). Токен живёт в
+    /// OS keychain; сюда он попадает только на время запроса (ADR-006 §6).
+    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.bearer_token = Some(token.into());
+        self.username.clear();
+        self.password.clear();
         self
     }
 
@@ -55,6 +69,11 @@ impl WebDavConfig {
     }
 
     fn auth_header(&self) -> Result<Option<HeaderValue>, StorageError> {
+        if let Some(ref token) = self.bearer_token {
+            return HeaderValue::from_str(&format!("Bearer {token}"))
+                .map(Some)
+                .map_err(|e| StorageError::Auth(e.to_string()));
+        }
         if self.username.is_empty() && self.password.is_empty() {
             return Ok(None);
         }
@@ -120,7 +139,9 @@ impl BlobStore for WebDavStore {
     fn caps(&self) -> StoreCaps {
         StoreCaps {
             kind: StoreKind::WebDav,
-            auth: if self.config.username.is_empty() {
+            auth: if self.config.bearer_token.is_some() {
+                AuthKind::OAuth
+            } else if self.config.username.is_empty() {
                 AuthKind::None
             } else {
                 AuthKind::Password
@@ -251,6 +272,16 @@ mod tests {
             blob_id: id,
         };
         assert!(matches!(store.resolve(&loc), Err(StorageError::InvalidLocator(_))));
+    }
+
+    #[test]
+    fn bearer_auth_is_oauth_and_clears_password() {
+        let cfg = WebDavConfig::new("https://dav.example/", "yandex")
+            .with_basic_auth("user", "pass")
+            .with_bearer_token("ya-token");
+        assert!(cfg.username.is_empty());
+        assert!(cfg.password.is_empty());
+        assert!(matches!(cfg.auth_header().unwrap(), Some(v) if v.to_str().unwrap().starts_with("Bearer ")));
     }
 
     #[test]

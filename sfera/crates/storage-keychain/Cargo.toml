@@ -1,0 +1,12 @@
+[package]
+name = "storage-keychain"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault: общий порт OS keychain для токенов хранилищ (ADR-006 §6, §9.7)"
+
+[dependencies]
+# Та же версия, что в vault-client / vault-desktop.
+keyring = "3.6.3"
+thiserror = "1"
