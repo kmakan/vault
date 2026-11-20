@@ -221,6 +221,9 @@ fn outbox_item_serde_roundtrip() {
         attempts: 2,
         next_attempt_at: 7,
         state: OutboxState::Pending,
+        to: Some("a@example".into()),
+        envelope: Some("CONV1".into()),
+        relay_mirror: true,
     };
     let json = serde_json::to_string(&item).unwrap();
     let back: OutboxItem = serde_json::from_str(&json).unwrap();

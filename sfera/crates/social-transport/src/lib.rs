@@ -86,6 +86,19 @@ where
     }
 }
 
+/// Превратить запись outbox в конверт для транспорта. Старые записи без
+/// адреса/конверта дают `None`: transport не должен угадывать адрес.
+pub fn envelope_from_item(item: &social_sync::OutboxItem) -> Option<EnvelopeRef> {
+    let to = item.to.clone()?;
+    let payload = item.envelope.clone()?;
+    Some(EnvelopeRef {
+        id: item.id.clone(),
+        to,
+        payload,
+        relay_mirror: item.relay_mirror,
+    })
+}
+
 /// Комбинированный порт: email обязателен, relay — лучший дубль.
 /// Не подменяет основную доставку: если email упал, считаем провалом даже при
 /// успешном relay (§7.1: relay — дубль, а не источник истины).
@@ -154,6 +167,38 @@ mod tests {
         );
         // Relay упал, но email доставил — считаем успехом (дубль best-effort).
         assert!(c2.send(&env));
+    }
+
+    #[test]
+    fn old_outbox_item_without_envelope_is_rejected() {
+        let item = social_sync::OutboxItem {
+            id: "old".into(),
+            payload_len: 5,
+            attempts: 0,
+            next_attempt_at: 0,
+            state: social_sync::OutboxState::Pending,
+            to: None,
+            envelope: None,
+            relay_mirror: false,
+        };
+        assert!(envelope_from_item(&item).is_none());
+    }
+
+    #[test]
+    fn new_outbox_item_becomes_envelope() {
+        let item = social_sync::OutboxItem {
+            id: "new".into(),
+            payload_len: 5,
+            attempts: 0,
+            next_attempt_at: 0,
+            state: social_sync::OutboxState::Pending,
+            to: Some("a@example".into()),
+            envelope: Some("CONV1".into()),
+            relay_mirror: true,
+        };
+        let env = envelope_from_item(&item).unwrap();
+        assert_eq!(env.id, "new");
+        assert!(env.relay_mirror);
     }
 
     #[test]

@@ -147,6 +147,16 @@ pub struct OutboxItem {
     pub attempts: u32,
     pub next_attempt_at: u64,
     pub state: OutboxState,
+    /// Адрес получателя. `None` — старая запись без адреса (обратная
+    /// совместимость); transport в таком случае отказывает типизированно.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// Готовый E2E-конверт. `None` — старая запись без конверта.
+    #[serde(default)]
+    pub envelope: Option<String>,
+    /// Дублировать через relay (малая аудитория).
+    #[serde(default)]
+    pub relay_mirror: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,6 +229,43 @@ impl Outbox {
                 attempts: 0,
                 next_attempt_at: now,
                 state: OutboxState::Pending,
+                to: None,
+                envelope: None,
+                relay_mirror: false,
+            },
+        );
+        Ok(EnqueueOutcome::Enqueued)
+    }
+
+    /// Поставить в очередь готовый E2E-конверт с адресом получателя.
+    /// Отличие от [`enqueue`]: transport получает реальные данные и не
+    /// угадывает адрес. Идемпотентность и квота — те же.
+    pub fn enqueue_envelope(
+        &mut self,
+        id: impl Into<String>,
+        to: impl Into<String>,
+        envelope: impl Into<String>,
+        relay_mirror: bool,
+        now: u64,
+    ) -> Result<EnqueueOutcome, QuotaError> {
+        let id = id.into();
+        if self.items.contains_key(&id) {
+            return Ok(EnqueueOutcome::Duplicate);
+        }
+        let envelope = envelope.into();
+        let payload_len = envelope.len() as u64;
+        self.quota.try_charge(now, payload_len)?;
+        self.items.insert(
+            id.clone(),
+            OutboxItem {
+                id,
+                payload_len,
+                attempts: 0,
+                next_attempt_at: now,
+                state: OutboxState::Pending,
+                to: Some(to.into()),
+                envelope: Some(envelope),
+                relay_mirror,
             },
         );
         Ok(EnqueueOutcome::Enqueued)
