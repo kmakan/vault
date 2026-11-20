@@ -5,13 +5,14 @@
   "description": "Vault Sfera — workspace (Rust-ядро + тонкий UI-адаптер)",
   "type": "module",
   "scripts": {
-    "test:contract": "node scripts/contract-check.mjs && node scripts/blob-contract-check.mjs && node scripts/rights-contract-check.mjs && node scripts/post-contract-check.mjs && node scripts/profile-contract-check.mjs && node scripts/crate-boundary-check.mjs && node tests/ui/locales-themes.mjs && node tests/ui/shell.mjs",
+    "test:contract": "node scripts/contract-check.mjs && node scripts/blob-contract-check.mjs && node scripts/rights-contract-check.mjs && node scripts/post-contract-check.mjs && node scripts/profile-contract-check.mjs && node scripts/crate-boundary-check.mjs && node tests/ui/locales-themes.mjs && node tests/ui/shell.mjs && node tests/ui/bridge.mjs",
     "test:ui": "node tests/ui/locales-themes.mjs",
     "test:boundary": "node scripts/crate-boundary-check.mjs",
     "test:blob-contract": "node scripts/blob-contract-check.mjs",
     "test:rights-contract": "node scripts/rights-contract-check.mjs",
     "test:post-contract": "node scripts/post-contract-check.mjs",
     "test:profile-contract": "node scripts/profile-contract-check.mjs",
-    "test:shell": "node tests/ui/shell.mjs"
+    "test:shell": "node tests/ui/shell.mjs",
+    "test:bridge": "node tests/ui/bridge.mjs"
   }
 }
