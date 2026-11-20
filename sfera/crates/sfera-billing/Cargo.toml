@@ -1,0 +1,13 @@
+[package]
+name = "sfera-billing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: контракт монетизации из /relay/plans (ADR-006 §17)"
+
+[dev-dependencies]
+serde_json = "1"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
