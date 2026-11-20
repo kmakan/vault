@@ -3127,6 +3127,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3244542535d5de959d90ec55d1b5ff0fd2bb7b1310223907d5f11932847f7b59"
 
 [[package]]
+name = "social-account"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "social-model",
+ "social-rights",
+]
+
+[[package]]
 name = "social-app"
 version = "0.1.0"
 dependencies = [

@@ -9,6 +9,7 @@ members = [
     "crates/social-manifest",
     "crates/sfera-companion",
     "crates/social-media-kind",
+    "crates/social-account",
     "crates/social-device",
     "crates/social-link",
     "crates/social-repo",

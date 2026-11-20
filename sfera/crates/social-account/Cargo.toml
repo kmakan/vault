@@ -1,0 +1,15 @@
+[package]
+name = "social-account"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: тип аккаунта Person/Organization (ADR-006 §17)"
+
+[dev-dependencies]
+hex = "0.4"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-rights = { path = "../social-rights" }
+serde = { version = "1", features = ["derive"] }
