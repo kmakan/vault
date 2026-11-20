@@ -924,6 +924,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-sync"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "social-feed",
+ "social-model",
+ "social-post",
+ "social-rights",
+]
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
