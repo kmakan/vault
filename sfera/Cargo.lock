@@ -3290,6 +3290,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-ports"
+version = "0.1.0"
+dependencies = [
+ "social-model",
+ "social-rights",
+]
+
+[[package]]
 name = "social-post"
 version = "0.1.0"
 dependencies = [

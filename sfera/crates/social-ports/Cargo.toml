@@ -1,0 +1,11 @@
+[package]
+name = "social-ports"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: порты между фичами, объявленные в Rust (ADR-006 §9.5)"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-rights = { path = "../social-rights" }
