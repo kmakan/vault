@@ -1,0 +1,10 @@
+[package]
+name = "social-transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: порт доставки E2E-конвертов (email/relay), ADR-006 §7.1"
+
+[dependencies]
+social-sync = { path = "../social-sync" }

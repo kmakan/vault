@@ -3272,6 +3272,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-transport"
+version = "0.1.0"
+dependencies = [
+ "social-sync",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

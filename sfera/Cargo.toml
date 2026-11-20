@@ -19,6 +19,7 @@ members = [
     "crates/social-post",
     "crates/social-feed",
     "crates/social-sync",
+    "crates/social-transport",
     "crates/social-profile",
     "crates/social-app",
     "crates/social-ffi",
