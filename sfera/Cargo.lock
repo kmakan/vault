@@ -3211,6 +3211,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-link"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "social-device",
+ "social-model",
+]
+
+[[package]]
 name = "social-media"
 version = "0.1.0"
 dependencies = [

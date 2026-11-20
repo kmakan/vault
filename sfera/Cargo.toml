@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/social-model",
     "crates/social-device",
+    "crates/social-link",
     "crates/storage-api",
     "crates/storage-providers",
     "crates/storage-factory",
