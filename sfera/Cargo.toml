@@ -6,6 +6,7 @@ members = [
     "crates/storage-conformance",
     "crates/storage-local",
     "crates/storage-webdav",
+    "crates/storage-s3",
     "crates/social-media",
     "crates/social-rights",
     "crates/social-contacts",
