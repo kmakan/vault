@@ -4,7 +4,8 @@
   "private": true,
   "description": "Vault Sfera — workspace (Rust-ядро + тонкий JS-адаптер)",
   "scripts": {
-    "test:contract": "node scripts/contract-check.mjs && node scripts/blob-contract-check.mjs && node scripts/rights-contract-check.mjs && node scripts/post-contract-check.mjs && node scripts/profile-contract-check.mjs",
+    "test:contract": "node scripts/contract-check.mjs && node scripts/blob-contract-check.mjs && node scripts/rights-contract-check.mjs && node scripts/post-contract-check.mjs && node scripts/profile-contract-check.mjs && node scripts/crate-boundary-check.mjs",
+    "test:boundary": "node scripts/crate-boundary-check.mjs",
     "test:blob-contract": "node scripts/blob-contract-check.mjs",
     "test:rights-contract": "node scripts/rights-contract-check.mjs",
     "test:post-contract": "node scripts/post-contract-check.mjs",

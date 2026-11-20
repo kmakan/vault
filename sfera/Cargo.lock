@@ -831,6 +831,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "social-app"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "sha2",
+ "social-audience",
+ "social-contacts",
+ "social-feed",
+ "social-media",
+ "social-model",
+ "social-post",
+ "social-profile",
+ "social-rights",
+ "social-sync",
+ "storage-api",
+ "storage-conformance",
+ "storage-local",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "social-audience"
 version = "0.1.0"
 dependencies = [

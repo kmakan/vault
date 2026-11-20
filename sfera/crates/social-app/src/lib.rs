@@ -1,0 +1,295 @@
+//! Vault Sfera — композиционный корень (ADR-006 §9).
+//!
+//! Единственное место, где фичи видят друг друга. Здесь НЕТ правил: форма,
+//! подпись, права, ротация ключей и ретраи живут в своих крейтах. Корень только
+//! держит состояние каждой фичи и связывает его с портами (хранилище,
+//! отправитель). Стрелки: `social-app → все фичи`, `фича ↛ фича`.
+//!
+//! Бюджет — 300 строк (ratchet ADR-006 §9.5). Время приходит аргументом `now`:
+//! корень не читает системные часы, поэтому сценарии детерминированы.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use social_audience::{AudienceKeys, MembershipChange};
+use social_contacts::{ContactBook, ContactRecord};
+use social_feed::{Feed, PostId};
+use social_model::{post as signing, Author, Fingerprint};
+use social_post::{compose, PostAudience, PostError, SignedPost};
+use social_profile::{
+    compose as compose_profile, AvatarRef, ProfileBook, ProfileError, ProfileLink,
+    UpsertOutcome as ProfileUpsert,
+};
+use social_rights::{Access, Audience};
+use social_sync::{ingest, DrainReport, Outbox, OutboxItem, Quota, QuotaError, RetryPolicy, SyncReport};
+use storage_api::BlobStore;
+
+/// Локальная идентичность приложения: seed приватного ключа и производный
+/// автор. Seed не попадает в `Debug`.
+#[derive(Clone)]
+pub struct Identity {
+    seed_hex: String,
+    author: Author,
+}
+
+impl Identity {
+    /// Собрать идентичность из 32-байтного seed (hex).
+    pub fn from_seed(seed_hex: impl Into<String>) -> Result<Self, AppError> {
+        let seed_hex = seed_hex.into();
+        let pub_key = signing::public_key_hex(&seed_hex).map_err(AppError::BadAuthor)?;
+        let author = Author::from_public_key_hex(&pub_key).map_err(AppError::BadAuthor)?;
+        Ok(Self { seed_hex, author })
+    }
+
+    pub fn author(&self) -> &Author {
+        &self.author
+    }
+
+    pub fn fingerprint(&self) -> &Fingerprint {
+        &self.author.fp
+    }
+}
+
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Identity")
+            .field("fp", &self.author.fp)
+            .field("seed_hex", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub enum AppError {
+    BadAuthor(String),
+    Post(PostError),
+    Profile(ProfileError),
+    Quota(QuotaError),
+    Canonical(String),
+    UnknownAudience(String),
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadAuthor(m) => write!(f, "bad identity: {m}"),
+            Self::Post(e) => write!(f, "post: {e}"),
+            Self::Profile(e) => write!(f, "profile: {e}"),
+            Self::Quota(e) => write!(f, "quota: {e}"),
+            Self::Canonical(m) => write!(f, "canonical form failed: {m}"),
+            Self::UnknownAudience(id) => write!(f, "unknown audience: {id}"),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
+impl From<PostError> for AppError { fn from(e: PostError) -> Self { Self::Post(e) } }
+impl From<ProfileError> for AppError { fn from(e: ProfileError) -> Self { Self::Profile(e) } }
+impl From<QuotaError> for AppError { fn from(e: QuotaError) -> Self { Self::Quota(e) } }
+
+/// Сборка приложения. Ничего не шифрует и не решает — только держит порты.
+pub struct SferaApp {
+    identity: Identity,
+    feed: Feed,
+    profiles: ProfileBook,
+    contacts: ContactBook,
+    outbox: Outbox,
+    audiences: BTreeMap<String, AudienceKeys>,
+    store: Arc<dyn BlobStore>,
+}
+
+impl std::fmt::Debug for SferaApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SferaApp")
+            .field("identity", &self.identity)
+            .field("feed", &self.feed.len())
+            .field("profiles", &self.profiles.len())
+            .field("outbox", &self.outbox.len())
+            .field("audiences", &self.audiences.keys())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SferaApp {
+    /// Собрать приложение из идентичности, порта хранилища и политик.
+    pub fn new(
+        identity: Identity,
+        store: Arc<dyn BlobStore>,
+        retry: RetryPolicy,
+        quota: Quota,
+    ) -> Self {
+        Self {
+            identity,
+            feed: Feed::new(),
+            profiles: ProfileBook::new(),
+            contacts: ContactBook::new(),
+            outbox: Outbox::new(retry, quota),
+            audiences: BTreeMap::new(),
+            store,
+        }
+    }
+
+    pub fn identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    pub fn feed(&self) -> &Feed {
+        &self.feed
+    }
+
+    pub fn profiles(&self) -> &ProfileBook {
+        &self.profiles
+    }
+
+    pub fn contacts(&self) -> &ContactBook {
+        &self.contacts
+    }
+
+    pub fn outbox(&self) -> &Outbox {
+        &self.outbox
+    }
+
+    pub fn store(&self) -> &Arc<dyn BlobStore> {
+        &self.store
+    }
+
+    pub fn audience(&self, id: &str) -> Option<&AudienceKeys> {
+        self.audiences.get(id)
+    }
+
+    /// Зарегистрировать ключи аудитории (состояние фичи `social-audience`).
+    pub fn put_audience(&mut self, keys: AudienceKeys) {
+        self.audiences.insert(keys.audience_id().to_string(), keys);
+    }
+
+    /// Применить состав аудитории; ротацию решает `social-audience`.
+    pub fn set_audience_members<I>(
+        &mut self,
+        id: &str,
+        members: I,
+    ) -> Result<MembershipChange, AppError>
+    where
+        I: IntoIterator<Item = Fingerprint>,
+    {
+        let keys = self
+            .audiences
+            .get_mut(id)
+            .ok_or_else(|| AppError::UnknownAudience(id.to_string()))?;
+        Ok(keys.apply_membership(members))
+    }
+
+    /// Принять контакт; переходы решают `social-contacts`.
+    pub fn put_contact(&mut self, record: ContactRecord) {
+        self.contacts.upsert(record);
+    }
+
+    /// Опубликовать пост: сборка/подпись в `social-post`, постановка в outbox.
+    /// Доставку делает `sync_outbox`, здесь её нет.
+    pub fn publish_post(
+        &mut self,
+        ts: u64,
+        body: impl Into<String>,
+        audience: PostAudience,
+        media: Vec<social_post::MediaRef>,
+        now: u64,
+    ) -> Result<SignedPost, AppError> {
+        let post = compose(&self.identity.seed_hex, ts, body, audience, media)?;
+        let id = PostId::from_post(&post.post)
+            .map_err(|e| AppError::Canonical(e.to_string()))?
+            .to_hex();
+        let len = social_post::canonical_post(&post.post)
+            .map_err(AppError::Canonical)?
+            .len() as u64;
+        self.outbox.enqueue(id, len, now)?;
+        Ok(post)
+    }
+
+    /// Принять входящие посты: проверка подписи и дедуп в `social-feed`.
+    pub fn receive_posts(
+        &mut self,
+        posts: impl IntoIterator<Item = SignedPost>,
+        received_at: u64,
+    ) -> SyncReport {
+        ingest(&mut self.feed, posts, received_at)
+    }
+
+    /// Отметить прочитанным — локальное состояние ленты.
+    pub fn mark_read(&mut self, id: &PostId) -> bool {
+        self.feed.mark_read(id)
+    }
+
+    /// Опубликовать свой профиль: подпись в `social-profile`, обновление книги.
+    pub fn set_my_profile(
+        &mut self,
+        ts: u64,
+        display_name: impl Into<String>,
+        bio: impl Into<String>,
+        avatar: Option<AvatarRef>,
+        links: Vec<ProfileLink>,
+        now: u64,
+    ) -> Result<ProfileUpsert, AppError> {
+        let signed = compose_profile(
+            &self.identity.seed_hex,
+            ts,
+            display_name,
+            bio,
+            avatar,
+            links,
+        )?;
+        let id = self.identity.fingerprint().as_str().to_string();
+        self.outbox
+            .enqueue(id, signed.profile.bio.len() as u64, now)?;
+        Ok(self.profiles.upsert(signed)?)
+    }
+
+    /// Принять чужой профиль; «новее побеждает» решает `social-profile`.
+    pub fn receive_profile(&mut self, signed: social_profile::SignedProfile) -> Result<ProfileUpsert, AppError> {
+        Ok(self.profiles.upsert(signed)?)
+    }
+
+    /// Профиль по отпечатку (для показа контактам).
+    pub fn profile_of(&self, fp: &Fingerprint) -> Option<&social_profile::SignedProfile> {
+        self.profiles.get(fp)
+    }
+
+    /// Решение о доступе: состояние отношения из `social-contacts`, вердикт
+    /// считает `social-rights`. Корень только соединяет их.
+    pub fn access(
+        &self,
+        viewer: &Fingerprint,
+        audience: &Audience,
+        viewer_spheres: &[String],
+    ) -> Option<Access> {
+        let record = self.contacts.get(viewer)?;
+        Some(social_rights::evaluate(
+            viewer,
+            record.state,
+            record.role,
+            &record.overrides,
+            audience,
+            viewer_spheres,
+        ))
+    }
+
+    /// Прогнать очередь. `send` — тонкий адаптер email/relay; корень не знает,
+    /// чем именно отправляется конверт.
+    pub fn sync_outbox(&mut self, now: u64, send: impl FnMut(&OutboxItem) -> bool) -> DrainReport {
+        self.outbox.drain_due(now, send)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEED: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn identity_debug_redacts_seed() {
+        let identity = Identity::from_seed(SEED).unwrap();
+        let debug = format!("{identity:?}");
+        assert!(!debug.contains(SEED));
+        assert!(debug.contains("<redacted>"));
+    }
+}

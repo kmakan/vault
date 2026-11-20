@@ -526,7 +526,7 @@ whisper/
       social-feed/       # локальная агрегация, порядок, read-state
       social-profile/    # профиль, аватар, ссылки
       social-sync/       # фоновая синхронизация, квоты, ретраи
-      social-app/        # композиционный корень: только сборка портов
+      social-app/        # композиционный корень: только сборка портов (реализовано, спайк 9)
       social-ffi/        # тонкий слой Tauri-команд (social_*)
     src-tauri/           # оболочка Sfera: Windows/Linux/macOS + Android
     src/                 # Vue UI
@@ -546,6 +546,15 @@ whisper/
 social-rights`; `feature ↛ feature`; `social-app → все`; `social-ffi →
 social-app`. Композиционный корень — единственное место, где фичи видят друг
 друга.
+
+Реализовано (спайк 9): `social-app` держит `Feed`, `ProfileBook`, `ContactBook`,
+`Outbox`, ключи аудиторий и `Arc<dyn BlobStore>`; facade-методы только делегируют
+(`publish_post` → `social-post` + outbox, `receive_posts` → `ingest`,
+`access` → `social-contacts` + `social-rights`, `sync_outbox` → ретраи с
+замыканием-транспортом). Ни одного правила внутри, время приходит аргументом.
+Бюджет корня **295/300 строк**. Гейт `crate-boundary` (`npm run test:boundary`)
+фиксирует четыре унаследованных ребра «фича → фича» в baseline и запрещает
+новые; проверен негативом.
 
 Пересечение данных между фичами — только через порты, объявленные в
 `social-model`: `ContactDirectory` (реализует `social-contacts`),
@@ -626,7 +635,7 @@ ADR-005, 201 модуль / 2340 мутаций / 0 дыр).
 
 | Гейт | Что запрещает |
 |---|---|
-| `crate-boundary` | ребро «фича → фича» в Cargo-графе; исключения — только в baseline |
+| `crate-boundary` | ребро «фича → фича» в Cargo-графе; исключения — только в baseline (гейт реализован: `npm run test:boundary`) |
 | `social-logic-ratchet` | решения о формате/правах/ключах/ретраях в TS/JS |
 | `schema-version` | изменение поля без повышения `v` и без теста обратной совместимости |
 | `blob-contract` | расхождение формата блоба с фикстурой (общая для Rust и JS) |
