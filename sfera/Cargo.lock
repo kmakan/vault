@@ -3272,6 +3272,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-repo"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "social-device",
+ "social-model",
+]
+
+[[package]]
 name = "social-rights"
 version = "0.1.0"
 dependencies = [
