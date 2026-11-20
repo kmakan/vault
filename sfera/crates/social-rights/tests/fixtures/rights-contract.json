@@ -1,0 +1,199 @@
+{
+  "audiences": [
+    {
+      "kind": "all_contacts"
+    },
+    {
+      "id": "work",
+      "kind": "sphere"
+    },
+    {
+      "fps": [
+        "02:00:00:00:00:00:00:00:****"
+      ],
+      "kind": "selected"
+    },
+    {
+      "fps": [
+        "03:00:00:00:00:00:00:00:****"
+      ],
+      "kind": "all_except"
+    }
+  ],
+  "cases": [
+    {
+      "access": {
+        "delivered": true,
+        "deny": null,
+        "permissions": {
+          "can_react": true,
+          "can_request_chat": true,
+          "can_view_history": true,
+          "can_view_media": true,
+          "profile": "full"
+        }
+      },
+      "audience": {
+        "kind": "all_contacts"
+      },
+      "relation": "contact",
+      "role": "close",
+      "spheres": []
+    },
+    {
+      "access": {
+        "delivered": true,
+        "deny": null,
+        "permissions": {
+          "can_react": false,
+          "can_request_chat": false,
+          "can_view_history": false,
+          "can_view_media": false,
+          "profile": "none"
+        }
+      },
+      "audience": {
+        "kind": "all_contacts"
+      },
+      "relation": "contact",
+      "role": "restricted",
+      "spheres": []
+    },
+    {
+      "access": {
+        "delivered": false,
+        "deny": "not_in_audience",
+        "permissions": {
+          "can_react": false,
+          "can_request_chat": false,
+          "can_view_history": false,
+          "can_view_media": false,
+          "profile": "none"
+        }
+      },
+      "audience": {
+        "fps": [
+          "02:00:00:00:00:00:00:00:****"
+        ],
+        "kind": "all_except"
+      },
+      "relation": "contact",
+      "role": "friend",
+      "spheres": []
+    },
+    {
+      "access": {
+        "delivered": true,
+        "deny": null,
+        "permissions": {
+          "can_react": true,
+          "can_request_chat": true,
+          "can_view_history": true,
+          "can_view_media": true,
+          "profile": "full"
+        }
+      },
+      "audience": {
+        "id": "work",
+        "kind": "sphere"
+      },
+      "relation": "contact",
+      "role": "close",
+      "spheres": [
+        "work"
+      ]
+    },
+    {
+      "access": {
+        "delivered": false,
+        "deny": "not_in_audience",
+        "permissions": {
+          "can_react": false,
+          "can_request_chat": false,
+          "can_view_history": false,
+          "can_view_media": false,
+          "profile": "none"
+        }
+      },
+      "audience": {
+        "id": "work",
+        "kind": "sphere"
+      },
+      "relation": "contact",
+      "role": "close",
+      "spheres": [
+        "family"
+      ]
+    },
+    {
+      "access": {
+        "delivered": false,
+        "deny": "pending_request",
+        "permissions": {
+          "can_react": false,
+          "can_request_chat": false,
+          "can_view_history": false,
+          "can_view_media": false,
+          "profile": "none"
+        }
+      },
+      "audience": {
+        "kind": "all_contacts"
+      },
+      "relation": "requested",
+      "role": "close",
+      "spheres": []
+    },
+    {
+      "access": {
+        "delivered": false,
+        "deny": "blocked",
+        "permissions": {
+          "can_react": false,
+          "can_request_chat": false,
+          "can_view_history": false,
+          "can_view_media": false,
+          "profile": "none"
+        }
+      },
+      "audience": {
+        "kind": "all_contacts"
+      },
+      "relation": "blocked",
+      "role": "close",
+      "spheres": []
+    }
+  ],
+  "other": "03:00:00:00:00:00:00:00:****",
+  "roles": {
+    "acquaintance": {
+      "can_react": false,
+      "can_request_chat": false,
+      "can_view_history": false,
+      "can_view_media": true,
+      "profile": "brief"
+    },
+    "close": {
+      "can_react": true,
+      "can_request_chat": true,
+      "can_view_history": true,
+      "can_view_media": true,
+      "profile": "full"
+    },
+    "friend": {
+      "can_react": true,
+      "can_request_chat": true,
+      "can_view_history": false,
+      "can_view_media": true,
+      "profile": "full"
+    },
+    "restricted": {
+      "can_react": false,
+      "can_request_chat": false,
+      "can_view_history": false,
+      "can_view_media": false,
+      "profile": "none"
+    }
+  },
+  "viewer": "02:00:00:00:00:00:00:00:****"
+}
