@@ -13,6 +13,7 @@ members = [
     "crates/social-post",
     "crates/social-feed",
     "crates/social-sync",
+    "crates/social-profile",
 ]
 
 [workspace.package]

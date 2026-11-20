@@ -28,16 +28,25 @@ pub struct PostPayload {
     pub body: String,
 }
 
-/// Байты, которые подписываются: домен ‖ канонический JSON значения.
+/// Байты, которые подписываются: произвольный домен ‖ канонический JSON.
 ///
-/// Обобщено на любое `Serialize`, чтобы богатый пост (аудитория, медиа)
-/// подписывался ТЕМ ЖЕ правилом и доменом, а не второй копией алгоритма.
-pub fn signing_input_value<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
+/// Домен передаётся явно, чтобы пост (`sfera-post:v1\0`) и профиль
+/// (`sfera-profile:v1\0`) не делили подписи: один и тот же ключ не должен
+/// создавать взаимозаменяемые подписи для разных типов объектов.
+pub fn signing_input_with_domain<T: serde::Serialize>(
+    domain: &[u8],
+    value: &T,
+) -> Result<Vec<u8>, String> {
     let json = canonical_bytes(value)?;
-    let mut buf = Vec::with_capacity(SIGN_DOMAIN.len() + json.len());
-    buf.extend_from_slice(SIGN_DOMAIN);
+    let mut buf = Vec::with_capacity(domain.len() + json.len());
+    buf.extend_from_slice(domain);
     buf.extend_from_slice(&json);
     Ok(buf)
+}
+
+/// Байты подписи поста (домен `SIGN_DOMAIN`).
+pub fn signing_input_value<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    signing_input_with_domain(SIGN_DOMAIN, value)
 }
 
 /// Байты подписи простого `PostPayload` (совместимая обёртка).
@@ -45,12 +54,21 @@ pub fn signing_input(payload: &PostPayload) -> Result<Vec<u8>, String> {
     signing_input_value(payload)
 }
 
-/// Подписать любое канонизируемое значение приватным ключом (hex, 32 байта).
-pub fn sign_value<T: serde::Serialize>(seed_hex: &str, value: &T) -> Result<String, String> {
+/// Подписать значение в заданном домене.
+pub fn sign_with_domain<T: serde::Serialize>(
+    domain: &[u8],
+    seed_hex: &str,
+    value: &T,
+) -> Result<String, String> {
     let seed = hex_to_32(seed_hex)?;
     let sk = SigningKey::from_bytes(&seed);
-    let sig = sk.sign(&signing_input_value(value)?);
+    let sig = sk.sign(&signing_input_with_domain(domain, value)?);
     Ok(hex::encode(sig.to_bytes()))
+}
+
+/// Подписать значение доменом поста.
+pub fn sign_value<T: serde::Serialize>(seed_hex: &str, value: &T) -> Result<String, String> {
+    sign_with_domain(SIGN_DOMAIN, seed_hex, value)
 }
 
 /// Подписать тело простого поста.
@@ -73,7 +91,12 @@ pub fn public_key_hex(seed_hex: &str) -> Result<String, String> {
 /// 3. `author.fp` = отпечаток из `author.pub_key`: нельзя подписаться одним
 ///    ключом, а назваться другим fingerprint.
 /// 4. Подпись проверяется `verify_strict` по каноническому JSON.payload.
-pub fn verify_value<T: serde::Serialize>(value: &T, author: &Author, sig_hex: &str) -> bool {
+pub fn verify_with_domain<T: serde::Serialize>(
+    domain: &[u8],
+    value: &T,
+    author: &Author,
+    sig_hex: &str,
+) -> bool {
     let sig_raw = match hex::decode(sig_hex.trim()) {
         Ok(v) => v,
         Err(_) => return false,
@@ -105,10 +128,15 @@ pub fn verify_value<T: serde::Serialize>(value: &T, author: &Author, sig_hex: &s
         return false;
     }
 
-    let Ok(input) = signing_input_value(value) else {
+    let Ok(input) = signing_input_with_domain(domain, value) else {
         return false;
     };
     vk.verify_strict(&input, &sig).is_ok()
+}
+
+/// Проверка подписи значением домена поста.
+pub fn verify_value<T: serde::Serialize>(value: &T, author: &Author, sig_hex: &str) -> bool {
+    verify_with_domain(SIGN_DOMAIN, value, author, sig_hex)
 }
 
 /// Проверка подписи простого поста (совместимая обёртка).

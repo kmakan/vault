@@ -914,6 +914,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-profile"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "social-model",
+ "storage-api",
+]
+
+[[package]]
 name = "social-rights"
 version = "0.1.0"
 dependencies = [

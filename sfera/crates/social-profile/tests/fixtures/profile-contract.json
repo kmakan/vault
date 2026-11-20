@@ -1,0 +1,32 @@
+{
+  "canonical_profile": "{\"author\":{\"fp\":\"ce:cc:15:07:dc:1d:dd:72:****\",\"pub_key\":\"cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc\"},\"avatar\":{\"blob_id\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"mime\":\"image/jpeg\",\"size\":12345},\"bio\":\"Если есть вопросы — пиши сюда.\",\"display_name\":\"Аня\",\"links\":[{\"label\":\"сайт\",\"url\":\"https://example.org/about\"},{\"label\":\"почта\",\"url\":\"mailto:anya@example.org\"}],\"ts\":1795000000,\"type\":\"social_profile\",\"v\":1}",
+  "domain": "sfera-profile:v1\u0000",
+  "profile": {
+    "author": {
+      "fp": "ce:cc:15:07:dc:1d:dd:72:****",
+      "pub_key": "cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc"
+    },
+    "avatar": {
+      "blob_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "mime": "image/jpeg",
+      "size": 12345
+    },
+    "bio": "Если есть вопросы — пиши сюда.",
+    "display_name": "Аня",
+    "links": [
+      {
+        "label": "сайт",
+        "url": "https://example.org/about"
+      },
+      {
+        "label": "почта",
+        "url": "mailto:anya@example.org"
+      }
+    ],
+    "ts": 1795000000,
+    "type": "social_profile",
+    "v": 1
+  },
+  "seed_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+  "sig_hex": "13150af913deeb424e310428b5fd52081a36ba84ac393000fceb8a89c9d8dcd9f460b02fdbf36a556a3f8609a9a4fa15bb63d33a3e16988f66d577c3ec36fa0b"
+}
