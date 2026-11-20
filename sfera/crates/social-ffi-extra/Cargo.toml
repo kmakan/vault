@@ -1,0 +1,16 @@
+[package]
+name = "social-ffi-extra"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: Tauri-команды companion/billing/account/media (ADR-006 §9)"
+
+[dependencies]
+sfera-companion = { path = "../sfera-companion" }
+sfera-billing = { path = "../sfera-billing" }
+social-account = { path = "../social-account" }
+social-media-kind = { path = "../social-media-kind" }
+social-model = { path = "../social-model" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", default-features = false }

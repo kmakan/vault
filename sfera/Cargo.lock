@@ -3265,6 +3265,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-ffi-extra"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sfera-billing",
+ "sfera-companion",
+ "social-account",
+ "social-media-kind",
+ "social-model",
+ "tauri",
+]
+
+[[package]]
 name = "social-history"
 version = "0.1.0"
 dependencies = [
