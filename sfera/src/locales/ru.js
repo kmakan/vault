@@ -1,0 +1,53 @@
+// Sfera UI: русский. Только строки, никаких решений и форматов —
+// протокол/права/ключи живут в Rust (ADR-006 §9.3).
+export default {
+  language_name: 'Русский',
+  nav_feed: 'Лента',
+  nav_contacts: 'Контакты',
+  nav_create: 'Создать',
+  nav_storage: 'Хранилище',
+  nav_profile: 'Профиль',
+
+  feed_all: 'Все',
+  feed_spheres: 'Сферы',
+  feed_favourites: 'Избранное',
+  feed_new_posts: '{n} новых',
+  feed_empty: 'Пока нет постов от ваших контактов',
+
+  contacts_incoming: 'Входящие',
+  contacts_outgoing: 'Исходящие',
+  contacts_accepted: 'Контакты',
+  contacts_request: 'Запросить контакт',
+  contacts_accept: 'Принять',
+  contacts_decline: 'Отклонить',
+  contacts_block: 'Заблокировать',
+  contacts_unblock: 'Разблокировать',
+
+  create_placeholder: 'Напишите пост…',
+  create_audience: 'Кто увидит',
+  create_publish: 'Опубликовать',
+  create_encrypting: 'Шифруем…',
+  create_uploading: 'Загружаем…',
+  create_sent: 'Отправлено {n} из {m}',
+
+  storage_device: 'Устройство',
+  storage_add: 'Добавить хранилище',
+  storage_default: 'По умолчанию',
+  storage_quota: 'Квота',
+  storage_health: 'Состояние',
+  storage_oauth_signin: 'Войти через Яндекс',
+
+  profile_name: 'Имя',
+  profile_bio: 'О себе',
+  profile_fingerprint: 'Отпечаток ключа',
+  profile_devices: 'Устройства',
+  profile_privacy: 'Приватность',
+  profile_export: 'Экспорт',
+
+  settings_language: 'Язык',
+  settings_theme: 'Тема оформления',
+  common_cancel: 'Отмена',
+  common_save: 'Сохранить',
+  common_error: 'Ошибка',
+  common_offline: 'Нет сети — изменения ждут в очереди',
+};

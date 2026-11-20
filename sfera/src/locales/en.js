@@ -1,0 +1,52 @@
+// Sfera UI: English. UI strings only — protocol/rights/keys stay in Rust.
+export default {
+  language_name: 'English',
+  nav_feed: 'Feed',
+  nav_contacts: 'Contacts',
+  nav_create: 'Create',
+  nav_storage: 'Storage',
+  nav_profile: 'Profile',
+
+  feed_all: 'All',
+  feed_spheres: 'Spheres',
+  feed_favourites: 'Favourites',
+  feed_new_posts: '{n} new',
+  feed_empty: 'No posts from your contacts yet',
+
+  contacts_incoming: 'Incoming',
+  contacts_outgoing: 'Outgoing',
+  contacts_accepted: 'Contacts',
+  contacts_request: 'Add contact',
+  contacts_accept: 'Accept',
+  contacts_decline: 'Decline',
+  contacts_block: 'Block',
+  contacts_unblock: 'Unblock',
+
+  create_placeholder: 'Write a post…',
+  create_audience: 'Who can see',
+  create_publish: 'Publish',
+  create_encrypting: 'Encrypting…',
+  create_uploading: 'Uploading…',
+  create_sent: 'Sent {n} of {m}',
+
+  storage_device: 'Device',
+  storage_add: 'Add storage',
+  storage_default: 'Default',
+  storage_quota: 'Quota',
+  storage_health: 'Health',
+  storage_oauth_signin: 'Sign in with Yandex',
+
+  profile_name: 'Name',
+  profile_bio: 'Bio',
+  profile_fingerprint: 'Key fingerprint',
+  profile_devices: 'Devices',
+  profile_privacy: 'Privacy',
+  profile_export: 'Export',
+
+  settings_language: 'Language',
+  settings_theme: 'Theme',
+  common_cancel: 'Cancel',
+  common_save: 'Save',
+  common_error: 'Error',
+  common_offline: 'Offline — changes are queued',
+};

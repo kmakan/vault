@@ -1,0 +1,52 @@
+// Sfera UI: 中文。仅界面文案；协议、权限与密钥逻辑留在 Rust。
+export default {
+  language_name: '中文',
+  nav_feed: '动态',
+  nav_contacts: '联系人',
+  nav_create: '发布',
+  nav_storage: '存储',
+  nav_profile: '资料',
+
+  feed_all: '全部',
+  feed_spheres: '圈子',
+  feed_favourites: '收藏',
+  feed_new_posts: '{n} 条新动态',
+  feed_empty: '暂无联系人发布的动态',
+
+  contacts_incoming: '收到的请求',
+  contacts_outgoing: '发出的请求',
+  contacts_accepted: '联系人',
+  contacts_request: '添加联系人',
+  contacts_accept: '接受',
+  contacts_decline: '拒绝',
+  contacts_block: '屏蔽',
+  contacts_unblock: '解除屏蔽',
+
+  create_placeholder: '写点什么…',
+  create_audience: '谁可见',
+  create_publish: '发布',
+  create_encrypting: '正在加密…',
+  create_uploading: '正在上传…',
+  create_sent: '已发送 {n} / {m}',
+
+  storage_device: '本机',
+  storage_add: '添加存储',
+  storage_default: '默认',
+  storage_quota: '配额',
+  storage_health: '状态',
+  storage_oauth_signin: '使用 Yandex 登录',
+
+  profile_name: '名称',
+  profile_bio: '简介',
+  profile_fingerprint: '密钥指纹',
+  profile_devices: '设备',
+  profile_privacy: '隐私',
+  profile_export: '导出',
+
+  settings_language: '语言',
+  settings_theme: '主题',
+  common_cancel: '取消',
+  common_save: '保存',
+  common_error: '错误',
+  common_offline: '离线 — 更改已在队列中等待',
+};
