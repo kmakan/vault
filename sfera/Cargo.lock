@@ -3274,6 +3274,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-manifest"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "storage-api",
+]
+
+[[package]]
 name = "social-media"
 version = "0.1.0"
 dependencies = [

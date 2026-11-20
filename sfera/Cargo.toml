@@ -6,6 +6,7 @@ members = [
     "crates/social-ports-impl",
     "crates/social-offline",
     "crates/social-invite",
+    "crates/social-manifest",
     "crates/social-device",
     "crates/social-link",
     "crates/social-repo",
