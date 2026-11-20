@@ -49,4 +49,12 @@ export default {
   common_save: 'Save',
   common_error: 'Error',
   common_offline: 'Offline — changes are queued',
+
+  companion_open: 'Open messenger',
+  companion_install: 'Install messenger',
+  companion_hint: 'Shared key and contacts — no key copy',
+  media_image: 'Photo',
+  media_audio: 'Audio',
+  media_video: 'Video',
+  media_document: 'File',
 };

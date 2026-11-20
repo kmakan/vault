@@ -12,6 +12,18 @@ export const TABS = Object.freeze([
   { id: 'profile', labelKey: 'nav_profile' },
 ]);
 
+// Контекстная кнопка мессенджера: одна, в профиле. Состояние приходит из
+// Rust (sfera-companion): установлен → открыть, нет → установить.
+export const COMPANION = Object.freeze({
+  openLabelKey: 'companion_open',
+  installLabelKey: 'companion_install',
+  hintKey: 'companion_hint',
+});
+
+export function companionLabelKey(installed) {
+  return installed ? COMPANION.openLabelKey : COMPANION.installLabelKey;
+}
+
 export function createShell(initial = 'feed') {
   let active = TABS.some((t) => t.id === initial) ? initial : TABS[0].id;
   return {

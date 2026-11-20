@@ -3048,6 +3048,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sfera-companion"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3296,6 +3303,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "storage-api",
+]
+
+[[package]]
+name = "social-media-kind"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

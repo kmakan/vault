@@ -50,4 +50,12 @@ export default {
   common_save: 'Сохранить',
   common_error: 'Ошибка',
   common_offline: 'Нет сети — изменения ждут в очереди',
+
+  companion_open: 'Открыть мессенджер',
+  companion_install: 'Установить мессенджер',
+  companion_hint: 'Общий ключ и контакты — без копирования ключа',
+  media_image: 'Фото',
+  media_audio: 'Аудио',
+  media_video: 'Видео',
+  media_document: 'Файл',
 };

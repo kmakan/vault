@@ -49,4 +49,12 @@ export default {
   common_save: '保存',
   common_error: '错误',
   common_offline: '离线 — 更改已在队列中等待',
+
+  companion_open: '打开通讯应用',
+  companion_install: '安装通讯应用',
+  companion_hint: '共享密钥与联系人，不复制密钥',
+  media_image: '照片',
+  media_audio: '音频',
+  media_video: '视频',
+  media_document: '文件',
 };
