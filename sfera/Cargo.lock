@@ -3360,6 +3360,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "storage-factory"
+version = "0.1.0"
+dependencies = [
+ "storage-api",
+ "storage-keychain",
+ "storage-local",
+ "storage-providers",
+ "storage-s3",
+ "storage-webdav",
+ "storage-yandex",
+]
+
+[[package]]
 name = "storage-keychain"
 version = "0.1.0"
 dependencies = [

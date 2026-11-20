@@ -1,0 +1,16 @@
+[package]
+name = "storage-factory"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: фабрика BlobStore по пресету (ADR-006 §6.1)"
+
+[dependencies]
+storage-api = { path = "../storage-api" }
+storage-providers = { path = "../storage-providers" }
+storage-local = { path = "../storage-local" }
+storage-webdav = { path = "../storage-webdav" }
+storage-s3 = { path = "../storage-s3" }
+storage-yandex = { path = "../storage-yandex" }
+storage-keychain = { path = "../storage-keychain" }

@@ -4,6 +4,7 @@ members = [
     "crates/social-model",
     "crates/storage-api",
     "crates/storage-providers",
+    "crates/storage-factory",
     "crates/storage-conformance",
     "crates/storage-local",
     "crates/storage-webdav",
