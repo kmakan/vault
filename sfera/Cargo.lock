@@ -3251,6 +3251,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-invite"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "social-model",
+]
+
+[[package]]
 name = "social-link"
 version = "0.1.0"
 dependencies = [
