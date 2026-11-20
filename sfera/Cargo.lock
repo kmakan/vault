@@ -863,6 +863,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-feed"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "social-model",
+ "social-post",
+ "social-rights",
+]
+
+[[package]]
 name = "social-media"
 version = "0.1.0"
 dependencies = [

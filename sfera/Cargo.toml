@@ -11,6 +11,7 @@ members = [
     "crates/social-audience",
     "crates/social-delivery",
     "crates/social-post",
+    "crates/social-feed",
 ]
 
 [workspace.package]
