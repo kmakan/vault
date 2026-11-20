@@ -1,0 +1,17 @@
+[package]
+name = "social-ffi-bridge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: Tauri-команды для link/repo/history (ADR-006 §9)"
+
+[dependencies]
+social-bridge = { path = "../social-bridge" }
+social-contacts = { path = "../social-contacts" }
+social-link = { path = "../social-link" }
+social-repo = { path = "../social-repo" }
+social-history = { path = "../social-history" }
+social-model = { path = "../social-model" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", default-features = false }

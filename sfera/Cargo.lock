@@ -3226,6 +3226,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-ffi-bridge"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "social-bridge",
+ "social-contacts",
+ "social-history",
+ "social-link",
+ "social-model",
+ "social-repo",
+ "tauri",
+]
+
+[[package]]
 name = "social-history"
 version = "0.1.0"
 dependencies = [
