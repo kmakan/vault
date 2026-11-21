@@ -27,8 +27,10 @@ pub fn vault_sfera_link_bundle(
     seq: u64,
 ) -> Result<SferaLinkDto, String> {
     let keys_dir = crate::key_store::get_keys_dir_raw();
-    let uri = vault_link_export::export_uri(&keys_dir, &device_pub_key, seq)
+    let bundle = vault_link_export::export_bundle_with_contacts(&keys_dir, &device_pub_key, seq)
         .map_err(|e| format!("sfera link: {e}"))?;
+    let uri = social_link::to_uri(&bundle)
+        .map_err(|e| format!("sfera link uri: {e:?}"))?;
     let seed = vault_core::account_signing::load_or_create_at(&keys_dir)
         .map_err(|e| format!("account signing key: {e}"))?;
     let account_fp = vault_core::account_signing::fingerprint(&seed)

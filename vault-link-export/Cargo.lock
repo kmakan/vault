@@ -1033,6 +1033,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "serde",
+ "serde_json",
  "social-device",
  "social-link",
  "social-model",

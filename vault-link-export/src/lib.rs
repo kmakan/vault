@@ -50,6 +50,46 @@ pub fn export_bundle(
         .map_err(|e| anyhow::anyhow!("link bundle: {e}"))
 }
 
+/// Собрать bundle с графом контактов (ADR-009 §4, шаг 3).
+///
+/// В bundle попадают только контакты, у которых известен Ed25519-ключ
+/// подписи (`contact_signing.json`). Остальные честно не переносятся:
+/// Sfera не будет показывать «подписанный» контакт без ключа подписи.
+pub fn export_bundle_with_contacts(
+    keys_dir: &Path,
+    device_pub_key: &str,
+    seq: u64,
+) -> Result<LinkBundle> {
+    let seed = vault_core::account_signing::load_or_create_at(keys_dir)
+        .context("account signing key")?;
+    let public = vault_core::account_signing::public_key_hex(&seed)
+        .context("account public key")?;
+    let account = Author::from_public_key_hex(&public)
+        .map_err(|e| anyhow::anyhow!("account author: {e}"))?;
+
+    let cert = social_device::DeviceCert::issue(&seed, account.fp.clone(), device_pub_key, seq)
+        .map_err(|e| anyhow::anyhow!("device cert: {e}"))?;
+
+    let signing = vault_core::contact_signing::load_at(keys_dir)
+        .context("contact signing keys")?;
+    let peers = vault_core::key_store::load_peer_keys_at(keys_dir)
+        .context("peer keys")?;
+
+    let mut contacts = Vec::new();
+    for peer in &peers {
+        let Some(sign_key) = signing.get(&peer.email) else { continue };
+        let Ok(fp) = social_model::Fingerprint::from_public_key_hex(sign_key) else { continue };
+        contacts.push(social_link::LinkedContact {
+            fp,
+            pub_key: sign_key.clone(),
+            label: peer.label.clone().unwrap_or_else(|| peer.email.clone()),
+        });
+    }
+
+    LinkBundle::create(&seed, account, cert, contacts, Vec::new(), seq)
+        .map_err(|e| anyhow::anyhow!("link bundle: {e}"))
+}
+
 /// QR-ссылка для экрана «Связать Sfera».
 pub fn export_uri(keys_dir: &Path, device_pub_key: &str, seq: u64) -> Result<String> {
     let bundle = export_bundle(keys_dir, device_pub_key, seq)?;
@@ -77,6 +117,36 @@ mod tests {
         let uri = export_uri(dir.path(), DEVICE, 1).unwrap();
         let back = social_link::from_uri(&uri).unwrap();
         assert!(back.verify(0).is_ok());
+    }
+
+    #[test]
+    fn graph_exports_only_signed_contacts() {
+        let dir = tempfile::tempdir().unwrap();
+        // Один контакт с ключом подписи, второй без него.
+        vault_core::contact_signing::remember_at(
+            dir.path(), "signed@example",
+            "0200000000000000000000000000000000000000000000000000000000000000",
+        ).unwrap();
+        let peers = vec![
+            vault_core::StoredPeerKey {
+                email: "signed@example".into(),
+                public_key: "0300000000000000000000000000000000000000000000000000000000000000".into(),
+                label: None, added_at: "now".into(), pq_public_key: None,
+            },
+            vault_core::StoredPeerKey {
+                email: "legacy@example".into(),
+                public_key: "0400000000000000000000000000000000000000000000000000000000000000".into(),
+                label: None, added_at: "now".into(), pq_public_key: None,
+            },
+        ];
+        std::fs::write(
+            dir.path().join("peer_keys.json"),
+            serde_json::to_vec(&peers).unwrap(),
+        ).unwrap();
+        let bundle = export_bundle_with_contacts(dir.path(), DEVICE, 1).unwrap();
+        assert_eq!(bundle.payload.contacts.len(), 1);
+        assert_eq!(bundle.payload.contacts[0].label, "signed@example");
+        assert!(bundle.verify(0).is_ok());
     }
 
     #[test]

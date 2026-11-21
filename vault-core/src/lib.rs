@@ -8,6 +8,8 @@
 /// Длина nonce XChaCha20Poly1305 (24 байта).
 pub const NONCE_LEN: usize = 24;
 
+/// Ключи подписи контактов (ADR-009 §4, шаг 3).
+pub mod contact_signing;
 /// Ключ подписи аккаунта (ADR-009): Ed25519-идентичность, отдельная от
 /// X25519-ключа шифрования. Общий для мессенджера и Sfera.
 pub mod account_signing;

@@ -8,6 +8,7 @@ description = "Vault: экспорт подписанного bundle для св
 
 [dev-dependencies]
 tempfile = "3"
+serde_json = "1"
 
 [dependencies]
 vault-core = { path = "../vault-core" }

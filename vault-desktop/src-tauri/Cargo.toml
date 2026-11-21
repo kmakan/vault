@@ -71,6 +71,7 @@ ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
 vault-core = { path = "../../vault-core" }
 # Экспорт подписанного bundle для связывания Sfera (ADR-009).
 vault-link-export = { path = "../../vault-link-export" }
+social-link = { path = "../../sfera/crates/social-link" }
 hkdf = "0.12"
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "rand_core"] }
 
