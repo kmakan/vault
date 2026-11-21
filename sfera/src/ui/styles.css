@@ -160,6 +160,9 @@ h1 {
 
   .rail {
     position: fixed;
+    /* Базовый .rail задаёт top:0 — без сброса панель растягивается на весь
+       экран и перекрывает контент (GUI-приёмка 21.11, 360×560). */
+    top: auto;
     right: 0;
     bottom: 0;
     left: 0;
@@ -174,11 +177,20 @@ h1 {
   }
 
   .rail-btn {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 2px;
+    font-size: 11px;
     text-align: center;
+    white-space: nowrap;
   }
 
   .content {
     padding: 16px 12px 84px;
   }
+}
+
+/* Очень узкий телефон: пять подписей всё равно не влезают целиком. */
+@media (max-width: 420px) {
+  .rail-btn { font-size: 10px; letter-spacing: -0.2px; }
 }

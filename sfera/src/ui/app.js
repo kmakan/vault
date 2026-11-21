@@ -2,6 +2,7 @@
 // правила, форматы, права и цены остаются в Rust (ADR-006 §9.3).
 // Модуль не трогает DOM, поэтому проверяется в node без GUI.
 
+import { reactive } from 'vue';
 import { createShell } from './shell.js';
 import { hasLocale, translate } from '../locales/index.js';
 import { THEMES } from '../themes/index.js';
@@ -15,7 +16,10 @@ export function createAppState({
   if (!bridge) throw new Error('bridge required');
 
   const shell = createShell();
-  const state = {
+  // Реактивный объект создаётся здесь: все методы замыкаются на него же.
+  // Если обернуть state снаружи в main.js, появится Proxy рядом с обычным
+  // объектом и вкладки не будут переключаться (GUI-приёмка 21.11).
+  const state = reactive({
     locale: hasLocale(locale) ? locale : 'en',
     theme: THEMES[theme] ? theme : 'dark',
     tab: shell.active(),
@@ -27,7 +31,7 @@ export function createAppState({
     audiences: [],
     caps: null,
     error: null,
-  };
+  });
 
   async function load(key, fn) {
     try {
