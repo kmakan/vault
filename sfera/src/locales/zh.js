@@ -69,4 +69,10 @@ export default {
   profile_encryption_key: '加密密钥',
   profile_link_uri: '来自通讯应用的关联码',
   profile_link_action: '关联',
+
+  create_sphere_title: '圈子',
+  create_sphere_name: '圈子名称',
+  create_sphere_action: '创建圈子',
+  create_sphere_created: '圈子已创建',
+  create_sphere_no_contacts: '添加联系人以创建圈子',
 };

@@ -70,4 +70,10 @@ export default {
   profile_encryption_key: 'Ключ шифрования',
   profile_link_uri: 'Код связывания из мессенджера',
   profile_link_action: 'Связать',
+
+  create_sphere_title: 'Сфера',
+  create_sphere_name: 'Название сферы',
+  create_sphere_action: 'Создать сферу',
+  create_sphere_created: 'Сфера создана',
+  create_sphere_no_contacts: 'Добавьте контакты, чтобы собрать сферу',
 };

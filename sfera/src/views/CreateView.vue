@@ -9,6 +9,26 @@ const body = ref('');
 const audienceId = ref('');
 const busy = ref(false);
 const status = ref('');
+const sphereName = ref('');
+const sphereMembers = ref([]);
+const sphereBusy = ref(false);
+const sphereStatus = ref('');
+
+async function createSphere() {
+  if (sphereBusy.value || !sphereName.value.trim()) return;
+  sphereBusy.value = true;
+  sphereStatus.value = '';
+  try {
+    await props.api.createAudience({ id: sphereName.value.trim(), members: sphereMembers.value });
+    sphereName.value = '';
+    sphereMembers.value = [];
+    sphereStatus.value = props.api.t('create_sphere_created');
+  } catch (e) {
+    sphereStatus.value = String(e?.message ?? e);
+  } finally {
+    sphereBusy.value = false;
+  }
+}
 
 const selected = computed(
   () => props.state.audiences.find((a) => a.id === audienceId.value) ?? props.state.audiences[0] ?? null,
@@ -60,6 +80,23 @@ async function submit() {
 
       <p v-if="status" class="muted">{{ status }}</p>
     </div>
+
+    <div class="card sphere">
+      <h2>{{ api.t('create_sphere_title') }}</h2>
+      <input v-model="sphereName" class="sphere-name"
+             :placeholder="api.t('create_sphere_name')" />
+      <div v-if="state.contacts.length" class="member-list">
+        <label v-for="c in state.contacts" :key="c.fp" class="member">
+          <input type="checkbox" :value="c.fp" v-model="sphereMembers" />
+          <span class="fp">{{ c.fp }}</span>
+        </label>
+      </div>
+      <p v-else class="muted">{{ api.t('create_sphere_no_contacts') }}</p>
+      <button class="primary" :disabled="sphereBusy || !sphereName.trim()" @click="createSphere">
+        {{ sphereBusy ? api.t('create_encrypting') : api.t('create_sphere_action') }}
+      </button>
+      <p v-if="sphereStatus" class="muted">{{ sphereStatus }}</p>
+    </div>
   </section>
 </template>
 
@@ -96,4 +133,10 @@ async function submit() {
   color: var(--text-primary);
   font: inherit;
 }
+
+.sphere { margin-top: 16px; }
+.sphere h2 { font-size: 15px; margin: 0 0 10px; }
+.sphere-name { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-secondary); color: var(--text-primary); font: inherit; }
+.member-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 160px; overflow-y: auto; }
+.member { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
 </style>

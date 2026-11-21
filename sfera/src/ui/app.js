@@ -93,6 +93,19 @@ export function createAppState({
     loadFeed: () => load('feed', () => bridge.feed()),
     loadContacts: () => load('contacts', () => bridge.contacts()),
     loadAudiences: () => load('audiences', () => bridge.audiences()),
+
+    // Сфера создаётся на устройстве: id и состав контактов приходят из формы,
+    // версию протокола и правилоepoch решает Rust.
+    async createAudience({ id, members = [] }) {
+      if (!id || !id.trim()) throw new Error('audience id required');
+      await bridge.createAudience({
+        v: state.apiVersion,
+        id: id.trim(),
+        members,
+      });
+      state.audiences = await bridge.audiences();
+      return state.audiences;
+    },
     loadCaps: () => load('caps', () => bridge.storeCaps()),
 
     // QR из мессенджера: проверка цепочки — в Rust, UI только передаёт URI.

@@ -69,4 +69,10 @@ export default {
   profile_encryption_key: 'Encryption key',
   profile_link_uri: 'Link code from messenger',
   profile_link_action: 'Link',
+
+  create_sphere_title: 'Sphere',
+  create_sphere_name: 'Sphere name',
+  create_sphere_action: 'Create sphere',
+  create_sphere_created: 'Sphere created',
+  create_sphere_no_contacts: 'Add contacts to build a sphere',
 };

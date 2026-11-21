@@ -13,6 +13,7 @@ export const COMMANDS = Object.freeze({
   feed: 'social_feed',
   contacts: 'social_contacts',
   audiences: 'social_audiences',
+  createAudience: 'social_create_audience',
   publishPost: 'social_publish_post',
   profile: 'social_profile',
   storeCaps: 'social_store_caps',
@@ -53,6 +54,11 @@ export function createBridge(invoke) {
 
     audiences() {
       return invoke(COMMANDS.audiences);
+    },
+
+    // id и members приходят из формы; версию и форму Rust не подменяем.
+    createAudience(req) {
+      return invoke(COMMANDS.createAudience, { req });
     },
 
     publishPost(req) {
