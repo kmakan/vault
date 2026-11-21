@@ -16,13 +16,15 @@
     "test:profile-contract": "node scripts/profile-contract-check.mjs",
     "test:shell": "node tests/ui/shell.mjs",
     "test:bridge": "node tests/ui/bridge.mjs",
-    "test:app": "node tests/ui/app.mjs"
+    "test:app": "node tests/ui/app.mjs",
+    "tauri": "tauri"
   },
   "dependencies": {
     "vue": "^3.5.46"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.11",
-    "vite": "^7.3.8"
+    "vite": "^7.3.8",
+    "@tauri-apps/cli": "^2.11.4"
   }
 }

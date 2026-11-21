@@ -83,6 +83,18 @@ fn social_organization_role_allows_media(role: social_account::OrgRole) -> bool 
     social_account::OrgRole::permission_set(role).can_view_media
 }
 
+/// Команды этого крейта — для сборки общего handler'а в оболочке.
+pub fn handles(command: &str) -> bool {
+    matches!(
+        command,
+        "social_companion_action"
+            | "social_plans_from_server"
+            | "social_plan_for"
+            | "social_media_kind"
+            | "social_organization_role_allows_media"
+    )
+}
+
 pub fn social_extra_commands_handler<R: tauri::Runtime>(
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -112,6 +124,12 @@ mod tests {
     fn media_kind_is_classified_in_rust() {
         assert!(matches!(social_media_kind("image/png".into()), MediaKindDto::Image));
         assert!(matches!(social_media_kind("application/pdf".into()), MediaKindDto::Document));
+    }
+
+    #[test]
+    fn handles_only_own_commands() {
+        assert!(handles("social_companion_action"));
+        assert!(!handles("social_feed"));
     }
 
     #[test]

@@ -320,6 +320,31 @@ fn social_store_caps(state: tauri::State<'_, SferaState>) -> Result<StoreCaps, C
     state.call(|app| Ok(app.store().caps()))
 }
 
+/// Какие команды обслуживает этот крейт. Оболочке нужно собрать несколько
+/// handler'ов в один `invoke_handler` (tauri допускает только один), поэтому
+/// список имён живёт рядом с командами, а не в оболочке.
+pub fn handles(command: &str) -> bool {
+    matches!(
+        command,
+        "social_api_version"
+            | "social_identity"
+            | "social_publish_post"
+            | "social_receive_posts"
+            | "social_feed"
+            | "social_contacts"
+            | "social_audiences"
+            | "social_mark_read"
+            | "social_set_my_profile"
+            | "social_profile"
+            | "social_access"
+            | "social_put_contact"
+            | "social_create_audience"
+            | "social_set_audience_members"
+            | "social_sync_outbox"
+            | "social_store_caps"
+    )
+}
+
 /// Регистратор всех `social_*` команд для Tauri-приложения.
 ///
 /// Команды намеренно приватные: `#[tauri::command]` на `pub fn` в tauri 2.12
@@ -439,6 +464,14 @@ mod tests {
         assert_eq!(options[0].id, "sphere_close");
         assert_eq!(options[0].epoch, 1);
         assert_eq!(options[0].spec, social_app::Audience::Sphere { id: "sphere_close".into() });
+    }
+
+    #[test]
+    fn handles_only_own_commands() {
+        assert!(handles("social_feed"));
+        assert!(handles("social_audiences"));
+        assert!(!handles("social_companion_action"));
+        assert!(!handles("not_a_command"));
     }
 
     #[test]

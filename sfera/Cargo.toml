@@ -1,5 +1,8 @@
 [workspace]
 resolver = "2"
+# Оболочка Tauri — отдельный crate со своим target: её сборка требует GUI-стек
+# и не должна попадать в `cargo test --workspace` социального ядра.
+exclude = ["src-tauri"]
 members = [
     "crates/social-model",
     "crates/social-ports",

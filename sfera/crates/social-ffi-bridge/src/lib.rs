@@ -3,8 +3,7 @@
 //! Команды приватные (урок tauri 2.12 / E0255), наружу — handler.
 
 use serde::{Deserialize, Serialize};
-use social_bridge::{accept_link, grant_progress, import_contacts, restore_repo};
-use social_model::Fingerprint;
+use social_bridge::{accept_link, restore_repo};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LinkInfoDto {
@@ -74,6 +73,14 @@ fn social_history_progress(
     }
 }
 
+/// Команды этого крейта — для сборки общего handler'а в оболочке.
+pub fn handles(command: &str) -> bool {
+    matches!(
+        command,
+        "social_link_inspect" | "social_repo_verify" | "social_history_progress"
+    )
+}
+
 pub fn social_bridge_commands_handler<R: tauri::Runtime>(
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -93,6 +100,12 @@ mod tests {
         assert!(!p.done);
         let p2 = social_history_progress(2, 2, 100, 100);
         assert!(p2.done);
+    }
+
+    #[test]
+    fn handles_only_own_commands() {
+        assert!(handles("social_link_inspect"));
+        assert!(!handles("social_feed"));
     }
 
     #[test]
