@@ -21,8 +21,10 @@ export default {
   contacts_decline: '拒绝',
   contacts_block: '屏蔽',
   contacts_unblock: '解除屏蔽',
+  contacts_empty: '暂无联系人',
 
   create_placeholder: '写点什么…',
+  create_no_audience: '请先在联系人中创建圈子',
   create_audience: '谁可见',
   create_publish: '发布',
   create_encrypting: '正在加密…',
@@ -30,6 +32,7 @@ export default {
   create_sent: '已发送 {n} / {m}',
 
   storage_device: '本机',
+  storage_none: '尚未连接存储',
   storage_add: '添加存储',
   storage_default: '默认',
   storage_quota: '配额',

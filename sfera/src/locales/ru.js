@@ -22,8 +22,10 @@ export default {
   contacts_decline: 'Отклонить',
   contacts_block: 'Заблокировать',
   contacts_unblock: 'Разблокировать',
+  contacts_empty: 'Контактов пока нет',
 
   create_placeholder: 'Напишите пост…',
+  create_no_audience: 'Сначала создайте сферу в контактах',
   create_audience: 'Кто увидит',
   create_publish: 'Опубликовать',
   create_encrypting: 'Шифруем…',
@@ -31,6 +33,7 @@ export default {
   create_sent: 'Отправлено {n} из {m}',
 
   storage_device: 'Устройство',
+  storage_none: 'Хранилище ещё не подключено',
   storage_add: 'Добавить хранилище',
   storage_default: 'По умолчанию',
   storage_quota: 'Квота',

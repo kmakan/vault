@@ -211,6 +211,36 @@ fn social_feed(state: tauri::State<'_, SferaState>) -> Result<Vec<serde_json::Va
     })
 }
 
+/// Варианты адресата для экрана «Создать»: id, эпоха и спецификация уже в
+/// той форме, которую принимает `social_publish_post`. UI только передаёт
+/// выбранный вариант обратно, ничего не собирая сам.
+#[tauri::command]
+fn social_audiences(state: tauri::State<'_, SferaState>) -> Result<Vec<PostAudience>, CommandError> {
+    state.call(|app| {
+        Ok(app.audiences()
+            .map(|k| {
+                let id = k.audience_id().to_string();
+                PostAudience {
+                    id: id.clone(),
+                    epoch: k.epoch(),
+                    spec: social_app::Audience::Sphere { id },
+                }
+            })
+            .collect())
+    })
+}
+
+/// Контакты для вкладки «Контакты». Состав и состояние — из
+/// `social-contacts`; FFI только сериализует записи.
+#[tauri::command]
+fn social_contacts(state: tauri::State<'_, SferaState>) -> Result<Vec<serde_json::Value>, CommandError> {
+    state.call(|app| {
+        app.contacts().contacts()
+            .map(|c| serde_json::to_value(c).map_err(CommandError::input))
+            .collect()
+    })
+}
+
 #[tauri::command]
 fn social_mark_read(state: tauri::State<'_, SferaState>, post_id: String) -> Result<bool, CommandError> {
     state.call(|app| {
@@ -304,6 +334,8 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_publish_post,
         social_receive_posts,
         social_feed,
+        social_contacts,
+        social_audiences,
         social_mark_read,
         social_set_my_profile,
         social_profile,
@@ -359,6 +391,54 @@ mod tests {
         let delivery: Result<Arc<dyn DeliveryPort>, CommandError> = st.delivery.clone()
             .ok_or_else(|| CommandError::new("transport", "no delivery port"));
         assert_eq!(delivery.err().map(|e| e.code), Some("transport".to_string()));
+    }
+
+    #[test]
+    fn contacts_are_listed_after_put() {
+        let st = state();
+        let fp = social_app::Fingerprint::from_str("02:00:00:00:00:00:00:00:****");
+        let record = ContactRecord::contact(
+            fp.clone(),
+            social_app::Role::Friend,
+            vec!["close".into()],
+            false,
+        );
+        st.call(|app| { app.put_contact(record); Ok(()) }).unwrap();
+        let listed: Vec<serde_json::Value> = st
+            .call(|app| {
+                app.contacts().contacts()
+                    .map(|c| serde_json::to_value(c).map_err(CommandError::input))
+                    .collect()
+            })
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["fp"], serde_json::json!(fp.as_str()));
+        assert_eq!(listed[0]["role"], serde_json::json!("friend"));
+    }
+
+    #[test]
+    fn audience_options_are_post_ready() {
+        let st = state();
+        let fp = social_app::Fingerprint::from_str("02:00:00:00:00:00:00:00:****");
+        st.call(|app| { app.create_audience("sphere_close", vec![fp]); Ok(()) }).unwrap();
+        let options: Vec<PostAudience> = st
+            .call(|app| {
+                Ok(app.audiences()
+                    .map(|k| {
+                        let id = k.audience_id().to_string();
+                        PostAudience {
+                            id: id.clone(),
+                            epoch: k.epoch(),
+                            spec: social_app::Audience::Sphere { id },
+                        }
+                    })
+                    .collect())
+            })
+            .unwrap();
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].id, "sphere_close");
+        assert_eq!(options[0].epoch, 1);
+        assert_eq!(options[0].spec, social_app::Audience::Sphere { id: "sphere_close".into() });
     }
 
     #[test]

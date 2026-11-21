@@ -4,8 +4,16 @@
 
 import { companionLabelKey } from './shell.js';
 
-// Имена команд совпадают с #[tauri::command] в social-ffi-extra.
+// Имена команд совпадают с #[tauri::command] в social-ffi / social-ffi-extra.
 export const COMMANDS = Object.freeze({
+  apiVersion: 'social_api_version',
+  identity: 'social_identity',
+  feed: 'social_feed',
+  contacts: 'social_contacts',
+  audiences: 'social_audiences',
+  publishPost: 'social_publish_post',
+  profile: 'social_profile',
+  storeCaps: 'social_store_caps',
   companion: 'social_companion_action',
   plans: 'social_plans_from_server',
   planFor: 'social_plan_for',
@@ -17,6 +25,38 @@ export function createBridge(invoke) {
   if (typeof invoke !== 'function') throw new Error('invoke required');
 
   return {
+    apiVersion() {
+      return invoke(COMMANDS.apiVersion);
+    },
+
+    identity() {
+      return invoke(COMMANDS.identity);
+    },
+
+    feed() {
+      return invoke(COMMANDS.feed);
+    },
+
+    contacts() {
+      return invoke(COMMANDS.contacts);
+    },
+
+    audiences() {
+      return invoke(COMMANDS.audiences);
+    },
+
+    publishPost(req) {
+      return invoke(COMMANDS.publishPost, { req });
+    },
+
+    profile(fp) {
+      return invoke(COMMANDS.profile, { fp });
+    },
+
+    storeCaps() {
+      return invoke(COMMANDS.storeCaps);
+    },
+
     async companionAction(deepLinkHandled) {
       const dto = await invoke(COMMANDS.companion, { deepLinkHandled });
       return {

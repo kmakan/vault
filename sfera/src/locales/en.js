@@ -21,8 +21,10 @@ export default {
   contacts_decline: 'Decline',
   contacts_block: 'Block',
   contacts_unblock: 'Unblock',
+  contacts_empty: 'No contacts yet',
 
   create_placeholder: 'Write a post…',
+  create_no_audience: 'Create a sphere in contacts first',
   create_audience: 'Who can see',
   create_publish: 'Publish',
   create_encrypting: 'Encrypting…',
@@ -30,6 +32,7 @@ export default {
   create_sent: 'Sent {n} of {m}',
 
   storage_device: 'Device',
+  storage_none: 'No storage connected yet',
   storage_add: 'Add storage',
   storage_default: 'Default',
   storage_quota: 'Quota',

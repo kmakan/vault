@@ -168,6 +168,12 @@ impl SferaApp {
         self.audiences.get(id)
     }
 
+    /// Все аудитории автора. Только чтение: состав и эпохи решает
+    /// `social-audience`, корень их не пересчитывает.
+    pub fn audiences(&self) -> impl Iterator<Item = &AudienceKeys> {
+        self.audiences.values()
+    }
+
     /// Зарегистрировать ключи аудитории (состояние фичи `social-audience`).
     pub fn put_audience(&mut self, keys: AudienceKeys) {
         self.audiences.insert(keys.audience_id().to_string(), keys);
