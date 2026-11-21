@@ -87,4 +87,8 @@ export default {
   storage_uploaded: 'Encrypted: {name} ({kind}, {size} bytes)',
   storage_upload_fail: 'Could not upload file',
   create_attached: 'Attached:',
+
+  storage_gallery: 'My files',
+  storage_gallery_empty: 'No files uploaded yet',
+  storage_forget: 'Remove from list',
 };

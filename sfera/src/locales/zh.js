@@ -87,4 +87,8 @@ export default {
   storage_uploaded: '已加密：{name}（{kind}，{size} 字节）',
   storage_upload_fail: '无法上传文件',
   create_attached: '已附加：',
+
+  storage_gallery: '我的文件',
+  storage_gallery_empty: '尚未上传文件',
+  storage_forget: '从列表中移除',
 };

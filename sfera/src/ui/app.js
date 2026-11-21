@@ -33,6 +33,7 @@ export function createAppState({
     // Результаты загрузки: ключ файла живёт здесь только до публикации,
     // затем уходит в E2E-манифест и очищается.
     uploads: [],
+    library: [],
     error: null,
   });
 
@@ -89,6 +90,7 @@ export function createAppState({
         load('contacts', () => bridge.contacts()),
         load('audiences', () => bridge.audiences()),
         load('caps', () => bridge.storeCaps()),
+        load('library', () => bridge.libraryItems()),
       ]);
       return state;
     },
@@ -135,11 +137,19 @@ export function createAppState({
       });
       const result = await bridge.uploadMedia(file.type || 'application/octet-stream', dataBase64);
       state.uploads.push(result);
+      state.library = await bridge.libraryItems();
       return result;
     },
 
     clearUploads() {
       state.uploads = [];
+    },
+
+    loadLibrary: () => load('library', () => bridge.libraryItems()),
+
+    async forgetFile(blobId) {
+      await bridge.libraryForget(blobId);
+      state.library = await bridge.libraryItems();
     },
 
     // Публикация с медиа: Rust сам строит MediaRef и E2E-манифест.

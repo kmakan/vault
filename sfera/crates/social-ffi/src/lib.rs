@@ -53,11 +53,29 @@ pub trait DeliveryPort: Send + Sync {
 pub struct SferaState {
     app: Mutex<SferaApp>,
     delivery: Option<Arc<dyn DeliveryPort>>,
+    /// Каталог локальных ключей и метаданных (media_library.json).
+    keys_dir: std::path::PathBuf,
 }
 
 impl SferaState {
     pub fn new(app: SferaApp, delivery: Option<Arc<dyn DeliveryPort>>) -> Self {
-        Self { app: Mutex::new(app), delivery }
+        Self {
+            app: Mutex::new(app),
+            delivery,
+            keys_dir: std::env::var("SFERA_KEYS_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                        .join(".sfera")
+                        .join("keys")
+                }),
+        }
+    }
+
+    pub fn with_keys_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.keys_dir = dir.into();
+        self
     }
 
     /// Хендл хранилища для async-команд: копируем Arc и не держим mutex
@@ -374,9 +392,31 @@ async fn social_upload_media(
         .map_err(|e| CommandError::input(format!("bad base64: {e}")))?;
     let store = state.store_handle()?;
     let store_id = store.caps().kind;
-    social_upload::upload_encrypted(store.as_ref(), &format!("{store_id:?}"), &mime, &bytes)
+    let result = social_upload::upload_encrypted(store.as_ref(), &format!("{store_id:?}"), &mime, &bytes)
         .await
-        .map_err(|e| CommandError::backend(format!("upload: {e}")))
+        .map_err(|e| CommandError::backend(format!("upload: {e}")))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    social_library::remember_at(&state.keys_dir, &result, now)
+        .map_err(|e| CommandError::backend(format!("library: {e}")))?;
+    Ok(result)
+}
+
+/// Список своих файлов для галереи: без ключей и локальных путей.
+#[tauri::command]
+fn social_library_items(state: tauri::State<'_, SferaState>) -> Result<Vec<social_library::LibraryItem>, CommandError> {
+    social_library::items_at(&state.keys_dir)
+        .map_err(|e| CommandError::backend(format!("library: {e}")))
+}
+
+/// Убрать файл из локального каталога. Сам зашифрованный блоб остаётся в
+/// хранилище: удаление из списка не равно удалению данных (ADR-006 §5.2).
+#[tauri::command]
+fn social_library_forget(state: tauri::State<'_, SferaState>, blob_id: String) -> Result<bool, CommandError> {
+    social_library::forget_at(&state.keys_dir, &blob_id)
+        .map_err(|e| CommandError::backend(format!("library: {e}")))
 }
 
 /// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
@@ -429,6 +469,8 @@ pub fn handles(command: &str) -> bool {
             | "social_put_contact"
             | "social_accept_contact_request"
             | "social_upload_media"
+            | "social_library_items"
+            | "social_library_forget"
             | "social_publish_with_media"
             | "social_create_audience"
             | "social_set_audience_members"
@@ -460,6 +502,8 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_put_contact,
         social_accept_contact_request,
         social_upload_media,
+        social_library_items,
+        social_library_forget,
         social_publish_with_media,
         social_create_audience,
         social_set_audience_members,

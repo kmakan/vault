@@ -11,10 +11,12 @@ social-app = { path = "../social-app" }
 social-contacts = { path = "../social-contacts" }
 social-upload = { path = "../social-upload" }
 social-manifest = { path = "../social-manifest" }
+social-library = { path = "../social-library" }
 social-post = { path = "../social-post" }
 storage-api = { path = "../storage-api" }
 base64 = "0.22"
 hex = "0.4"
+dirs = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Минимальный Tauri: только макрос #[tauri::command] и IPC-типы, без wry/GTK.

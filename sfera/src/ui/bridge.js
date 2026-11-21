@@ -25,6 +25,8 @@ export const COMMANDS = Object.freeze({
   orgAllowsMedia: 'social_organization_role_allows_media',
   uploadMedia: 'social_upload_media',
   publishWithMedia: 'social_publish_with_media',
+  libraryItems: 'social_library_items',
+  libraryForget: 'social_library_forget',
 });
 
 export function createBridge(invoke) {
@@ -114,6 +116,14 @@ export function createBridge(invoke) {
 
     publishWithMedia(req, uploaded) {
       return invoke(COMMANDS.publishWithMedia, { req, uploaded });
+    },
+
+    libraryItems() {
+      return invoke(COMMANDS.libraryItems);
+    },
+
+    libraryForget(blobId) {
+      return invoke(COMMANDS.libraryForget, { blobId });
     },
   };
 }

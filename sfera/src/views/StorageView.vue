@@ -49,6 +49,20 @@ function quota(bytes) {
       <p v-if="uploadStatus" class="muted">{{ uploadStatus }}</p>
     </div>
 
+    <div class="card gallery">
+      <h2>{{ api.t('storage_gallery') }}</h2>
+      <p v-if="!state.library?.length" class="muted">{{ api.t('storage_gallery_empty') }}</p>
+      <div v-else class="gallery-grid">
+        <article v-for="item in state.library" :key="item.blob_id" class="tile">
+          <span class="tile-kind">{{ item.kind }}</span>
+          <span class="fp">{{ item.blob_id.slice(0, 12) }}…</span>
+          <span class="muted">{{ item.size }} B</span>
+          <button class="tile-remove" :aria-label="api.t('storage_forget')"
+                  @click="api.forgetFile(item.blob_id)">×</button>
+        </article>
+      </div>
+    </div>
+
     <div v-if="!state.caps" class="empty">{{ api.t('storage_none') }}</div>
 
     <div v-else class="card">
@@ -92,4 +106,11 @@ function quota(bytes) {
 .upload { margin-bottom: 12px; }
 .upload h2 { font-size: 15px; margin: 0 0 8px; }
 .file-input { max-width: 100%; font: inherit; font-size: 12px; }
+
+.gallery { margin-bottom: 12px; }
+.gallery h2 { font-size: 15px; margin: 0 0 10px; }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.tile { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: var(--radius-md); background: var(--bg-secondary); font-size: 11px; }
+.tile-kind { color: var(--accent-secondary); font-weight: 600; }
+.tile-remove { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 16px; }
 </style>

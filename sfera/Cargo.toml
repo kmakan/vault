@@ -16,6 +16,7 @@ members = [
     "crates/sfera-billing",
     "crates/social-ffi-extra",
     "crates/social-upload",
+    "crates/social-library",
     "crates/social-device",
     "crates/social-link",
     "crates/social-repo",

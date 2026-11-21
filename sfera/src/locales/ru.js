@@ -88,4 +88,8 @@ export default {
   storage_uploaded: 'Зашифровано: {name} ({kind}, {size} байт)',
   storage_upload_fail: 'Не удалось загрузить файл',
   create_attached: 'Прикреплено:',
+
+  storage_gallery: 'Мои файлы',
+  storage_gallery_empty: 'Вы ещё ничего не загрузили',
+  storage_forget: 'Убрать из списка',
 };
