@@ -5477,6 +5477,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "ryu-js"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6518fc26bced4d53678a22d6e423e9d8716377def84545fe328236e3af070e7f"
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5674,6 +5680,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "serde_jcs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cacecf649bc1a7c5f0e299cc813977c6a78116abda2b93b1ee01735b71ead9a8"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5948,6 +5965,38 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "social-device"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "social-model",
+]
+
+[[package]]
+name = "social-link"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "social-device",
+ "social-model",
+]
+
+[[package]]
+name = "social-model"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "vault-core",
+]
 
 [[package]]
 name = "socket2"
@@ -7362,10 +7411,24 @@ dependencies = [
  "v4l",
  "vault-client",
  "vault-core",
+ "vault-link-export",
  "webkit2gtk",
  "webrtc",
  "webrtc-audio-processing",
  "x25519-dalek",
+]
+
+[[package]]
+name = "vault-link-export"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "serde",
+ "social-device",
+ "social-link",
+ "social-model",
+ "vault-core",
 ]
 
 [[package]]

@@ -732,4 +732,11 @@ export default {
 
   pro_badge_hint: 'Активный платный тариф Pro',
   emoji_picker: 'Эмодзи',
+
+  sfera_link_title: 'Связать Sfera',
+  sfera_link_hint: 'Соцсеть на том же ключе: контакты не копируются',
+  sfera_link_button: 'Показать QR-код',
+  sfera_link_device_key: 'Ключ устройства из Sfera',
+  sfera_link_ready: 'QR готов: откройте Sfera → Профиль → Связать',
+  sfera_link_fail: 'Не удалось создать код связывания',
 }

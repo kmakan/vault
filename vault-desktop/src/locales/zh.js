@@ -724,4 +724,11 @@ export default {
 
   pro_badge_hint: 'Pro 套餐已激活',
   emoji_picker: '表情',
+
+  sfera_link_title: '关联 Sfera',
+  sfera_link_hint: '使用同一密钥的社交应用：不复制联系人',
+  sfera_link_button: '显示二维码',
+  sfera_link_device_key: '来自 Sfera 的设备密钥',
+  sfera_link_ready: '二维码已就绪：打开 Sfera → 资料 → 关联',
+  sfera_link_fail: '无法生成关联码',
 }

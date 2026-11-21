@@ -61,6 +61,8 @@ mod media;
 // только под Android, на хосте модуль нужен ради тестов самого обхода.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod peer_index;
+// Связывание Sfera (ADR-009): QR с bundle, подписанным ключом аккаунта.
+mod sfera_link;
 mod storage;
 // Видеозвонки (M3, шаг 2/3): захват камеры + запись кадров в VP8-трек звонка.
 mod video;
@@ -2710,6 +2712,7 @@ pub fn run() {
             vault_bridge::vault_store_incoming_message,
             vault_bridge::vault_download_attachment,
             vault_bridge::vault_save_file,
+            sfera_link::vault_sfera_link_bundle,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a

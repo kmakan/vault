@@ -730,4 +730,11 @@ export default {
 
   pro_badge_hint: 'Active Pro plan',
   emoji_picker: 'Emoji',
+
+  sfera_link_title: 'Link Sfera',
+  sfera_link_hint: 'Social app on the same key: no contact copying',
+  sfera_link_button: 'Show QR code',
+  sfera_link_device_key: 'Device key from Sfera',
+  sfera_link_ready: 'QR ready: open Sfera → Profile → Link',
+  sfera_link_fail: 'Could not create the link code',
 }

@@ -40,6 +40,22 @@
           <button @click="saveProfileFields" class="btn btn-primary">{{ t('settings_save_profile') }}</button>
           <button @click="$emit('logout')" class="btn btn-danger logout-btn">← {{ t('settings_logout') }}</button>
         </div>
+
+        <!-- Связывание Sfera (ADR-009): QR с bundle, подписанным ключом аккаунта. -->
+        <div class="sfera-link-block">
+          <h3 class="sfera-link-title">{{ t('sfera_link_title') }}</h3>
+          <p class="sfera-link-hint">{{ t('sfera_link_hint') }}</p>
+          <input v-model="sferaDeviceKey" class="sfera-link-input"
+                 :placeholder="t('sfera_link_device_key')" autocomplete="off" spellcheck="false" />
+          <button @click="makeSferaLink" class="btn btn-primary" :disabled="sferaLinkBusy">
+            {{ t('sfera_link_button') }}
+          </button>
+          <p v-if="sferaLinkUri" class="sfera-link-result">
+            {{ t('sfera_link_ready') }}
+            <a :href="sferaLinkUri" target="_blank" rel="noopener">{{ sferaLinkUri }}</a>
+          </p>
+          <p v-if="sferaLinkError" class="sfera-link-error">{{ sferaLinkError }}</p>
+        </div>
       </div>
 
       <!-- ВНЕШНИЙ ВИД -->
@@ -539,6 +555,11 @@ export default {
   setup() { const { t, currentLocale } = useI18n(); return { t, currentLocale }; },
   data() {
     return {
+      // Связывание Sfera (ADR-009)
+      sferaDeviceKey: '',
+      sferaLinkUri: '',
+      sferaLinkError: '',
+      sferaLinkBusy: false,
       // Duress
       duressEnabled: false,
       duressLockCode: '',
@@ -1263,6 +1284,25 @@ export default {
         this._pendingBackup = null;
       }
     },
+    async makeSferaLink() {
+      const key = this.sferaDeviceKey.trim();
+      if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+        this.sferaLinkError = t('sfera_link_device_key');
+        return;
+      }
+      this.sferaLinkBusy = true;
+      this.sferaLinkError = '';
+      this.sferaLinkUri = '';
+      try {
+        const seq = Math.floor(Date.now() / 1000);
+        const dto = await invoke('vault_sfera_link_bundle', { devicePubKey: key, seq });
+        this.sferaLinkUri = dto.uri;
+      } catch (e) {
+        this.sferaLinkError = t('sfera_link_fail') + ': ' + (e.message || e);
+      } finally {
+        this.sferaLinkBusy = false;
+      }
+    },
     onIconChanged(id) {
       // Forward to the app root so the visible header logo swaps live
       this.$emit('icon-changed', id);
@@ -1757,4 +1797,14 @@ export default {
 .duress-contact{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text-primary,#e7ecf5);cursor:pointer}
 .duress-block .btn-primary{align-self:flex-start}
 
+
+/* Связывание Sfera (ADR-009) */
+.sfera-link-block{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border-subtle,#30363d)}
+.sfera-link-title{font-size:15px;color:var(--text-primary,#e7ecf5)}
+.sfera-link-hint{font-size:12.5px;color:var(--text-secondary,#8b93a7);margin:0}
+.sfera-link-input{width:100%;max-width:420px;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border-hover,#30363d);background:var(--bg-primary,#0d1117);color:var(--text-primary,#e6edf3);font-size:13px;font-family:monospace}
+.sfera-link-result{font-size:12.5px;color:var(--text-secondary,#8b93a7);word-break:break-all}
+.sfera-link-result a{color:var(--accent,#6366f1)}
+.sfera-link-error{font-size:12.5px;color:var(--gold,#f59e0b)}
+.sfera-link-block .btn{align-self:flex-start}
 </style>
