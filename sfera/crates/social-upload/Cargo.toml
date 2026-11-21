@@ -1,0 +1,21 @@
+[package]
+name = "social-upload"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: загрузка зашифрованного медиа в BlobStore (ADR-006 §5)"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+storage-local = { path = "../storage-local" }
+
+[dependencies]
+storage-api = { path = "../storage-api" }
+social-media = { path = "../social-media" }
+social-manifest = { path = "../social-manifest" }
+social-media-kind = { path = "../social-media-kind" }
+serde = { version = "1", features = ["derive"] }
+hex = "0.4"
+sha2 = "0.10"

@@ -33,6 +33,7 @@ impl CommandError {
     }
     fn version() -> Self { Self::new("version", "unsupported API version") }
     fn input(e: impl std::fmt::Display) -> Self { Self::new("input", e.to_string()) }
+    fn backend(e: impl std::fmt::Display) -> Self { Self::new("backend", e.to_string()) }
     fn panic() -> Self { Self::new("panic", "command panicked; app state intact") }
     fn lock() -> Self { Self::new("lock", "app state lock poisoned") }
 }
@@ -57,6 +58,13 @@ pub struct SferaState {
 impl SferaState {
     pub fn new(app: SferaApp, delivery: Option<Arc<dyn DeliveryPort>>) -> Self {
         Self { app: Mutex::new(app), delivery }
+    }
+
+    /// Хендл хранилища для async-команд: копируем Arc и не держим mutex
+    /// во время сетевой/дисковой записи.
+    pub fn store_handle(&self) -> Result<Arc<dyn storage_api::BlobStore>, CommandError> {
+        let app = self.app.lock().map_err(|_| CommandError::lock())?;
+        Ok(app.store().clone())
     }
 
     /// Единственный путь к ядру: паника поймана, poisoned-lock — ошибка.
@@ -309,6 +317,26 @@ fn social_set_audience_members(state: tauri::State<'_, SferaState>, req: Audienc
     })
 }
 
+/// Загрузить файл: шифрование в `social-media`, запись через `BlobStore`.
+/// base64 приходит из UI; ключ файла уходит только в ответе и должен попасть
+/// в E2E-конверт, а не в хранилище или логи (ADR-006 §5.2).
+#[tauri::command]
+async fn social_upload_media(
+    state: tauri::State<'_, SferaState>,
+    mime: String,
+    data_base64: String,
+) -> Result<social_upload::UploadResult, CommandError> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&data_base64)
+        .map_err(|e| CommandError::input(format!("bad base64: {e}")))?;
+    let store = state.store_handle()?;
+    let store_id = store.caps().kind;
+    social_upload::upload_encrypted(store.as_ref(), &format!("{store_id:?}"), &mime, &bytes)
+        .await
+        .map_err(|e| CommandError::backend(format!("upload: {e}")))
+}
+
 /// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
 /// живут в social-contacts; FFI только передаёт готовую форму (ADR-006 §4.1).
 #[tauri::command]
@@ -358,6 +386,7 @@ pub fn handles(command: &str) -> bool {
             | "social_access"
             | "social_put_contact"
             | "social_accept_contact_request"
+            | "social_upload_media"
             | "social_create_audience"
             | "social_set_audience_members"
             | "social_sync_outbox"
@@ -387,6 +416,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_access,
         social_put_contact,
         social_accept_contact_request,
+        social_upload_media,
         social_create_audience,
         social_set_audience_members,
         social_sync_outbox,

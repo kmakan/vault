@@ -23,6 +23,7 @@ export const COMMANDS = Object.freeze({
   planFor: 'social_plan_for',
   mediaKind: 'social_media_kind',
   orgAllowsMedia: 'social_organization_role_allows_media',
+  uploadMedia: 'social_upload_media',
 });
 
 export function createBridge(invoke) {
@@ -103,6 +104,11 @@ export function createBridge(invoke) {
 
     async orgAllowsMedia(role) {
       return Boolean(await invoke(COMMANDS.orgAllowsMedia, { role }));
+    },
+
+    // Файл читается в base64 на границе UI; шифрование и тип — в Rust.
+    uploadMedia(mime, dataBase64) {
+      return invoke(COMMANDS.uploadMedia, { mime, dataBase64 });
     },
   };
 }

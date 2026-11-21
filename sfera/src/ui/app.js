@@ -120,6 +120,19 @@ export function createAppState({
     },
     loadCaps: () => load('caps', () => bridge.storeCaps()),
 
+    // Чтение файла и base64 — граница UI. Ключ шифрования возвращается Rust
+    // и должен уйти в E2E-конверт, а не сохраняться в состоянии экрана.
+    async uploadFile(file) {
+      if (!file) throw new Error('file required');
+      const dataBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      return bridge.uploadMedia(file.type || 'application/octet-stream', dataBase64);
+    },
+
     // QR из мессенджера: проверка цепочки — в Rust, UI только передаёт URI.
     async acceptLink(uri) {
       state.link = await load('link', () => bridge.linkAccept(uri));

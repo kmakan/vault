@@ -3550,9 +3550,13 @@ dependencies = [
 name = "social-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "social-app",
+ "social-contacts",
+ "social-upload",
+ "storage-api",
  "tauri",
 ]
 
@@ -3574,13 +3578,17 @@ dependencies = [
 name = "social-ffi-extra"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "sfera-billing",
  "sfera-companion",
  "social-account",
  "social-media-kind",
  "social-model",
+ "social-upload",
+ "storage-api",
  "tauri",
+ "tokio",
 ]
 
 [[package]]
@@ -3602,6 +3610,30 @@ dependencies = [
  "serde_json",
  "social-device",
  "social-model",
+]
+
+[[package]]
+name = "social-manifest"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "storage-api",
+]
+
+[[package]]
+name = "social-media"
+version = "0.1.0"
+dependencies = [
+ "aead",
+ "chacha20poly1305",
+ "hex",
+ "hkdf",
+ "rand",
+ "sha2 0.10.9",
+ "storage-api",
 ]
 
 [[package]]
@@ -3670,6 +3702,19 @@ dependencies = [
  "serde",
  "social-feed",
  "social-post",
+]
+
+[[package]]
+name = "social-upload"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2 0.10.9",
+ "social-manifest",
+ "social-media",
+ "social-media-kind",
+ "storage-api",
 ]
 
 [[package]]

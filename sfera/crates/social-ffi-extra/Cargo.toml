@@ -12,5 +12,9 @@ sfera-billing = { path = "../sfera-billing" }
 social-account = { path = "../social-account" }
 social-media-kind = { path = "../social-media-kind" }
 social-model = { path = "../social-model" }
+social-upload = { path = "../social-upload" }
+storage-api = { path = "../storage-api" }
+base64 = "0.22"
+tokio = { version = "1", features = ["io-util"] }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", default-features = false }

@@ -3239,12 +3239,15 @@ dependencies = [
 name = "social-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "social-app",
  "social-contacts",
  "social-model",
  "social-sync",
+ "social-upload",
+ "storage-api",
  "storage-local",
  "tauri",
  "tempfile",
@@ -3269,13 +3272,17 @@ dependencies = [
 name = "social-ffi-extra"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "sfera-billing",
  "sfera-companion",
  "social-account",
  "social-media-kind",
  "social-model",
+ "social-upload",
+ "storage-api",
  "tauri",
+ "tokio",
 ]
 
 [[package]]
@@ -3444,6 +3451,22 @@ name = "social-transport"
 version = "0.1.0"
 dependencies = [
  "social-sync",
+]
+
+[[package]]
+name = "social-upload"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "social-manifest",
+ "social-media",
+ "social-media-kind",
+ "storage-api",
+ "storage-local",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

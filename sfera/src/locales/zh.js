@@ -82,4 +82,8 @@ export default {
   contacts_invite_accepted: '邀请已接受',
   contacts_invite_duplicate: '该邀请已处理过',
   contacts_invite_bad: '邀请码无效',
+
+  storage_upload_title: '添加文件',
+  storage_uploaded: '已加密：{name}（{kind}，{size} 字节）',
+  storage_upload_fail: '无法上传文件',
 };

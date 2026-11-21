@@ -82,4 +82,8 @@ export default {
   contacts_invite_accepted: 'Invitation accepted',
   contacts_invite_duplicate: 'This invitation was already processed',
   contacts_invite_bad: 'Invalid invitation code',
+
+  storage_upload_title: 'Add file',
+  storage_uploaded: 'Encrypted: {name} ({kind}, {size} bytes)',
+  storage_upload_fail: 'Could not upload file',
 };

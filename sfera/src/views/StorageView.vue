@@ -1,7 +1,30 @@
 <script setup>
 // Хранилище: возможности провайдера приходят из `social_store_caps`.
-// Медиа лежит у пользователя; приложение показывает только факты.
+// Файл шифруется в Rust до записи; UI не видит ключ и не знает формата блоба.
+import { ref } from 'vue';
+
 const props = defineProps({ state: Object, api: Object });
+const fileInput = ref(null);
+const uploadStatus = ref('');
+const busy = ref(false);
+
+async function onFile(event) {
+  const file = event.target.files?.[0];
+  if (!file || busy.value) return;
+  busy.value = true;
+  uploadStatus.value = '';
+  try {
+    const result = await props.api.uploadFile(file);
+    uploadStatus.value = props.api.t('storage_uploaded', {
+      name: file.name, kind: result.kind, size: result.size,
+    });
+  } catch (e) {
+    uploadStatus.value = props.api.t('storage_upload_fail') + ': ' + (e?.message ?? e);
+  } finally {
+    busy.value = false;
+    if (fileInput.value) fileInput.value.value = '';
+  }
+}
 
 // Локальный диск не имеет квоты и отдаёт u64::MAX — это «без ограничения»,
 // а не число мегабайт. Квоты облачных провайдеров приходят реальными.
@@ -19,6 +42,12 @@ function quota(bytes) {
     </header>
 
     <p v-if="state.error" class="error">{{ state.error }}</p>
+
+    <div class="card upload">
+      <h2>{{ api.t('storage_upload_title') }}</h2>
+      <input ref="fileInput" type="file" class="file-input" @change="onFile" />
+      <p v-if="uploadStatus" class="muted">{{ uploadStatus }}</p>
+    </div>
 
     <div v-if="!state.caps" class="empty">{{ api.t('storage_none') }}</div>
 
@@ -59,4 +88,8 @@ function quota(bytes) {
   display: flex;
   gap: 6px;
 }
+
+.upload { margin-bottom: 12px; }
+.upload h2 { font-size: 15px; margin: 0 0 8px; }
+.file-input { max-width: 100%; font: inherit; font-size: 12px; }
 </style>

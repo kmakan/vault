@@ -83,4 +83,8 @@ export default {
   contacts_invite_accepted: 'Приглашение принято',
   contacts_invite_duplicate: 'Это приглашение уже было',
   contacts_invite_bad: 'Неверный код приглашения',
+
+  storage_upload_title: 'Добавить файл',
+  storage_uploaded: 'Зашифровано: {name} ({kind}, {size} байт)',
+  storage_upload_fail: 'Не удалось загрузить файл',
 };
