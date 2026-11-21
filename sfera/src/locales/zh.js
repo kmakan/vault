@@ -86,4 +86,5 @@ export default {
   storage_upload_title: '添加文件',
   storage_uploaded: '已加密：{name}（{kind}，{size} 字节）',
   storage_upload_fail: '无法上传文件',
+  create_attached: '已附加：',
 };

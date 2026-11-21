@@ -14,6 +14,10 @@ const sphereMembers = ref([]);
 const sphereBusy = ref(false);
 const sphereStatus = ref('');
 
+function removeUpload(index) {
+  props.state.uploads.splice(index, 1);
+}
+
 async function createSphere() {
   if (sphereBusy.value || !sphereName.value.trim()) return;
   sphereBusy.value = true;
@@ -39,7 +43,11 @@ async function submit() {
   busy.value = true;
   status.value = '';
   try {
-    await props.api.publish({ body: body.value, audience: selected.value });
+    if (props.state.uploads.length) {
+      await props.api.publishWithMedia({ body: body.value, audience: selected.value });
+    } else {
+      await props.api.publish({ body: body.value, audience: selected.value });
+    }
     body.value = '';
     status.value = props.api.t('create_sent', { n: 1, m: 1 });
   } catch (e) {
@@ -76,6 +84,14 @@ async function submit() {
         <button class="primary" :disabled="busy || !selected || !body.trim()" @click="submit">
           {{ busy ? api.t('create_encrypting') : api.t('create_publish') }}
         </button>
+      </div>
+
+      <div v-if="state.uploads.length" class="attached">
+        <span class="muted">{{ api.t('create_attached') }}</span>
+        <span v-for="(u, i) in state.uploads" :key="u.blob_id" class="chip on">
+          {{ u.kind }} · {{ u.size }}
+          <button class="chip-remove" @click="removeUpload(i)">×</button>
+        </span>
       </div>
 
       <p v-if="status" class="muted">{{ status }}</p>
@@ -139,4 +155,7 @@ async function submit() {
 .sphere-name { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-secondary); color: var(--text-primary); font: inherit; }
 .member-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 160px; overflow-y: auto; }
 .member { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
+
+.attached { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.chip-remove { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 0 2px; }
 </style>

@@ -3240,11 +3240,14 @@ name = "social-ffi"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "hex",
  "serde",
  "serde_json",
  "social-app",
  "social-contacts",
+ "social-manifest",
  "social-model",
+ "social-post",
  "social-sync",
  "social-upload",
  "storage-api",
@@ -3459,6 +3462,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "sha2",
  "social-manifest",
  "social-media",

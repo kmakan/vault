@@ -87,4 +87,5 @@ export default {
   storage_upload_title: 'Добавить файл',
   storage_uploaded: 'Зашифровано: {name} ({kind}, {size} байт)',
   storage_upload_fail: 'Не удалось загрузить файл',
+  create_attached: 'Прикреплено:',
 };

@@ -30,6 +30,9 @@ export function createAppState({
     contacts: [],
     audiences: [],
     caps: null,
+    // Результаты загрузки: ключ файла живёт здесь только до публикации,
+    // затем уходит в E2E-манифест и очищается.
+    uploads: [],
     error: null,
   });
 
@@ -130,7 +133,32 @@ export function createAppState({
         reader.onerror = () => reject(reader.error);
         reader.readAsDataURL(file);
       });
-      return bridge.uploadMedia(file.type || 'application/octet-stream', dataBase64);
+      const result = await bridge.uploadMedia(file.type || 'application/octet-stream', dataBase64);
+      state.uploads.push(result);
+      return result;
+    },
+
+    clearUploads() {
+      state.uploads = [];
+    },
+
+    // Публикация с медиа: Rust сам строит MediaRef и E2E-манифест.
+    async publishWithMedia({ body, audience }) {
+      if (!body || !body.trim()) throw new Error('empty post');
+      if (!audience) throw new Error('audience required');
+      if (state.apiVersion == null) throw new Error('bridge not initialized');
+      const req = {
+        v: state.apiVersion,
+        ts: clock(),
+        body,
+        audience,
+        media: [],
+        now: clock(),
+      };
+      const post = await bridge.publishWithMedia(req, state.uploads);
+      state.uploads = [];
+      state.feed = await bridge.feed();
+      return post;
     },
 
     // QR из мессенджера: проверка цепочки — в Rust, UI только передаёт URI.

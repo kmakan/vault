@@ -317,6 +317,48 @@ fn social_set_audience_members(state: tauri::State<'_, SferaState>, req: Audienc
     })
 }
 
+/// Опубликовать пост с уже загруженным медиа. `MediaRef` и E2E-манифест
+/// собираются в Rust из результата загрузки: UI не знает ни ключ, ни локатор.
+#[tauri::command]
+fn social_publish_with_media(
+    state: tauri::State<'_, SferaState>,
+    req: PublishPostRequest,
+    uploaded: Vec<social_upload::UploadResult>,
+) -> Result<PostDto, CommandError> {
+    check(req.v)?;
+    let mut media = Vec::with_capacity(uploaded.len());
+    let mut manifests = Vec::with_capacity(uploaded.len());
+    for u in &uploaded {
+        let blob_id = storage_api::BlobId::from_bytes(
+            hex::decode(&u.blob_id)
+                .map_err(|e| CommandError::input(format!("blob id: {e}")))?
+                .try_into()
+                .map_err(|_| CommandError::input("blob id must be 32 bytes"))?,
+        );
+        media.push(social_post::MediaRef {
+            blob_id,
+            thumb_blob_id: None,
+            mime: u.mime.clone(),
+            size: u.size,
+        });
+        // post_id станет известен после подписи; манифест собираем там же.
+        manifests.push(u.clone());
+    }
+    state.call(|app| {
+        let post = app.publish_post(req.ts, req.body, req.audience, media, req.now)?;
+        let id = social_app::PostId::from_post(&post.post)
+            .map_err(|e| CommandError::input(e))?
+            .to_hex();
+        for u in &manifests {
+            let m = social_upload::build_manifest(&id, u)
+                .map_err(|e| CommandError::input(format!("manifest: {e:?}")))?;
+            // Манифест едет в E2E-конверте; здесь проверяем форму до отправки.
+            m.validate().map_err(|e| CommandError::input(format!("manifest: {e:?}")))?;
+        }
+        Ok(PostDto { v: API_VERSION, id, ts: post.post.ts })
+    })
+}
+
 /// Загрузить файл: шифрование в `social-media`, запись через `BlobStore`.
 /// base64 приходит из UI; ключ файла уходит только в ответе и должен попасть
 /// в E2E-конверт, а не в хранилище или логи (ADR-006 §5.2).
@@ -387,6 +429,7 @@ pub fn handles(command: &str) -> bool {
             | "social_put_contact"
             | "social_accept_contact_request"
             | "social_upload_media"
+            | "social_publish_with_media"
             | "social_create_audience"
             | "social_set_audience_members"
             | "social_sync_outbox"
@@ -417,6 +460,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_put_contact,
         social_accept_contact_request,
         social_upload_media,
+        social_publish_with_media,
         social_create_audience,
         social_set_audience_members,
         social_sync_outbox,

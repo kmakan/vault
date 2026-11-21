@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use social_media::{encrypt_blob, generate_file_key, generate_nonce_prefix, DEFAULT_CHUNK_SIZE};
 use social_media_kind::MediaKind;
+use social_manifest::{BlobEntry, BlobKey, Manifest, ManifestError};
 use storage_api::{BlobId, BlobStore, Locator, StorageError};
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +75,34 @@ pub async fn upload_encrypted(
     })
 }
 
+/// Собрать E2E-манифест из результата загрузки. Ключ файла едет внутри
+/// манифеста (который сам шифруется ключом аудитории), а не в посте и не в
+/// хранилище (ADR-006 §5.2, §7.1).
+///
+/// `blob_id` в ключе должен совпадать с локатором: это адрес хранилища.
+/// `content_id` из VAULTBLOB1 проверяется отдельно при расшифровке.
+pub fn build_manifest(post_id: &str, uploaded: &UploadResult) -> Result<Manifest, ManifestError> {
+    let blob_id = BlobId::from_bytes(
+        hex::decode(&uploaded.blob_id)
+            .map_err(|_| ManifestError::BlobMismatch)?
+            .try_into()
+            .map_err(|_| ManifestError::BlobMismatch)?,
+    );
+    let entry = BlobEntry {
+        key: BlobKey { blob_id, key_hex: uploaded.file_key_hex.clone() },
+        locators: vec![Locator {
+            store_id: uploaded.store_id.clone(),
+            uri: uploaded.uri.clone(),
+            blob_id,
+        }],
+        mime: uploaded.mime.clone(),
+        size: uploaded.size,
+    };
+    let manifest = Manifest::new(post_id, vec![entry]);
+    manifest.validate()?;
+    Ok(manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +130,23 @@ mod tests {
     fn windows(haystack: &[u8], needle: &[u8]) -> bool {
         if needle.is_empty() || needle.len() > haystack.len() { return false; }
         haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    #[tokio::test]
+    async fn manifest_carries_key_and_matches_locator() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalStore::new(dir.path()).unwrap();
+        let r = upload_encrypted(&store, "device", "video/mp4", b"video bytes")
+            .await.unwrap();
+        let m = build_manifest("post-1", &r).unwrap();
+        assert_eq!(m.post_id, "post-1");
+        assert_eq!(m.entries.len(), 1);
+        let e = &m.entries[0];
+        assert_eq!(e.key.key_hex, r.file_key_hex);
+        assert_eq!(e.locators[0].blob_id, e.key.blob_id);
+        assert_eq!(e.mime, "video/mp4");
+        // Ключ в сериализованном манифесте есть — но сам манифест едет в E2E.
+        assert!(serde_json::to_string(&m).unwrap().contains(&r.file_key_hex));
     }
 
     #[test]
