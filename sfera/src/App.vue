@@ -1,7 +1,7 @@
 <script setup>
 // App.vue — только вызовы: навигация, тема и выбор экрана. Ни одного правила
 // протокола, прав или форматов (ADR-006 §9.3, §17).
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted } from 'vue';
 import FeedView from './views/FeedView.vue';
 import ContactsView from './views/ContactsView.vue';
 import CreateView from './views/CreateView.vue';
@@ -22,6 +22,19 @@ const VIEWS = {
 };
 
 const view = computed(() => VIEWS[props.state.tab] ?? FeedView);
+
+// Десктоп: Ctrl/Cmd+1…5 переключают вкладки. Это навигация, не правило.
+function onKey(event) {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const index = Number(event.key) - 1;
+  const tab = props.api.tabs()[index];
+  if (!tab) return;
+  event.preventDefault();
+  props.api.openTab(tab.id);
+}
+
+onMounted(() => window.addEventListener('keydown', onKey));
+onUnmounted(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>

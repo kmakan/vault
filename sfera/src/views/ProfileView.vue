@@ -16,11 +16,20 @@ const themes = Object.keys(THEMES);
       <h1>{{ api.t('nav_profile') }}</h1>
     </header>
 
+    <p v-if="state.error" class="error">{{ state.error }}</p>
+
     <div class="card">
+      <div class="row">
+        <span class="muted">{{ api.t('profile_account') }}</span>
+        <span :class="{ muted: !state.link?.linked }">
+          {{ state.link?.linked ? state.link.account_fp : api.t('profile_not_linked') }}
+        </span>
+      </div>
       <div class="row">
         <span class="muted">{{ api.t('profile_fingerprint') }}</span>
         <span class="fp">{{ state.identity?.fp ?? '—' }}</span>
       </div>
+      <p class="muted hint">{{ api.t('profile_link_hint') }}</p>
       <div class="row">
         <span class="muted">{{ api.t('settings_language') }}</span>
         <select class="select" :value="state.locale" @change="api.setLocale($event.target.value)">
@@ -38,6 +47,10 @@ const themes = Object.keys(THEMES);
 </template>
 
 <style scoped>
+.hint {
+  margin: 10px 0 4px;
+  line-height: 1.4;
+}
 .row {
   display: flex;
   align-items: center;

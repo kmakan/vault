@@ -1,10 +1,14 @@
 <script setup>
 // Хранилище: возможности провайдера приходят из `social_store_caps`.
 // Медиа лежит у пользователя; приложение показывает только факты.
-defineProps({ state: Object, api: Object });
+const props = defineProps({ state: Object, api: Object });
 
-function megabytes(bytes) {
-  return bytes ? `${Math.round(bytes / (1024 * 1024))} MB` : '—';
+// Локальный диск не имеет квоты и отдаёт u64::MAX — это «без ограничения»,
+// а не число мегабайт. Квоты облачных провайдеров приходят реальными.
+function quota(bytes) {
+  if (!bytes || bytes >= Number.MAX_SAFE_INTEGER) return props.api.t('storage_unlimited');
+  const gb = bytes / 1024 ** 3;
+  return gb >= 1 ? `${Math.round(gb)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 </script>
 
@@ -25,13 +29,15 @@ function megabytes(bytes) {
       </div>
       <div class="row">
         <span class="muted">{{ api.t('storage_quota') }}</span>
-        <span>{{ megabytes(state.caps.max_file_bytes) }}</span>
+        <span>{{ quota(state.caps.max_file_bytes) }}</span>
       </div>
       <div class="row">
         <span class="muted">{{ api.t('storage_health') }}</span>
         <span class="chips">
           <span class="chip" :class="{ on: state.caps.range }">Range</span>
-          <span class="chip" :class="{ on: state.caps.public_link }">{{ api.t('storage_default') }}</span>
+          <span class="chip" :class="{ on: state.caps.public_link }">
+            {{ api.t('storage_public_link') }}
+          </span>
         </span>
       </div>
     </div>

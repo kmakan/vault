@@ -7,6 +7,7 @@ import { companionLabelKey } from './shell.js';
 // Имена команд совпадают с #[tauri::command] в social-ffi / social-ffi-extra.
 export const COMMANDS = Object.freeze({
   apiVersion: 'social_api_version',
+  linkStatus: 'social_link_status',
   identity: 'social_identity',
   feed: 'social_feed',
   contacts: 'social_contacts',
@@ -27,6 +28,10 @@ export function createBridge(invoke) {
   return {
     apiVersion() {
       return invoke(COMMANDS.apiVersion);
+    },
+
+    linkStatus() {
+      return invoke(COMMANDS.linkStatus);
     },
 
     identity() {

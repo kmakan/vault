@@ -20,6 +20,7 @@ export function createAppState({
     theme: THEMES[theme] ? theme : 'dark',
     tab: shell.active(),
     apiVersion: null,
+    link: null,
     identity: null,
     feed: [],
     contacts: [],
@@ -30,7 +31,6 @@ export function createAppState({
 
   async function load(key, fn) {
     try {
-      state.error = null;
       state[key] = await fn();
       return state[key];
     } catch (e) {
@@ -73,8 +73,10 @@ export function createAppState({
     },
 
     async init() {
+      state.error = null;
       state.apiVersion = await bridge.apiVersion();
       await Promise.all([
+        load('link', () => bridge.linkStatus()),
         load('identity', () => bridge.identity()),
         load('feed', () => bridge.feed()),
         load('contacts', () => bridge.contacts()),

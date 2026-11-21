@@ -23,5 +23,8 @@ social-ffi-bridge = { path = "../crates/social-ffi-bridge" }
 social-ffi-extra = { path = "../crates/social-ffi-extra" }
 social-sync = { path = "../crates/social-sync" }
 storage-local = { path = "../crates/storage-local" }
-vault-core = { path = "../../vault-core" }
-dirs = "5"
+rand = "0.8"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

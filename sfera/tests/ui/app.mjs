@@ -11,6 +11,7 @@ let failFeed = false;
 
 const bridge = {
   apiVersion: async () => 7,
+  linkStatus: async () => ({ linked: false, account_fp: null }),
   identity: async () => ({ v: 7, fp: 'aa:bb', pub_key: '00' }),
   feed: async () => {
     if (failFeed) throw new Error('feed down');
@@ -32,6 +33,7 @@ check(s.theme === 'dark', 'default theme');
 
 await api.init();
 check(s.apiVersion === 7, 'api version comes from Rust');
+check(s.link.linked === false, 'link status loaded');
 check(s.identity.fp === 'aa:bb', 'identity loaded');
 check(s.feed.length === 1, 'feed loaded');
 check(s.contacts.length === 1, 'contacts loaded');

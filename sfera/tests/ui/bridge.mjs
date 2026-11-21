@@ -9,6 +9,7 @@ const calls = [];
 const bridge = createBridge(async (name, args) => {
   calls.push({ name, args });
   if (name === COMMANDS.apiVersion) return 1;
+  if (name === COMMANDS.linkStatus) return { linked: false, account_fp: null };
   if (name === COMMANDS.identity) return { v: 1, fp: 'aa:bb', pub_key: '00' };
   if (name === COMMANDS.feed) return [{ id: 'p1' }];
   if (name === COMMANDS.contacts) return [{ fp: 'aa:bb' }];
@@ -25,6 +26,7 @@ const bridge = createBridge(async (name, args) => {
 });
 
 check((await bridge.apiVersion()) === 1, 'api version passed through');
+check((await bridge.linkStatus()).linked === false, 'link status passed through');
 check((await bridge.identity()).fp === 'aa:bb', 'identity DTO');
 check((await bridge.feed()).length === 1, 'feed DTO');
 check((await bridge.contacts()).length === 1, 'contacts DTO');
@@ -46,11 +48,11 @@ check(plan.months === 12, 'plan_for passed through');
 check((await bridge.mediaKind('video/mp4')) === 'Video', 'media kind from Rust');
 check((await bridge.orgAllowsMedia('viewer')) === false, 'org rights from Rust');
 
-check(calls.length === 13, `expected 13 invoke calls, got ${calls.length}`);
+check(calls.length === 14, `expected 14 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
-check(calls[8].args.deepLinkHandled === true, 'companion arg');
-check(calls[12].args.role === 'viewer', 'org role arg');
-check(calls[5].args.req === req, 'publish request passed unchanged');
+check(calls[9].args.deepLinkHandled === true, 'companion arg');
+check(calls[13].args.role === 'viewer', 'org role arg');
+check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;
 try { createBridge(null); } catch { threw = true; }
