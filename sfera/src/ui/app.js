@@ -92,6 +92,18 @@ export function createAppState({
 
     loadFeed: () => load('feed', () => bridge.feed()),
     loadContacts: () => load('contacts', () => bridge.contacts()),
+
+    // Заявка приходит готовой (QR/файл): ts и nonce уже в ней. UI не
+    // изобретает идентичность и не обходит дедуп в social-contacts.
+    async acceptInvite(request) {
+      if (!request) throw new Error('invite required');
+      const accepted = await bridge.acceptInvite({
+        v: state.apiVersion,
+        request,
+      });
+      state.contacts = await bridge.contacts();
+      return accepted;
+    },
     loadAudiences: () => load('audiences', () => bridge.audiences()),
 
     // Сфера создаётся на устройстве: id и состав контактов приходят из формы,

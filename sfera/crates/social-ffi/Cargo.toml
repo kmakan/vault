@@ -8,6 +8,7 @@ description = "Vault Sfera: тонкий слой Tauri-команд social_* (A
 
 [dependencies]
 social-app = { path = "../social-app" }
+social-contacts = { path = "../social-contacts" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Минимальный Tauri: только макрос #[tauri::command] и IPC-типы, без wry/GTK.

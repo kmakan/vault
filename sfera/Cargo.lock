@@ -3242,6 +3242,7 @@ dependencies = [
  "serde",
  "serde_json",
  "social-app",
+ "social-contacts",
  "social-model",
  "social-sync",
  "storage-local",

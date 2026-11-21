@@ -76,4 +76,11 @@ export default {
   create_sphere_action: 'Создать сферу',
   create_sphere_created: 'Сфера создана',
   create_sphere_no_contacts: 'Добавьте контакты, чтобы собрать сферу',
+
+  contacts_invite_title: 'Приглашение',
+  contacts_invite_hint: 'Вставьте код приглашения из QR',
+  contacts_invite_action: 'Принять приглашение',
+  contacts_invite_accepted: 'Приглашение принято',
+  contacts_invite_duplicate: 'Это приглашение уже было',
+  contacts_invite_bad: 'Неверный код приглашения',
 };

@@ -141,6 +141,10 @@ pub struct AccessRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContactRequestDto { pub v: u8, pub contact: ContactRecord }
 
+/// Заявка на контакт: форма из social-contacts, без приватного ключа.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InviteDto { pub v: u8, pub request: social_contacts::ContactRequest }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AudienceDto {
     pub v: u8,
@@ -305,6 +309,21 @@ fn social_set_audience_members(state: tauri::State<'_, SferaState>, req: Audienc
     })
 }
 
+/// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
+/// живут в social-contacts; FFI только передаёт готовую форму (ADR-006 §4.1).
+#[tauri::command]
+fn social_accept_contact_request(
+    state: tauri::State<'_, SferaState>,
+    req: InviteDto,
+) -> Result<bool, CommandError> {
+    check(req.v)?;
+    state.call(|app| {
+        let outcome = app.contacts_mut().accept_request(&req.request)
+            .map_err(|e| CommandError::input(format!("{e:?}")))?;
+        Ok(outcome == social_contacts::RequestOutcome::Accepted)
+    })
+}
+
 /// Прогов run outbox через порт доставки. Без порта — типизированная ошибка.
 #[tauri::command]
 fn social_sync_outbox(state: tauri::State<'_, SferaState>, now: u64) -> Result<ReportDto, CommandError> {
@@ -338,6 +357,7 @@ pub fn handles(command: &str) -> bool {
             | "social_profile"
             | "social_access"
             | "social_put_contact"
+            | "social_accept_contact_request"
             | "social_create_audience"
             | "social_set_audience_members"
             | "social_sync_outbox"
@@ -366,6 +386,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_profile,
         social_access,
         social_put_contact,
+        social_accept_contact_request,
         social_create_audience,
         social_set_audience_members,
         social_sync_outbox,

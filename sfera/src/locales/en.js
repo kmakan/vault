@@ -75,4 +75,11 @@ export default {
   create_sphere_action: 'Create sphere',
   create_sphere_created: 'Sphere created',
   create_sphere_no_contacts: 'Add contacts to build a sphere',
+
+  contacts_invite_title: 'Invitation',
+  contacts_invite_hint: 'Paste the invitation code from QR',
+  contacts_invite_action: 'Accept invitation',
+  contacts_invite_accepted: 'Invitation accepted',
+  contacts_invite_duplicate: 'This invitation was already processed',
+  contacts_invite_bad: 'Invalid invitation code',
 };

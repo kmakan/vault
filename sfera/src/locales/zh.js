@@ -75,4 +75,11 @@ export default {
   create_sphere_action: '创建圈子',
   create_sphere_created: '圈子已创建',
   create_sphere_no_contacts: '添加联系人以创建圈子',
+
+  contacts_invite_title: '邀请',
+  contacts_invite_hint: '粘贴二维码中的邀请码',
+  contacts_invite_action: '接受邀请',
+  contacts_invite_accepted: '邀请已接受',
+  contacts_invite_duplicate: '该邀请已处理过',
+  contacts_invite_bad: '邀请码无效',
 };

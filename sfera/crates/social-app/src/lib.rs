@@ -156,6 +156,12 @@ impl SferaApp {
         &self.contacts
     }
 
+    /// Изменение книги контактов — только через корень: правило состояния
+    /// заявки живёт в social-contacts, корень не принимает решений.
+    pub fn contacts_mut(&mut self) -> &mut ContactBook {
+        &mut self.contacts
+    }
+
     pub fn outbox(&self) -> &Outbox {
         &self.outbox
     }
