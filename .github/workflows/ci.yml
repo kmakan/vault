@@ -139,21 +139,43 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: sfera/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: |
             vault-core
             sfera
+            sfera/src-tauri
       - name: Kernel tests
         working-directory: vault-core
         run: cargo test
       - name: Sfera tests
         working-directory: sfera
         run: cargo test --workspace
+      - name: Sfera frontend deps
+        working-directory: sfera
+        run: npm ci
       - name: Sfera contract gates
         working-directory: sfera
         run: npm run test:contract
+      - name: Sfera frontend build
+        working-directory: sfera
+        run: npm run build
+      # Оболочка Tauri — отдельный crate (исключён из workspace ядра), поэтому
+      # её сборка проверяется отдельно. Без этого шага сломанный src-tauri
+      # живёт до первой локальной сборки.
+      - name: Install Linux dependencies for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev             patchelf libgtk-3-dev
+      - name: Sfera shell check
+        working-directory: sfera/src-tauri
+        run: cargo check
       - name: Messenger depends on kernel
         working-directory: vault-desktop/src-tauri
         run: cargo check --lib
