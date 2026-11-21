@@ -1,0 +1,19 @@
+[package]
+name = "vault-link-export"
+version = "0.1.0"
+edition = "2021"
+license = "Proprietary"
+publish = false
+description = "Vault: экспорт подписанного bundle для связывания Sfera (ADR-009 §4)"
+
+[dev-dependencies]
+tempfile = "3"
+
+[dependencies]
+vault-core = { path = "../vault-core" }
+social-model = { path = "../sfera/crates/social-model" }
+social-device = { path = "../sfera/crates/social-device" }
+social-link = { path = "../sfera/crates/social-link" }
+anyhow = "1"
+dirs = "5"
+serde = { version = "1", features = ["derive"] }

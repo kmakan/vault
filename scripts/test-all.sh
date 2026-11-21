@@ -16,6 +16,7 @@
 #   core    vault-core                     cargo test            (lib, 26)
 #   client  vault-client                   cargo test            (lib+bin+tests/*)
 #   desktop vault-desktop/src-tauri        cargo test --lib      (151)
+#   link-export vault-link-export          cargo test            (bundle связывания)
 #   (android-крейт жил в удалённой копии vault-android/ — каталог удалён
 #    21.10.2026, сборка Android — только из vault-desktop; его тесты теперь
 #    в крейте desktop)
@@ -32,7 +33,7 @@ LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vault-test-all.XXXXXX")"
 
 WANT=("$@")
 if [ ${#WANT[@]} -eq 0 ]; then
-    WANT=(core client desktop)
+    WANT=(core client desktop link-export)
 fi
 
 fail=0
@@ -71,6 +72,7 @@ run_suite() {
 run_suite core    vault-core              test
 run_suite client  vault-client            test
 run_suite desktop vault-desktop/src-tauri test --lib
+run_suite link-export vault-link-export test
 
 printf '\n\033[1m=== Итог\033[0m\n'
 for line in "${SUMMARY[@]}"; do
