@@ -66,4 +66,8 @@ export default {
   media_audio: 'Аудио',
   media_video: 'Видео',
   media_document: 'Файл',
+
+  profile_encryption_key: 'Ключ шифрования',
+  profile_link_uri: 'Код связывания из мессенджера',
+  profile_link_action: 'Связать',
 };

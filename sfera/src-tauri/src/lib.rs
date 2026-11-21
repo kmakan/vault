@@ -21,6 +21,8 @@ use storage_local::LocalStore;
 use tauri::Manager;
 
 const IDENTITY_FILE: &str = "identity.json";
+/// Принятый bundle связывания (ADR-009 §4). Только публичные данные.
+const LINK_FILE: &str = "sfera_link.json";
 /// MVP-квота outbox: 60 секунд, 10 МБ, 60 элементов. Серверные лимиты
 /// придут отдельным контрактом, клиент их себе не поднимает.
 const QUOTA_WINDOW_SECS: u64 = 60;
@@ -33,22 +35,56 @@ struct IdentityFile {
     seed: String,
 }
 
-/// Состояние связывания с аккаунтом. Пока протокол §8 не подключён,
-/// единственное честное значение — `linked: false`.
+/// Состояние связывания с аккаунтом (ADR-006 §8, ADR-009 §4).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LinkStatus {
     pub linked: bool,
+    /// Канонический ID аккаунта — отпечаток Ed25519-ключа подписи.
     pub account_fp: Option<String>,
+    /// X25519-отпечаток остаётся в деталях как ключ шифрования.
+    pub encryption_fp: Option<String>,
+    pub seq: Option<u64>,
+}
+
+fn link_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    Ok(app.path().app_data_dir()?.join(LINK_FILE))
 }
 
 #[tauri::command]
-fn social_link_status() -> LinkStatus {
-    LinkStatus { linked: false, account_fp: None }
+fn social_link_status<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<LinkStatus, String> {
+    let path = link_path(&app).map_err(|e| format!("link path: {e}"))?;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(LinkStatus { linked: false, account_fp: None, encryption_fp: None, seq: None });
+    };
+    let bundle: social_link::LinkBundle =
+        serde_json::from_str(&text).map_err(|e| format!("link file: {e}"))?;
+    // Проверяем цепочку при каждом чтении: подменённый файл не станет «связанным».
+    bundle.verify(0).map_err(|e| format!("link verify: {e:?}"))?;
+    Ok(LinkStatus {
+        linked: true,
+        account_fp: Some(bundle.payload.account.fp.as_str().to_string()),
+        encryption_fp: Some(bundle.payload.device_cert.device_pub_key().to_string()),
+        seq: Some(bundle.payload.seq),
+    })
+}
+
+/// Принять QR/bundle из мессенджера. Сохраняем только после проверки цепочки.
+#[tauri::command]
+fn social_link_accept<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    uri: String,
+) -> Result<LinkStatus, String> {
+    let bundle = social_link::from_uri(&uri).map_err(|e| format!("link uri: {e:?}"))?;
+    bundle.verify(0).map_err(|e| format!("link verify: {e:?}"))?;
+    let path = link_path(&app).map_err(|e| format!("link path: {e}"))?;
+    std::fs::write(&path, serde_json::to_vec(&bundle).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("link write: {e}"))?;
+    social_link_status(app)
 }
 
 fn shell_commands_handler<R: tauri::Runtime>(
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![social_link_status]
+    tauri::generate_handler![social_link_status, social_link_accept]
 }
 
 fn invalid(msg: impl Into<String>) -> std::io::Error {

@@ -65,4 +65,8 @@ export default {
   media_audio: '音频',
   media_video: '视频',
   media_document: '文件',
+
+  profile_encryption_key: '加密密钥',
+  profile_link_uri: '来自通讯应用的关联码',
+  profile_link_action: '关联',
 };

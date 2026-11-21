@@ -1,13 +1,21 @@
 <script setup>
 // Профиль: идентичность из Rust, переключение языка и темы. Платные
 // возможности и организации появятся здесь же, отдельной вкладки не будет.
+import { ref } from 'vue';
 import { availableLocales } from '../locales/index.js';
 import { THEMES } from '../themes/index.js';
 
-defineProps({ state: Object, api: Object });
+const props = defineProps({ state: Object, api: Object });
 
 const locales = availableLocales();
 const themes = Object.keys(THEMES);
+const linkUri = ref('');
+
+async function acceptLink() {
+  if (!linkUri.value.trim()) return;
+  await props.api.acceptLink(linkUri.value.trim());
+  linkUri.value = '';
+}
 </script>
 
 <template>
@@ -22,12 +30,17 @@ const themes = Object.keys(THEMES);
       <div class="row">
         <span class="muted">{{ api.t('profile_account') }}</span>
         <span :class="{ muted: !state.link?.linked }">
-          {{ state.link?.linked ? state.link.account_fp : api.t('profile_not_linked') }}
+          {{ state.link?.linked ? state.link.account_fp : (state.identity?.fp ?? '—') }}
         </span>
       </div>
+      <div v-if="state.link?.linked" class="row detail">
+        <span class="muted">{{ api.t('profile_encryption_key') }}</span>
+        <span class="fp">{{ state.link.encryption_fp }}</span>
+      </div>
       <div class="row">
-        <span class="muted">{{ api.t('profile_fingerprint') }}</span>
-        <span class="fp">{{ state.identity?.fp ?? '—' }}</span>
+        <input v-model="linkUri" class="link-input" :placeholder="api.t('profile_link_uri')"
+               autocomplete="off" spellcheck="false" />
+        <button class="btn" @click="acceptLink">{{ api.t('profile_link_action') }}</button>
       </div>
       <p class="muted hint">{{ api.t('profile_link_hint') }}</p>
       <div class="row">
@@ -70,4 +83,7 @@ const themes = Object.keys(THEMES);
   color: var(--text-primary);
   font: inherit;
 }
+
+.link-input{flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid var(--border-hover,#30363d);background:var(--bg-primary,#0d1117);color:var(--text-primary,#e6edf3);font-size:12px;font-family:monospace}
+.row.detail{padding-left:12px;border-left:2px solid var(--border-subtle,#30363d)}
 </style>

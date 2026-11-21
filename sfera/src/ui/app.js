@@ -91,6 +91,12 @@ export function createAppState({
     loadAudiences: () => load('audiences', () => bridge.audiences()),
     loadCaps: () => load('caps', () => bridge.storeCaps()),
 
+    // QR из мессенджера: проверка цепочки — в Rust, UI только передаёт URI.
+    async acceptLink(uri) {
+      state.link = await load('link', () => bridge.linkAccept(uri));
+      return state.link;
+    },
+
     // Тело, адресат и медиа приходят из формы; форма аудитории — из Rust.
     // UI не собирает `PostAudience` и не подставляет версию протокола.
     async publish({ body, audience, media = [] }) {

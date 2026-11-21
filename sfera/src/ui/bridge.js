@@ -8,6 +8,7 @@ import { companionLabelKey } from './shell.js';
 export const COMMANDS = Object.freeze({
   apiVersion: 'social_api_version',
   linkStatus: 'social_link_status',
+  linkAccept: 'social_link_accept',
   identity: 'social_identity',
   feed: 'social_feed',
   contacts: 'social_contacts',
@@ -32,6 +33,10 @@ export function createBridge(invoke) {
 
     linkStatus() {
       return invoke(COMMANDS.linkStatus);
+    },
+
+    linkAccept(uri) {
+      return invoke(COMMANDS.linkAccept, { uri });
     },
 
     identity() {

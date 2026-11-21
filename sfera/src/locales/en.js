@@ -65,4 +65,8 @@ export default {
   media_audio: 'Audio',
   media_video: 'Video',
   media_document: 'File',
+
+  profile_encryption_key: 'Encryption key',
+  profile_link_uri: 'Link code from messenger',
+  profile_link_action: 'Link',
 };
