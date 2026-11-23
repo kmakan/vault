@@ -190,6 +190,16 @@ pub struct AudienceDto {
     pub members: Vec<social_app::Fingerprint>,
 }
 
+/// Состав сферы для UI: id, текущая эпоха и отпечатки участников.
+/// Ключи эпох остаются в Rust и не сериализуются.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AudienceMembersDto {
+    pub v: u8,
+    pub id: String,
+    pub epoch: u64,
+    pub members: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ChangedDto { pub v: u8, pub changed: bool }
 
@@ -357,6 +367,25 @@ fn social_set_audience_members(state: tauri::State<'_, SferaState>, req: Audienc
             v: API_VERSION,
             changed: app.set_audience_members(&req.id, req.members)?
                 == social_app::MembershipChange::Changed,
+        })
+    })
+}
+
+/// Состав сферы для экрана «Контакты»: без ключей, только отпечатки и эпоха.
+#[tauri::command]
+fn social_audience_members(
+    state: tauri::State<'_, SferaState>,
+    id: String,
+) -> Result<AudienceMembersDto, CommandError> {
+    state.call(|app| {
+        let keys = app
+            .audience(&id)
+            .ok_or_else(|| CommandError::input("unknown audience"))?;
+        Ok(AudienceMembersDto {
+            v: API_VERSION,
+            id: keys.audience_id().to_string(),
+            epoch: keys.epoch(),
+            members: keys.members().map(str::to_string).collect(),
         })
     })
 }
@@ -538,6 +567,7 @@ pub fn handles(command: &str) -> bool {
             | "social_publish_with_media"
             | "social_create_audience"
             | "social_set_audience_members"
+            | "social_audience_members"
             | "social_sync_outbox"
             | "social_store_caps"
     )
@@ -573,6 +603,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_publish_with_media,
         social_create_audience,
         social_set_audience_members,
+        social_audience_members,
         social_sync_outbox,
         social_store_caps,
     ]
@@ -650,6 +681,7 @@ mod tests {
     fn audience_options_are_post_ready() {
         let st = state();
         let fp = social_app::Fingerprint::from_str("02:00:00:00:00:00:00:00:****");
+        let fp_str = fp.as_str().to_string();
         st.call(|app| { app.create_audience("sphere_close", vec![fp]); Ok(()) }).unwrap();
         let options: Vec<PostAudience> = st
             .call(|app| {
@@ -669,6 +701,19 @@ mod tests {
         assert_eq!(options[0].id, "sphere_close");
         assert_eq!(options[0].epoch, 1);
         assert_eq!(options[0].spec, social_app::Audience::Sphere { id: "sphere_close".into() });
+
+        // Состав для UI: отпечатки и эпоха, без ключей.
+        let members: Vec<String> = st
+            .call(|app| {
+                Ok(app
+                    .audience("sphere_close")
+                    .expect("audience")
+                    .members()
+                    .map(str::to_string)
+                    .collect())
+            })
+            .unwrap();
+        assert_eq!(members, vec![fp_str]);
     }
 
     #[test]

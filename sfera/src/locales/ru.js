@@ -23,6 +23,13 @@ export default {
   contacts_block: 'Заблокировать',
   contacts_unblock: 'Разблокировать',
   contacts_empty: 'Контактов пока нет',
+  contacts_spheres: 'Сферы',
+  contacts_spheres_empty: 'Сфер пока нет — создайте в «Создать»',
+  contacts_sphere_edit: 'Изменить состав',
+  contacts_sphere_epoch: 'эпоха {n}',
+  contacts_sphere_no_members: 'В сфере пока никого',
+  contacts_sphere_saved: 'Состав сохранён',
+  contacts_sphere_save_fail: 'Не удалось сохранить состав',
 
   create_placeholder: 'Напишите пост…',
   create_no_audience: 'Сначала создайте сферу в контактах',

@@ -29,6 +29,8 @@ export function createAppState({
     feed: [],
     contacts: [],
     audiences: [],
+    // Состав сфер по id: отпечатки и эпоха. Ключи остаются в Rust.
+    audienceMembers: {},
     caps: null,
     // Результаты загрузки: ключ файла живёт здесь только до публикации,
     // затем уходит в E2E-манифест и очищается.
@@ -78,9 +80,22 @@ export function createAppState({
     }
   }
 
+  // Состав сферы: отпечатки и эпоха приходят из Rust, ключи не покидают ядро.
+  async function fetchAudienceMembers(id) {
+    try {
+      const dto = await bridge.audienceMembers(id);
+      state.audienceMembers[id] = dto;
+      return dto;
+    } catch (e) {
+      state.error = String(e?.message ?? e);
+      return null;
+    }
+  }
+
   return {
     state,
     loadThumbs,
+    loadAudienceMembers: fetchAudienceMembers,
 
     t(key, params) {
       return translate(state.locale, key, params);
@@ -125,6 +140,7 @@ export function createAppState({
         load('library', () => bridge.libraryItems()),
       ]);
       await loadThumbs();
+      await Promise.all((state.audiences ?? []).map((a) => fetchAudienceMembers(a.id)));
       return state;
     },
 
@@ -163,7 +179,21 @@ export function createAppState({
         members,
       });
       state.audiences = await bridge.audiences();
+      await fetchAudienceMembers(id.trim());
       return state.audiences;
+    },
+
+    // Состав меняется целиком: ротацию эпохи и ключа решает social-audience.
+    async setAudienceMembers({ id, members = [] }) {
+      if (!id) throw new Error('audience id required');
+      const result = await bridge.setAudienceMembers({
+        v: state.apiVersion,
+        id,
+        members,
+      });
+      state.audiences = await bridge.audiences();
+      await fetchAudienceMembers(id);
+      return result;
     },
     loadCaps: () => load('caps', () => bridge.storeCaps()),
 

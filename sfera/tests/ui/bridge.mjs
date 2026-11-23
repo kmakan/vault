@@ -28,6 +28,10 @@ const bridge = createBridge(async (name, args) => {
   if (name === COMMANDS.libraryThumb) {
     return { v: 1, blob_id: 'aa', mime: 'image/jpeg', kind: 'Image', size: 3, data_base64: 'AAA' };
   }
+  if (name === COMMANDS.audienceMembers) {
+    return { v: 1, id: 'sphere_close', epoch: 2, members: ['aa:bb'] };
+  }
+  if (name === COMMANDS.setAudienceMembers) return { v: 1, changed: true };
   return null;
 });
 
@@ -57,13 +61,19 @@ const content = await bridge.libraryOpen('aa');
 check(content.kind === 'Image' && content.data_base64 === 'AAA', 'library content from Rust');
 const thumb = await bridge.libraryThumb('aa');
 check(thumb.mime === 'image/jpeg', 'thumbnail from Rust');
+const members = await bridge.audienceMembers('sphere_close');
+check(members.epoch === 2 && members.members.length === 1, 'audience members from Rust');
+const changed = await bridge.setAudienceMembers({ v: 1, id: 'sphere_close', members: ['aa:bb'] });
+check(changed.changed === true, 'membership change from Rust');
 
-check(calls.length === 16, `expected 16 invoke calls, got ${calls.length}`);
+check(calls.length === 18, `expected 18 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
 check(calls[14].args.blobId === 'aa', 'library open arg');
 check(calls[15].args.blobId === 'aa', 'library thumb arg');
+check(calls[16].args.id === 'sphere_close', 'audience members arg');
+check(calls[17].args.req.id === 'sphere_close', 'set members arg');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

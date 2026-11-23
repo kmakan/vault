@@ -22,6 +22,13 @@ export default {
   contacts_block: 'Block',
   contacts_unblock: 'Unblock',
   contacts_empty: 'No contacts yet',
+  contacts_spheres: 'Spheres',
+  contacts_spheres_empty: 'No spheres yet — create one in Create',
+  contacts_sphere_edit: 'Edit members',
+  contacts_sphere_epoch: 'epoch {n}',
+  contacts_sphere_no_members: 'No members yet',
+  contacts_sphere_saved: 'Members saved',
+  contacts_sphere_save_fail: 'Could not save members',
 
   create_placeholder: 'Write a post…',
   create_no_audience: 'Create a sphere in contacts first',

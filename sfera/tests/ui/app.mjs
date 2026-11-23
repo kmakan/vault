@@ -8,6 +8,7 @@ function check(cond, msg) { if (!cond) fail(msg); }
 const audience = { id: 'sphere_close', epoch: 1, spec: { Sphere: { id: 'sphere_close' } } };
 const calls = [];
 let failFeed = false;
+let sphereMembers = ['aa:bb'];
 
 const bridge = {
   apiVersion: async () => 7,
@@ -19,6 +20,11 @@ const bridge = {
   },
   contacts: async () => [{ fp: 'aa:bb', role: 'friend' }],
   audiences: async () => [audience],
+  audienceMembers: async (id) => ({ v: 7, id, epoch: 1, members: [...sphereMembers] }),
+  setAudienceMembers: async (req) => {
+    sphereMembers = [...req.members];
+    return { v: 7, changed: true };
+  },
   storeCaps: async () => ({ kind: 'Local', range: true }),
   libraryItems: async () => [],
   libraryForget: async () => true,
@@ -47,6 +53,7 @@ check(s.identity.fp === 'aa:bb', 'identity loaded');
 check(s.feed.length === 1, 'feed loaded');
 check(s.contacts.length === 1, 'contacts loaded');
 check(s.audiences[0].id === 'sphere_close', 'audiences loaded');
+check(s.audienceMembers.sphere_close.members.length === 1, 'sphere members loaded on init');
 check(s.caps.kind === 'Local', 'caps loaded');
 
 check(api.openTab('profile') && s.tab === 'profile', 'tab switch');
@@ -80,6 +87,10 @@ s.feed = [{ id: 'p1', post: { post: { media: [{ blob_id: 'b2', thumb_blob_id: 't
 await api.loadThumbs();
 check(s.thumbs.b1 === 'data:image/jpeg;base64,AAA', 'library thumbnail loaded');
 check(s.thumbs.b2 === 'data:image/jpeg;base64,AAA', 'feed media thumbnail loaded');
+
+const change = await api.setAudienceMembers({ id: 'sphere_close', members: ['aa:bb', 'cc:dd'] });
+check(change.changed === true, 'membership change passed through');
+check(s.audienceMembers.sphere_close.members.length === 2, 'members reloaded after save');
 
 let threw = false;
 try { await api.publish({ body: '   ', audience }); } catch { threw = true; }

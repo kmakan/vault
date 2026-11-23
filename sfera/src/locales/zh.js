@@ -22,6 +22,13 @@ export default {
   contacts_block: '屏蔽',
   contacts_unblock: '解除屏蔽',
   contacts_empty: '暂无联系人',
+  contacts_spheres: '圈子',
+  contacts_spheres_empty: '暂无圈子 — 在“发布”中创建',
+  contacts_sphere_edit: '修改成员',
+  contacts_sphere_epoch: '第 {n} 代',
+  contacts_sphere_no_members: '圈子里还没有人',
+  contacts_sphere_saved: '成员已保存',
+  contacts_sphere_save_fail: '无法保存成员',
 
   create_placeholder: '写点什么…',
   create_no_audience: '请先在联系人中创建圈子',
