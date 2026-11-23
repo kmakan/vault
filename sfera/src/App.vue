@@ -7,6 +7,7 @@ import ContactsView from './views/ContactsView.vue';
 import CreateView from './views/CreateView.vue';
 import StorageView from './views/StorageView.vue';
 import ProfileView from './views/ProfileView.vue';
+import MediaPreview from './components/MediaPreview.vue';
 
 const props = defineProps({
   state: { type: Object, required: true },
@@ -25,6 +26,10 @@ const view = computed(() => VIEWS[props.state.tab] ?? FeedView);
 
 // Десктоп: Ctrl/Cmd+1…5 переключают вкладки. Это навигация, не правило.
 function onKey(event) {
+  if (event.key === 'Escape' && props.state.preview) {
+    props.api.closePreview();
+    return;
+  }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
   const index = Number(event.key) - 1;
   const tab = props.api.tabs()[index];
@@ -54,5 +59,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKey));
     <main class="content">
       <component :is="view" :state="state" :api="api" />
     </main>
+    <MediaPreview :state="state" :api="api" />
   </div>
 </template>

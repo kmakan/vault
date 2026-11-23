@@ -102,6 +102,11 @@ export function createAppState({
     loadFeed: () => load('feed', () => bridge.feed()),
     loadContacts: () => load('contacts', () => bridge.contacts()),
 
+    // Тип медиа решает Rust: UI только показывает готовую подпись.
+    mediaKind(mime) {
+      return bridge.mediaKind(mime);
+    },
+
     // Заявка приходит готовой (QR/файл): ts и nonce уже в ней. UI не
     // изобретает идентичность и не обходит дедуп в social-contacts.
     async acceptInvite(request) {

@@ -61,18 +61,7 @@ function quota(bytes) {
       <p v-if="uploadStatus" class="muted">{{ uploadStatus }}</p>
     </div>
 
-    <div v-if="state.preview" class="card preview">
-      <div class="preview-head">
-        <h2>{{ api.t('storage_preview_title') }}</h2>
-        <button type="button" class="preview-close" :aria-label="api.t('storage_preview_close')"
-                @click="api.closePreview()">×</button>
-      </div>
-      <img v-if="state.previewUrl" class="preview-img" :src="state.previewUrl"
-           :alt="api.t('storage_preview_title')" />
-      <p v-else class="muted">{{ api.t('storage_preview_no_image') }}</p>
-      <p class="muted">{{ state.preview.mime }} · {{ state.preview.size }} B</p>
-    </div>
-    <p v-if="previewStatus" class="error">{{ previewStatus }}</p>
+    <div v-if="previewStatus" class="error">{{ previewStatus }}</div>
 
     <div class="card gallery">
       <h2>{{ api.t('storage_gallery') }}</h2>
@@ -143,10 +132,4 @@ function quota(bytes) {
 .tile:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 .tile-kind { color: var(--accent-secondary); font-weight: 600; }
 .tile-remove { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 16px; }
-
-.preview { margin-bottom: 12px; }
-.preview-head { display: flex; justify-content: space-between; align-items: center; }
-.preview-head h2 { font-size: 15px; margin: 0 0 8px; }
-.preview-close { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 20px; }
-.preview-img { display: block; max-width: 100%; max-height: 320px; margin: 8px auto; border-radius: var(--radius-md); object-fit: contain; }
 </style>

@@ -25,6 +25,7 @@ const bridge = {
   libraryOpen: async (blobId) => ({
     v: 7, blob_id: blobId, mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA',
   }),
+  mediaKind: async (mime) => (mime.startsWith('image/') ? 'Image' : 'Document'),
   publishPost: async (req) => { calls.push(req); return { v: 7, id: 'p2', ts: req.ts }; },
   companionAction: async (handled) => ({ install: !handled, target: 'vault://open' }),
 };
@@ -54,6 +55,7 @@ check(api.setTheme('light') && s.theme === 'light', 'theme switch');
 check(!api.setTheme('neon') && s.theme === 'light', 'unknown theme rejected');
 check(api.themeVars()['--bg-primary'] === '#ffffff', 'theme vars from theme registry');
 check(api.t('nav_feed') === 'Feed', 'translate uses active locale');
+check((await api.mediaKind('image/png')) === 'Image', 'media kind comes from Rust');
 
 const content = await api.openFile('blob-1');
 check(content.kind === 'Image', 'opened file comes from Rust');
