@@ -59,6 +59,13 @@ export default {
   profile_devices: 'Devices',
   profile_privacy: 'Privacy',
   profile_export: 'Export',
+  profile_edit: 'My profile',
+  profile_saved: 'Profile saved',
+  profile_save_fail: 'Could not save profile',
+  profile_add_link: 'Add link',
+  profile_link_label: 'Label',
+  profile_link_url: 'https://…',
+  profile_remove_link: 'Remove link',
 
   settings_language: 'Language',
   settings_theme: 'Theme',

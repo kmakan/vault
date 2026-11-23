@@ -32,6 +32,7 @@ const bridge = createBridge(async (name, args) => {
     return { v: 1, id: 'sphere_close', epoch: 2, members: ['aa:bb'] };
   }
   if (name === COMMANDS.setAudienceMembers) return { v: 1, changed: true };
+  if (name === COMMANDS.setMyProfile) return { v: 1, outcome: 'inserted' };
   return null;
 });
 
@@ -65,8 +66,12 @@ const members = await bridge.audienceMembers('sphere_close');
 check(members.epoch === 2 && members.members.length === 1, 'audience members from Rust');
 const changed = await bridge.setAudienceMembers({ v: 1, id: 'sphere_close', members: ['aa:bb'] });
 check(changed.changed === true, 'membership change from Rust');
+const saved = await bridge.setMyProfile({
+  v: 1, ts: 1, display_name: 'Ann', bio: '', avatar: null, links: [], now: 1,
+});
+check(saved.outcome === 'inserted', 'profile save outcome');
 
-check(calls.length === 18, `expected 18 invoke calls, got ${calls.length}`);
+check(calls.length === 19, `expected 19 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
@@ -74,6 +79,7 @@ check(calls[14].args.blobId === 'aa', 'library open arg');
 check(calls[15].args.blobId === 'aa', 'library thumb arg');
 check(calls[16].args.id === 'sphere_close', 'audience members arg');
 check(calls[17].args.req.id === 'sphere_close', 'set members arg');
+check(calls[18].args.req.display_name === 'Ann', 'profile request passed unchanged');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

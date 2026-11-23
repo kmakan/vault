@@ -9,6 +9,7 @@ const audience = { id: 'sphere_close', epoch: 1, spec: { Sphere: { id: 'sphere_c
 const calls = [];
 let failFeed = false;
 let sphereMembers = ['aa:bb'];
+let myProfile = { profile: { display_name: 'Ann', bio: '', links: [] }, sig: 'x' };
 
 const bridge = {
   apiVersion: async () => 7,
@@ -26,6 +27,14 @@ const bridge = {
     return { v: 7, changed: true };
   },
   storeCaps: async () => ({ kind: 'Local', range: true }),
+  profile: async () => myProfile,
+  setMyProfile: async (req) => {
+    myProfile = {
+      profile: { display_name: req.display_name, bio: req.bio, links: req.links },
+      sig: 'x',
+    };
+    return { v: 7, outcome: 'inserted' };
+  },
   libraryItems: async () => [],
   libraryForget: async () => true,
   libraryOpen: async (blobId) => ({
@@ -54,6 +63,7 @@ check(s.feed.length === 1, 'feed loaded');
 check(s.contacts.length === 1, 'contacts loaded');
 check(s.audiences[0].id === 'sphere_close', 'audiences loaded');
 check(s.audienceMembers.sphere_close.members.length === 1, 'sphere members loaded on init');
+check(s.myProfile.profile.display_name === 'Ann', 'own profile loaded');
 check(s.caps.kind === 'Local', 'caps loaded');
 
 check(api.openTab('profile') && s.tab === 'profile', 'tab switch');
@@ -91,6 +101,15 @@ check(s.thumbs.b2 === 'data:image/jpeg;base64,AAA', 'feed media thumbnail loaded
 const change = await api.setAudienceMembers({ id: 'sphere_close', members: ['aa:bb', 'cc:dd'] });
 check(change.changed === true, 'membership change passed through');
 check(s.audienceMembers.sphere_close.members.length === 2, 'members reloaded after save');
+
+const saved = await api.saveProfile({
+  displayName: 'Ann2', bio: 'hi', links: [{ label: 'site', url: 'https://x' }],
+});
+check(saved.outcome === 'inserted', 'profile save outcome');
+check(s.myProfile.profile.display_name === 'Ann2', 'profile reloaded after save');
+let nameThrew = false;
+try { await api.saveProfile({ displayName: '   ' }); } catch { nameThrew = true; }
+check(nameThrew, 'empty display name rejected before Rust');
 
 let threw = false;
 try { await api.publish({ body: '   ', audience }); } catch { threw = true; }

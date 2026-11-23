@@ -60,6 +60,13 @@ export default {
   profile_devices: 'Устройства',
   profile_privacy: 'Приватность',
   profile_export: 'Экспорт',
+  profile_edit: 'Мой профиль',
+  profile_saved: 'Профиль сохранён',
+  profile_save_fail: 'Не удалось сохранить профиль',
+  profile_add_link: 'Добавить ссылку',
+  profile_link_label: 'Подпись',
+  profile_link_url: 'https://…',
+  profile_remove_link: 'Удалить ссылку',
 
   settings_language: 'Язык',
   settings_theme: 'Тема оформления',

@@ -59,6 +59,13 @@ export default {
   profile_devices: '设备',
   profile_privacy: '隐私',
   profile_export: '导出',
+  profile_edit: '我的资料',
+  profile_saved: '资料已保存',
+  profile_save_fail: '无法保存资料',
+  profile_add_link: '添加链接',
+  profile_link_label: '标签',
+  profile_link_url: 'https://…',
+  profile_remove_link: '删除链接',
 
   settings_language: '语言',
   settings_theme: '主题',

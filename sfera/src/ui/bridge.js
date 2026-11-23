@@ -19,6 +19,7 @@ export const COMMANDS = Object.freeze({
   acceptInvite: 'social_accept_contact_request',
   publishPost: 'social_publish_post',
   profile: 'social_profile',
+  setMyProfile: 'social_set_my_profile',
   storeCaps: 'social_store_caps',
   companion: 'social_companion_action',
   plans: 'social_plans_from_server',
@@ -88,6 +89,11 @@ export function createBridge(invoke) {
 
     profile(fp) {
       return invoke(COMMANDS.profile, { fp });
+    },
+
+    // Форму профиля собирает UI, подпись и «новее побеждает» — в Rust.
+    setMyProfile(req) {
+      return invoke(COMMANDS.setMyProfile, { req });
     },
 
     storeCaps() {

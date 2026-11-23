@@ -26,6 +26,9 @@ export function createAppState({
     apiVersion: null,
     link: null,
     identity: null,
+    // Свой профиль (подписанный конверт). Форма редактирует его, подпись
+    // и порядок «новее побеждает» остаются в Rust.
+    myProfile: null,
     feed: [],
     contacts: [],
     audiences: [],
@@ -140,6 +143,9 @@ export function createAppState({
         load('library', () => bridge.libraryItems()),
       ]);
       await loadThumbs();
+      if (state.identity?.fp) {
+        await load('myProfile', () => bridge.profile(state.identity.fp));
+      }
       await Promise.all((state.audiences ?? []).map((a) => fetchAudienceMembers(a.id)));
       return state;
     },
@@ -154,6 +160,31 @@ export function createAppState({
     // Тип медиа решает Rust: UI только показывает готовую подпись.
     mediaKind(mime) {
       return bridge.mediaKind(mime);
+    },
+
+    loadProfile: async () => {
+      if (!state.identity?.fp) return null;
+      return load('myProfile', () => bridge.profile(state.identity.fp));
+    },
+
+    // Имя, био и ссылки приходят из формы; подпись и валидация — в Rust.
+    async saveProfile({ displayName, bio = '', links = [] }) {
+      if (!displayName || !displayName.trim()) throw new Error('display name required');
+      if (state.apiVersion == null) throw new Error('bridge not initialized');
+      const now = clock();
+      const result = await bridge.setMyProfile({
+        v: state.apiVersion,
+        ts: now,
+        display_name: displayName.trim(),
+        bio,
+        avatar: null,
+        links,
+        now,
+      });
+      if (state.identity?.fp) {
+        state.myProfile = await bridge.profile(state.identity.fp);
+      }
+      return result;
     },
 
     // Заявка приходит готовой (QR/файл): ts и nonce уже в ней. UI не
