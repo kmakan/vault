@@ -112,6 +112,6 @@ export default {
   storage_forget: '从列表中移除',
   storage_preview_title: '文件预览',
   storage_preview_close: '关闭预览',
-  storage_preview_no_image: '仅图片支持预览',
+  storage_preview_no_inline: '内置预览支持图片、音频和视频',
   storage_preview_fail: '无法打开文件',
 };

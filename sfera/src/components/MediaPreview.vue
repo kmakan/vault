@@ -12,9 +12,13 @@ defineProps({ state: Object, api: Object });
         <button type="button" class="close" :aria-label="api.t('storage_preview_close')"
                 @click="api.closePreview()">×</button>
       </div>
-      <img v-if="state.previewUrl" class="image" :src="state.previewUrl"
-           :alt="api.t('storage_preview_title')" />
-      <p v-else class="muted">{{ api.t('storage_preview_no_image') }}</p>
+      <img v-if="state.previewUrl && state.preview.kind === 'Image'" class="image"
+           :src="state.previewUrl" :alt="api.t('storage_preview_title')" />
+      <video v-else-if="state.previewUrl && state.preview.kind === 'Video'" class="media"
+             :src="state.previewUrl" controls playsinline></video>
+      <audio v-else-if="state.previewUrl && state.preview.kind === 'Audio'" class="audio"
+             :src="state.previewUrl" controls></audio>
+      <p v-else class="muted">{{ api.t('storage_preview_no_inline') }}</p>
       <p class="muted meta">{{ state.preview.mime }} · {{ state.preview.size }} B</p>
     </div>
   </div>
@@ -66,6 +70,19 @@ defineProps({ state: Object, api: Object });
   margin: 12px auto 0;
   border-radius: var(--radius-md);
   object-fit: contain;
+}
+.media {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  margin: 12px auto 0;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+.audio {
+  display: block;
+  width: 100%;
+  margin: 16px auto 8px;
 }
 .meta {
   margin: 10px 0 0;

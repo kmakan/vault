@@ -100,6 +100,19 @@ check(doc.kind === 'Document' && s.previewUrl === null, 'documents have no inlin
 await api.forgetFile('blob-2');
 check(s.preview === null && s.previewUrl === null, 'forgetting open file closes preview');
 
+bridge.libraryOpen = async (blobId) => ({
+  v: 7, blob_id: blobId, mime: 'video/mp4', kind: 'Video', size: 9, data_base64: 'AAA',
+});
+await api.openFile('blob-3');
+check(s.previewUrl === 'data:video/mp4;base64,AAA', 'video plays inline');
+api.closePreview();
+bridge.libraryOpen = async (blobId) => ({
+  v: 7, blob_id: blobId, mime: 'audio/ogg', kind: 'Audio', size: 9, data_base64: 'AAA',
+});
+await api.openFile('blob-4');
+check(s.previewUrl === 'data:audio/ogg;base64,AAA', 'audio plays inline');
+api.closePreview();
+
 s.library = [{ blob_id: 'b1', thumb_blob_id: 't1' }];
 s.feed = [{ id: 'p1', post: { post: { media: [{ blob_id: 'b2', thumb_blob_id: 't2' }] } } }];
 await api.loadThumbs();

@@ -113,6 +113,6 @@ export default {
   storage_forget: 'Убрать из списка',
   storage_preview_title: 'Просмотр файла',
   storage_preview_close: 'Закрыть просмотр',
-  storage_preview_no_image: 'Предпросмотр доступен только для изображений',
+  storage_preview_no_inline: 'Встроенный просмотр — для изображений, аудио и видео',
   storage_preview_fail: 'Не удалось открыть файл',
 };

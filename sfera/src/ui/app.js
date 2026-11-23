@@ -297,7 +297,10 @@ export function createAppState({
       const content = await bridge.libraryOpen(blobId);
       if (!content) throw new Error('file not found');
       state.preview = content;
-      state.previewUrl = content.kind === 'Image'
+      // Картинка, звук и видео играются прямо в окне; для документов
+      // честно говорим, что встроенного просмотра нет.
+      const inline = content.kind === 'Image' || content.kind === 'Audio' || content.kind === 'Video';
+      state.previewUrl = inline
         ? `data:${content.mime};base64,${content.data_base64}`
         : null;
       return content;
