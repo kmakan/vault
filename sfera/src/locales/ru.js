@@ -38,6 +38,8 @@ export default {
 
   create_placeholder: 'Напишите пост…',
   create_no_audience: 'Сначала создайте сферу в контактах',
+  create_choose_audience: 'Выберите сферу…',
+  create_audience_required: 'Без явного выбора сферы пост не будет опубликован',
   create_audience: 'Кто увидит',
   create_publish: 'Опубликовать',
   create_encrypting: 'Шифруем…',

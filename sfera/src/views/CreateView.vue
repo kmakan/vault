@@ -46,7 +46,11 @@ async function createSphere() {
   sphereBusy.value = true;
   sphereStatus.value = '';
   try {
-    await props.api.createAudience({ id: sphereName.value.trim(), members: sphereMembers.value });
+    const id = sphereName.value.trim();
+    await props.api.createAudience({ id, members: sphereMembers.value });
+    // Созданную сферу выбираем явно: публикация без выбора по-прежнему
+    // недоступна.
+    audienceId.value = id;
     sphereName.value = '';
     sphereMembers.value = [];
     sphereStatus.value = props.api.t('create_sphere_created');
@@ -57,8 +61,10 @@ async function createSphere() {
   }
 }
 
+// Аудитория — явный выбор человека. Молча взять первую сферу нельзя:
+// пост ушёл бы не тем людям (продукт §3.3, «дефолт — пусто»).
 const selected = computed(
-  () => props.state.audiences.find((a) => a.id === audienceId.value) ?? props.state.audiences[0] ?? null,
+  () => props.state.audiences.find((a) => a.id === audienceId.value) ?? null,
 );
 
 async function submit() {
@@ -108,9 +114,13 @@ async function submit() {
         <label class="field">
           <span class="muted">{{ api.t('create_audience') }}</span>
           <select v-if="state.audiences.length" v-model="audienceId" class="select">
+            <option value="" disabled>{{ api.t('create_choose_audience') }}</option>
             <option v-for="a in state.audiences" :key="a.id" :value="a.id">{{ a.id }}</option>
           </select>
           <span v-else class="muted">{{ api.t('create_no_audience') }}</span>
+          <span v-if="state.audiences.length && !selected" class="muted hint">
+            {{ api.t('create_audience_required') }}
+          </span>
         </label>
 
         <button class="primary" :disabled="busy || !selected || !body.trim()" @click="submit">
@@ -172,6 +182,7 @@ async function submit() {
   flex-direction: column;
   gap: 6px;
 }
+.hint { font-size: 12px; line-height: 1.4; }
 .select {
   min-width: 180px;
   padding: 8px 10px;

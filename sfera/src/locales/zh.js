@@ -37,6 +37,8 @@ export default {
 
   create_placeholder: '写点什么…',
   create_no_audience: '请先在联系人中创建圈子',
+  create_choose_audience: '请选择圈子…',
+  create_audience_required: '未选择圈子前不会发布帖子',
   create_audience: '谁可见',
   create_publish: '发布',
   create_encrypting: '正在加密…',

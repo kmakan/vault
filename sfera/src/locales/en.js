@@ -37,6 +37,8 @@ export default {
 
   create_placeholder: 'Write a post…',
   create_no_audience: 'Create a sphere in contacts first',
+  create_choose_audience: 'Choose a sphere…',
+  create_audience_required: 'No post is published until you choose a sphere',
   create_audience: 'Who can see',
   create_publish: 'Publish',
   create_encrypting: 'Encrypting…',
