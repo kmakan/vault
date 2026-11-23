@@ -86,7 +86,8 @@ function quota(bytes) {
           <span class="fp">{{ item.blob_id.slice(0, 12) }}…</span>
           <span class="muted">{{ item.size }} B</span>
           <button class="tile-remove" :aria-label="api.t('storage_forget')"
-                  @click.stop="api.forgetFile(item.blob_id)">×</button>
+                  @click.stop="api.forgetFile(item.blob_id)"
+                  @keydown.stop>×</button>
         </article>
       </div>
     </div>
