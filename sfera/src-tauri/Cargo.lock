@@ -3591,6 +3591,7 @@ dependencies = [
  "social-contacts",
  "social-library",
  "social-manifest",
+ "social-media-kind",
  "social-post",
  "social-upload",
  "storage-api",
@@ -3646,8 +3647,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "social-media",
  "social-media-kind",
  "social-upload",
+ "storage-api",
+ "tokio",
 ]
 
 [[package]]
