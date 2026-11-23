@@ -16,7 +16,7 @@ use social_media_kind::MediaKind;
 use social_manifest::{BlobEntry, BlobKey, Manifest, ManifestError};
 use storage_api::{BlobId, BlobStore, Locator, StorageError};
 
-pub mod thumb;
+mod thumb;
 
 /// Миниатюра, записанная отдельным блобом. Ключ не хранится: он выводится
 /// из ключа файла (`social_media::thumb_key`).
