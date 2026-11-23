@@ -11,6 +11,16 @@ pub enum ProfileView {
     Full,
 }
 
+impl ProfileView {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ProfileView::None => "none",
+            ProfileView::Brief => "brief",
+            ProfileView::Full => "full",
+        }
+    }
+}
+
 /// Что контакт может делать с доставленным постом.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionSet {
@@ -50,6 +60,22 @@ pub enum Role {
 }
 
 impl Role {
+    /// Каноническое wire-значение: то, что приходит в DTO и в UI. Единственный
+    /// источник строк — здесь, чтобы JS не дублировал протокол.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Role::Close => "close",
+            Role::Friend => "friend",
+            Role::Acquaintance => "acquaintance",
+            Role::Restricted => "restricted",
+        }
+    }
+
+    /// Все роли в порядке от самой привилегированной — для выбора в UI.
+    pub const fn all() -> [Role; 4] {
+        [Role::Close, Role::Friend, Role::Acquaintance, Role::Restricted]
+    }
+
     pub const fn preset(self) -> PermissionSet {
         match self {
             Role::Close => PermissionSet {

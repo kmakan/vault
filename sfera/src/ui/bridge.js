@@ -12,6 +12,8 @@ export const COMMANDS = Object.freeze({
   identity: 'social_identity',
   feed: 'social_feed',
   contacts: 'social_contacts',
+  setContactRole: 'social_set_contact_role',
+  roleOptions: 'social_role_options',
   audiences: 'social_audiences',
   createAudience: 'social_create_audience',
   setAudienceMembers: 'social_set_audience_members',
@@ -61,6 +63,16 @@ export function createBridge(invoke) {
 
     contacts() {
       return invoke(COMMANDS.contacts);
+    },
+
+    // fp и роль приходят из формы; проверку состояния делает Rust.
+    setContactRole(req) {
+      return invoke(COMMANDS.setContactRole, { req });
+    },
+
+    // Пресеты прав по ролям — подпись под селектором, значения из Rust.
+    roleOptions() {
+      return invoke(COMMANDS.roleOptions);
     },
 
     audiences() {

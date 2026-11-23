@@ -10,6 +10,8 @@ const calls = [];
 let failFeed = false;
 let sphereMembers = ['aa:bb'];
 let myProfile = { profile: { display_name: 'Ann', bio: '', links: [] }, sig: 'x' };
+let contactRole = 'friend';
+let roleRequest = null;
 
 const bridge = {
   apiVersion: async () => 7,
@@ -19,7 +21,16 @@ const bridge = {
     if (failFeed) throw new Error('feed down');
     return [{ id: 'p1' }];
   },
-  contacts: async () => [{ fp: 'aa:bb', role: 'friend' }],
+  contacts: async () => [{ fp: 'aa:bb', role: contactRole }],
+  roleOptions: async () => [
+    { value: 'friend', can_view_media: true, can_react: true, can_view_history: false, can_request_chat: true, profile: 'full' },
+    { value: 'restricted', can_view_media: false, can_react: false, can_view_history: false, can_request_chat: false, profile: 'none' },
+  ],
+  setContactRole: async (req) => {
+    roleRequest = req;
+    contactRole = req.role;
+    return null;
+  },
   audiences: async () => [audience],
   audienceMembers: async (id) => ({ v: 7, id, epoch: 1, members: [...sphereMembers] }),
   setAudienceMembers: async (req) => {
@@ -70,6 +81,7 @@ check(s.link.linked === false, 'link status loaded');
 check(s.identity.fp === 'aa:bb', 'identity loaded');
 check(s.feed.length === 1, 'feed loaded');
 check(s.contacts.length === 1, 'contacts loaded');
+check(s.roleOptions.length === 2 && s.roleOptions[0].value === 'friend', 'role presets loaded from Rust');
 check(s.audiences[0].id === 'sphere_close', 'audiences loaded');
 check(s.audienceMembers.sphere_close.members.length === 1, 'sphere members loaded on init');
 check(s.myProfile.profile.display_name === 'Ann', 'own profile loaded');
@@ -130,6 +142,13 @@ check(s.thumbs.b2 === 'data:image/jpeg;base64,AAA', 'feed media thumbnail loaded
 const change = await api.setAudienceMembers({ id: 'sphere_close', members: ['aa:bb', 'cc:dd'] });
 check(change.changed === true, 'membership change passed through');
 check(s.audienceMembers.sphere_close.members.length === 2, 'members reloaded after save');
+
+await api.setContactRole('aa:bb', 'restricted');
+check(roleRequest.v === 7 && roleRequest.fp === 'aa:bb' && roleRequest.role === 'restricted', 'role change carries wire version from Rust');
+check(s.contacts[0].role === 'restricted', 'contacts reloaded after role change');
+let roleThrew = false;
+try { await api.setContactRole('', 'friend'); } catch { roleThrew = true; }
+check(roleThrew, 'missing fp rejected before Rust');
 
 const saved = await api.saveProfile({
   displayName: 'Ann2', bio: 'hi', links: [{ label: 'site', url: 'https://x' }],

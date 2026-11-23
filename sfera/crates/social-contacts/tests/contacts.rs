@@ -151,6 +151,41 @@ fn contact_book_tracks_state_and_lists_only_contacts() {
 }
 
 #[test]
+fn set_role_changes_only_role_of_accepted_contact() {
+    let a = fp(2);
+    let mut book = ContactBook::new();
+    let mut record = ContactRecord::contact(a.clone(), Role::Friend, vec!["work".into()], true);
+    record.overrides.can_react = Some(true);
+    book.upsert(record);
+
+    book.set_role(&a, Role::Restricted).unwrap();
+    let after = book.get(&a).unwrap();
+    assert_eq!(after.role, Role::Restricted);
+    // Остальное решение владельца не затирается сменой роли.
+    assert_eq!(after.state, RelationState::Contact);
+    assert_eq!(after.spheres, vec!["work"]);
+    assert!(after.history_granted);
+    assert_eq!(after.overrides.can_react, Some(true));
+}
+
+#[test]
+fn set_role_rejects_missing_and_non_contact_records() {
+    let mut book = ContactBook::new();
+    assert_eq!(book.set_role(&fp(2), Role::Close), Err(ContactError::NotContact));
+
+    book.upsert(ContactRecord {
+        fp: fp(3),
+        role: Role::Friend,
+        overrides: Default::default(),
+        spheres: Vec::new(),
+        history_granted: false,
+        state: RelationState::Requested,
+    });
+    assert_eq!(book.set_role(&fp(3), Role::Close), Err(ContactError::NotContact));
+    assert_eq!(book.get(&fp(3)).unwrap().role, Role::Friend);
+}
+
+#[test]
 fn record_serializes_with_defaults() {
     let r = ContactRecord::contact(fp(2), Role::Friend, vec![], false);
     let json = serde_json::to_value(&r).unwrap();

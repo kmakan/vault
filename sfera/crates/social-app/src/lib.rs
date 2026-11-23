@@ -215,6 +215,16 @@ impl SferaApp {
         self.contacts.upsert(record);
     }
 
+    /// Сменить роль принятого контакта; проверку состояния делает
+    /// `social-contacts`, корень только передаёт вызов.
+    pub fn set_contact_role(
+        &mut self,
+        fp: &Fingerprint,
+        role: Role,
+    ) -> Result<(), social_contacts::ContactError> {
+        self.contacts.set_role(fp, role)
+    }
+
     /// Опубликовать пост: сборка/подпись в `social-post`, постановка в outbox.
     /// Доставку делает `sync_outbox`, здесь её нет.
     pub fn publish_post(

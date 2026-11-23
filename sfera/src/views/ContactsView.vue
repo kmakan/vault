@@ -10,6 +10,50 @@ const editing = ref('');
 const draft = ref([]);
 const sphereBusy = ref(false);
 const sphereStatus = ref('');
+const roleBusy = ref('');
+const roleStatus = ref({ fp: '', text: '' });
+
+// Значения ролей и права приходят из Rust; UI только подставляет подписи.
+function roleLabel(value) {
+  return props.api.t('contact_role_' + value);
+}
+
+function stateLabel(value) {
+  return props.api.t('contact_state_' + value);
+}
+
+function roleHint(value) {
+  const opt = (props.state.roleOptions ?? []).find((o) => o.value === value);
+  if (!opt) return '';
+  const parts = [];
+  if (opt.can_view_media) parts.push(props.api.t('contact_right_media'));
+  if (opt.can_react) parts.push(props.api.t('contact_right_react'));
+  if (opt.can_view_history) parts.push(props.api.t('contact_right_history'));
+  if (opt.can_request_chat) parts.push(props.api.t('contact_right_chat'));
+  parts.push(
+    props.api.t('contact_right_profile', {
+      v: props.api.t('contact_profile_' + opt.profile),
+    }),
+  );
+  return parts.join(' · ');
+}
+
+async function onRole(fp, value) {
+  if (roleBusy.value) return;
+  roleBusy.value = fp;
+  roleStatus.value = { fp, text: '' };
+  try {
+    await props.api.setContactRole(fp, value);
+    roleStatus.value = { fp, text: props.api.t('contacts_role_saved') };
+  } catch (e) {
+    roleStatus.value = {
+      fp,
+      text: props.api.t('contacts_role_save_fail') + ': ' + (e?.message ?? e),
+    };
+  } finally {
+    roleBusy.value = '';
+  }
+}
 
 function membersOf(id) {
   return props.state.audienceMembers?.[id]?.members ?? [];
@@ -125,8 +169,23 @@ async function acceptInvite() {
     <article v-for="contact in state.contacts" :key="contact.fp" class="card contact">
       <div class="contact-main">
         <span class="fp">{{ contact.fp }}</span>
-        <span class="muted">{{ contact.role }} · {{ contact.state }}</span>
+        <span class="muted">{{ stateLabel(contact.state) }}</span>
       </div>
+      <div class="role-row">
+        <label class="role-field">
+          <span class="role-caption">{{ api.t('contacts_role_label') }}</span>
+          <select :value="contact.role" :disabled="roleBusy === contact.fp"
+                  @change="onRole(contact.fp, $event.target.value)">
+            <option v-for="opt in state.roleOptions" :key="opt.value" :value="opt.value">
+              {{ roleLabel(opt.value) }}
+            </option>
+          </select>
+        </label>
+        <span class="muted role-hint">{{ roleHint(contact.role) }}</span>
+      </div>
+      <p v-if="roleStatus.fp === contact.fp && roleStatus.text" class="muted">
+        {{ roleStatus.text }}
+      </p>
       <div v-if="contactSpheres(contact.fp).length" class="chips">
         <span v-for="sphere in contactSpheres(contact.fp)" :key="sphere" class="chip">{{ sphere }}</span>
       </div>
@@ -140,6 +199,25 @@ async function acceptInvite() {
   flex-direction: column;
   gap: 4px;
 }
+.role-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.role-field { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.role-caption { color: var(--text-secondary); }
+.role-field select {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.role-hint { font-size: 11px; }
 .chips {
   display: flex;
   flex-wrap: wrap;

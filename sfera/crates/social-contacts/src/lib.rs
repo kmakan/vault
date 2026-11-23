@@ -115,6 +115,8 @@ pub enum ContactError {
     NotBlocked,
     /// Повторная заявка от уже принятого контакта.
     AlreadyContact,
+    /// Менять роль можно только у принятого контакта.
+    NotContact,
 }
 
 /// Переход отношения. Чистая функция: то же решение на всех устройствах.
@@ -231,6 +233,20 @@ impl ContactBook {
     pub fn upsert(&mut self, record: ContactRecord) {
         self.records
             .insert(record.fp.as_str().to_string(), record);
+    }
+
+    /// Сменить роль принятого контакта. Состояние отношения, сферы, история и
+    /// точечные `overrides` не трогаются — это отдельные решения владельца.
+    pub fn set_role(&mut self, fp: &Fingerprint, role: Role) -> Result<(), ContactError> {
+        let record = self
+            .records
+            .get_mut(fp.as_str())
+            .ok_or(ContactError::NotContact)?;
+        if record.state != RelationState::Contact {
+            return Err(ContactError::NotContact);
+        }
+        record.role = role;
+        Ok(())
     }
 
     pub fn get(&self, fp: &Fingerprint) -> Option<&ContactRecord> {

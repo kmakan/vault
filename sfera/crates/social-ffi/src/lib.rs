@@ -206,6 +206,44 @@ pub struct AccessRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContactRequestDto { pub v: u8, pub contact: ContactRecord }
 
+/// Смена роли: только fp и роль. Состояние, сферы и overrides трогать нельзя —
+/// это отдельные решения владельца (блокировка, история, точечные права).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetContactRoleDto {
+    pub v: u8,
+    pub fp: social_app::Fingerprint,
+    pub role: social_app::Role,
+}
+
+/// Пресет прав роли для UI: честная подпись под селектором. Значения и права
+/// приходят из `social-rights`; JS не держит свою таблицу соответствий.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleOptionDto {
+    pub value: String,
+    pub can_view_media: bool,
+    pub can_react: bool,
+    pub can_view_history: bool,
+    pub can_request_chat: bool,
+    pub profile: String,
+}
+
+fn role_options() -> Vec<RoleOptionDto> {
+    social_app::Role::all()
+        .into_iter()
+        .map(|role| {
+            let p = role.preset();
+            RoleOptionDto {
+                value: role.as_str().to_string(),
+                can_view_media: p.can_view_media,
+                can_react: p.can_react,
+                can_view_history: p.can_view_history,
+                can_request_chat: p.can_request_chat,
+                profile: p.profile.as_str().to_string(),
+            }
+        })
+        .collect()
+}
+
 /// Заявка на контакт: форма из social-contacts, без приватного ключа.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InviteDto { pub v: u8, pub request: social_contacts::ContactRequest }
@@ -396,6 +434,25 @@ fn social_access(state: tauri::State<'_, SferaState>, req: AccessRequest) -> Res
 fn social_put_contact(state: tauri::State<'_, SferaState>, req: ContactRequestDto) -> Result<(), CommandError> {
     check(req.v)?;
     state.call(|app| { app.put_contact(req.contact); Ok(()) })
+}
+
+/// Смена роли принятого контакта: проверку и запись делает `social-contacts`.
+#[tauri::command]
+fn social_set_contact_role(
+    state: tauri::State<'_, SferaState>,
+    req: SetContactRoleDto,
+) -> Result<(), CommandError> {
+    check(req.v)?;
+    state.call(|app| {
+        app.set_contact_role(&req.fp, req.role)
+            .map_err(|e| CommandError::input(format!("{e:?}")))
+    })
+}
+
+/// Пресеты прав по ролям — для подписи под селектором в UI.
+#[tauri::command]
+fn social_role_options() -> Result<Vec<RoleOptionDto>, CommandError> {
+    Ok(role_options())
 }
 
 #[tauri::command]
@@ -634,6 +691,8 @@ pub fn handles(command: &str) -> bool {
             | "social_profile"
             | "social_access"
             | "social_put_contact"
+            | "social_set_contact_role"
+            | "social_role_options"
             | "social_accept_contact_request"
             | "social_upload_media"
             | "social_library_items"
@@ -671,6 +730,8 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_profile,
         social_access,
         social_put_contact,
+        social_set_contact_role,
+        social_role_options,
         social_accept_contact_request,
         social_upload_media,
         social_library_items,
@@ -787,6 +848,56 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["fp"], serde_json::json!(fp.as_str()));
         assert_eq!(listed[0]["role"], serde_json::json!("friend"));
+    }
+
+    #[test]
+    fn role_options_come_from_rights_not_ui() {
+        let options = role_options();
+        assert_eq!(options.len(), 4);
+        assert_eq!(options[0].value, "close");
+        assert!(options[0].can_view_history);
+        // У знакомого история выключена дефолтом, а profile — краткий.
+        let acquaintance = options.iter().find(|o| o.value == "acquaintance").unwrap();
+        assert!(acquaintance.can_view_media);
+        assert!(!acquaintance.can_view_history);
+        assert_eq!(acquaintance.profile, "brief");
+        let restricted = options.iter().find(|o| o.value == "restricted").unwrap();
+        assert!(!restricted.can_view_media);
+        assert_eq!(restricted.profile, "none");
+    }
+
+    #[test]
+    fn set_contact_role_command_changes_only_role() {
+        let st = state();
+        let fp = social_app::Fingerprint::from_str("02:00:00:00:00:00:00:00:****");
+        st.call(|app| {
+            app.put_contact(ContactRecord::contact(
+                fp.clone(),
+                social_app::Role::Friend,
+                vec!["work".into()],
+                true,
+            ));
+            Ok(())
+        }).unwrap();
+
+        let req = SetContactRoleDto {
+            v: API_VERSION,
+            fp: fp.clone(),
+            role: social_app::Role::Restricted,
+        };
+        // Тело команды вызывается напрямую: tauri::State вне рантайма не создать.
+        st.call(|app| app.set_contact_role(&req.fp, req.role)
+            .map_err(|e| CommandError::input(format!("{e:?}")))).unwrap();
+
+        let listed: Vec<serde_json::Value> = st.call(|app| {
+            app.contacts().contacts()
+                .map(|c| serde_json::to_value(c).map_err(CommandError::input))
+                .collect()
+        }).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["role"], serde_json::json!("restricted"));
+        assert_eq!(listed[0]["state"], serde_json::json!("contact"));
+        assert_eq!(listed[0]["history_granted"], serde_json::json!(true));
     }
 
     #[test]

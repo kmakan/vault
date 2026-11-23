@@ -38,6 +38,8 @@ export function createAppState({
     avatarDraft: null,
     feed: [],
     contacts: [],
+    // Пресеты прав по ролям приходят из social-rights через FFI.
+    roleOptions: [],
     audiences: [],
     // Состав сфер по id: отпечатки и эпоха. Ключи остаются в Rust.
     audienceMembers: {},
@@ -190,6 +192,7 @@ export function createAppState({
         load('identity', () => bridge.identity()),
         load('feed', () => bridge.feed()),
         load('contacts', () => bridge.contacts()),
+        load('roleOptions', () => bridge.roleOptions()),
         load('audiences', () => bridge.audiences()),
         load('caps', () => bridge.storeCaps()),
         load('library', () => bridge.libraryItems()),
@@ -211,6 +214,16 @@ export function createAppState({
       return feed;
     },
     loadContacts: () => load('contacts', () => bridge.contacts()),
+
+    // Роль меняется только у принятого контакта: состояние проверяет Rust.
+    // fp и role приходят из формы, версию протокола UI не изобретает.
+    async setContactRole(fp, role) {
+      if (!fp || !role) throw new Error('fp and role required');
+      if (state.apiVersion == null) throw new Error('bridge not initialized');
+      await bridge.setContactRole({ v: state.apiVersion, fp, role });
+      state.contacts = await bridge.contacts();
+      return state.contacts;
+    },
 
     // Тип медиа решает Rust: UI только показывает готовую подпись.
     mediaKind(mime) {
