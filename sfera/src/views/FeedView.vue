@@ -25,6 +25,7 @@ const syncText = computed(() => {
 const visible = computed(() => {
   const feed = props.state.feed ?? [];
   if (filter.value === 'all') return feed;
+  if (filter.value === 'mine') return feed.filter((e) => e.is_mine === true);
   return feed.filter(
     (e) => e.audience_view?.kind === 'sphere' && e.audience_view.id === filter.value,
   );
@@ -104,6 +105,8 @@ function when(ts) {
     <div v-if="state.audiences.length" class="filters">
       <button type="button" class="chip-btn" :class="{ on: filter === 'all' }"
               @click="filter = 'all'">{{ api.t('feed_filter_all') }}</button>
+      <button type="button" class="chip-btn" :class="{ on: filter === 'mine' }"
+              @click="filter = 'mine'">{{ api.t('feed_filter_mine') }}</button>
       <button v-for="a in state.audiences" :key="a.id" type="button" class="chip-btn"
               :class="{ on: filter === a.id }" @click="filter = a.id">{{ a.id }}</button>
     </div>

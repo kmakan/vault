@@ -298,15 +298,21 @@ fn social_receive_posts(state: tauri::State<'_, SferaState>, req: ReceivePostsRe
 #[tauri::command]
 fn social_feed(state: tauri::State<'_, SferaState>) -> Result<Vec<serde_json::Value>, CommandError> {
     state.call(|app| {
+        let me = app.identity().fingerprint().clone();
         app.feed().ordered().iter()
             .map(|e| {
                 let mut value = serde_json::to_value(e).map_err(CommandError::input)?;
-                // Аудитория — отдельным структурным полем: UI не разбирает
-                // enum wire-формата, только выбирает подпись из локалей.
+                // Аудитория и «мой пост» — структурными полями: UI не
+                // разбирает wire-форму и не сравнивает ключи сам.
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert(
                         "audience_view".into(),
                         serde_json::to_value(audience_view(&e.post.post.audience.spec))
+                            .map_err(CommandError::input)?,
+                    );
+                    obj.insert(
+                        "is_mine".into(),
+                        serde_json::to_value(e.post.post.author.fp.same(&me))
                             .map_err(CommandError::input)?,
                     );
                 }

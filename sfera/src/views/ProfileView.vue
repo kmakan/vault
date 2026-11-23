@@ -25,6 +25,13 @@ const avatarThumb = computed(() => {
   return id ? props.state.thumbs[id] ?? '' : '';
 });
 
+// Стена — свои посты из ленты. Признак «мой» считает Rust (`is_mine`).
+const ownPosts = computed(() => (props.state.feed ?? []).filter((e) => e.is_mine === true));
+
+function when(ts) {
+  return ts ? new Date(ts * 1000).toLocaleString() : '';
+}
+
 function pickAvatar() {
   avatarInput.value?.click();
 }
@@ -144,6 +151,15 @@ async function acceptLink() {
     </div>
 
     <div class="card">
+      <h2>{{ api.t('profile_wall') }}</h2>
+      <p v-if="!ownPosts.length" class="muted">{{ api.t('profile_wall_empty') }}</p>
+      <article v-for="post in ownPosts" :key="post.id" class="wall-post">
+        <p class="wall-body">{{ post.post?.post?.body }}</p>
+        <time class="muted">{{ when(post.post?.post?.ts) }}</time>
+      </article>
+    </div>
+
+    <div class="card">
       <div class="row">
         <span class="muted">{{ api.t('profile_account') }}</span>
         <span :class="{ muted: !state.link?.linked }">
@@ -188,6 +204,17 @@ async function acceptLink() {
   background: var(--bg-secondary);
   color: var(--text-primary);
   font: inherit;
+}
+.wall-post {
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 0;
+}
+.wall-post:first-of-type { border-top: 0; }
+.wall-body {
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 .avatar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .avatar {
