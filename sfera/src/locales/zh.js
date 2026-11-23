@@ -30,6 +30,8 @@ export default {
   create_encrypting: '正在加密…',
   create_uploading: '正在上传…',
   create_sent: '已发送 {n} / {m}',
+  create_attach: '添加文件',
+  create_published: '已发布',
 
   storage_device: '本机',
   storage_none: '尚未连接存储',

@@ -9,10 +9,33 @@ const body = ref('');
 const audienceId = ref('');
 const busy = ref(false);
 const status = ref('');
+const attachInput = ref(null);
+const attachStatus = ref('');
+const attachBusy = ref(false);
 const sphereName = ref('');
 const sphereMembers = ref([]);
 const sphereBusy = ref(false);
 const sphereStatus = ref('');
+
+// Вложение шифруется и попадает в общий список загрузок; публикация берёт
+// его оттуда. Ключ и тип файла остаются в Rust.
+async function onAttach(event) {
+  const file = event.target.files?.[0];
+  if (!file || attachBusy.value) return;
+  attachBusy.value = true;
+  attachStatus.value = '';
+  try {
+    const result = await props.api.uploadFile(file);
+    attachStatus.value = props.api.t('storage_uploaded', {
+      name: file.name, kind: result.kind, size: result.size,
+    });
+  } catch (e) {
+    attachStatus.value = props.api.t('storage_upload_fail') + ': ' + (e?.message ?? e);
+  } finally {
+    attachBusy.value = false;
+    if (attachInput.value) attachInput.value.value = '';
+  }
+}
 
 function removeUpload(index) {
   props.state.uploads.splice(index, 1);
@@ -49,7 +72,7 @@ async function submit() {
       await props.api.publish({ body: body.value, audience: selected.value });
     }
     body.value = '';
-    status.value = props.api.t('create_sent', { n: 1, m: 1 });
+    status.value = props.api.t('create_published');
   } catch (e) {
     status.value = String(e?.message ?? e);
   } finally {
@@ -71,6 +94,15 @@ async function submit() {
         rows="5"
         :placeholder="api.t('create_placeholder')"
       ></textarea>
+
+      <div class="attach-row">
+        <button type="button" class="ghost" :disabled="attachBusy"
+                @click="attachInput?.click()">
+          {{ api.t('create_attach') }}
+        </button>
+        <input ref="attachInput" type="file" class="hidden-input" @change="onAttach" />
+        <span v-if="attachStatus" class="muted">{{ attachStatus }}</span>
+      </div>
 
       <div class="composer-row">
         <label class="field">
@@ -158,4 +190,18 @@ async function submit() {
 
 .attached { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .chip-remove { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 0 2px; }
+
+.attach-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.hidden-input { display: none; }
+.ghost {
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.ghost:hover { border-color: var(--accent-primary); }
 </style>

@@ -30,6 +30,8 @@ export default {
   create_encrypting: 'Encrypting…',
   create_uploading: 'Uploading…',
   create_sent: 'Sent {n} of {m}',
+  create_attach: 'Attach file',
+  create_published: 'Published',
 
   storage_device: 'Device',
   storage_none: 'No storage connected yet',

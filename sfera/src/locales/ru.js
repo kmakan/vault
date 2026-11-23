@@ -31,6 +31,8 @@ export default {
   create_encrypting: 'Шифруем…',
   create_uploading: 'Загружаем…',
   create_sent: 'Отправлено {n} из {m}',
+  create_attach: 'Прикрепить файл',
+  create_published: 'Опубликовано',
 
   storage_device: 'Устройство',
   storage_none: 'Хранилище ещё не подключено',
