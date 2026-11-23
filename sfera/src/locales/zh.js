@@ -17,6 +17,9 @@ export default {
   feed_audience_sphere: '圈子「{id}」',
   feed_audience_selected: '已选：{n}',
   feed_audience_except: '全部，除 {n} 人',
+  feed_sync_unknown: '更新于 {at} · 队列状态未知',
+  feed_sync_no_transport: '更新于 {at} · 队列 {n} 条 · 未连接传输',
+  feed_sync_queued: '更新于 {at} · 队列 {n} 条',
 
   contacts_incoming: '收到的请求',
   contacts_outgoing: '发出的请求',

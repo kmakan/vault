@@ -9,6 +9,19 @@ const mediaStatus = ref('');
 // Фильтр по сфере — локальное состояние экрана; какие сферы есть, знает Rust.
 const filter = ref('all');
 
+// Плашка «обновлено / в очереди». Без транспорта не обещаем доставку.
+const syncText = computed(() => {
+  const status = props.state.sync;
+  const at = props.state.lastSyncAt
+    ? new Date(props.state.lastSyncAt * 1000).toLocaleTimeString()
+    : '—';
+  if (!status) return props.api.t('feed_sync_unknown', { at });
+  if (!status.has_transport) {
+    return props.api.t('feed_sync_no_transport', { at, n: status.pending });
+  }
+  return props.api.t('feed_sync_queued', { at, n: status.pending });
+});
+
 const visible = computed(() => {
   const feed = props.state.feed ?? [];
   if (filter.value === 'all') return feed;
@@ -86,6 +99,8 @@ function when(ts) {
       <span class="badge">{{ visible.length }}</span>
     </header>
 
+    <p class="muted sync">{{ syncText }}</p>
+
     <div v-if="state.audiences.length" class="filters">
       <button type="button" class="chip-btn" :class="{ on: filter === 'all' }"
               @click="filter = 'all'">{{ api.t('feed_filter_all') }}</button>
@@ -118,6 +133,10 @@ function when(ts) {
 </template>
 
 <style scoped>
+.sync {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
 .filters {
   display: flex;
   flex-wrap: wrap;

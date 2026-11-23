@@ -32,6 +32,7 @@ export const COMMANDS = Object.freeze({
   libraryForget: 'social_library_forget',
   libraryOpen: 'social_library_open',
   libraryThumb: 'social_library_thumb',
+  syncStatus: 'social_sync_status',
 });
 
 export function createBridge(invoke) {
@@ -152,6 +153,11 @@ export function createBridge(invoke) {
     // Маленький JPEG для плитки; None — миниатюры нет.
     libraryThumb(blobId) {
       return invoke(COMMANDS.libraryThumb, { blobId });
+    },
+
+    // Очередь и факт подключения транспорта — только числа от Rust.
+    syncStatus(now) {
+      return invoke(COMMANDS.syncStatus, { now });
     },
   };
 }

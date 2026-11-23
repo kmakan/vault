@@ -52,6 +52,7 @@ const bridge = {
     v: 7, blob_id: blobId, mime: 'image/jpeg', kind: 'Image', size: 3, data_base64: 'AAA',
   }),
   mediaKind: async (mime) => (mime.startsWith('image/') ? 'Image' : 'Document'),
+  syncStatus: async () => ({ v: 7, pending: 2, failed: 0, due: 0, has_transport: false }),
   publishPost: async (req) => { calls.push(req); return { v: 7, id: 'p2', ts: req.ts }; },
   companionAction: async (handled) => ({ install: !handled, target: 'vault://open' }),
 };
@@ -73,6 +74,8 @@ check(s.audiences[0].id === 'sphere_close', 'audiences loaded');
 check(s.audienceMembers.sphere_close.members.length === 1, 'sphere members loaded on init');
 check(s.myProfile.profile.display_name === 'Ann', 'own profile loaded');
 check(s.caps.kind === 'Local', 'caps loaded');
+check(s.sync?.pending === 2 && s.sync.has_transport === false, 'sync status loaded');
+check(s.lastSyncAt === 1000, 'last sync time from injected clock');
 
 check(api.openTab('profile') && s.tab === 'profile', 'tab switch');
 check(!api.openTab('billing') && s.tab === 'profile', 'unknown tab rejected');

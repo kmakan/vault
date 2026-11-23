@@ -42,6 +42,10 @@ export function createAppState({
     // Состав сфер по id: отпечатки и эпоха. Ключи остаются в Rust.
     audienceMembers: {},
     caps: null,
+    // Честное состояние очереди: чисел и флага транспорта достаточно, чтобы
+    // не выдавать локальную публикацию за доставку.
+    sync: null,
+    lastSyncAt: null,
     // Результаты загрузки: ключ файла живёт здесь только до публикации,
     // затем уходит в E2E-манифест и очищается.
     uploads: [],
@@ -88,6 +92,17 @@ export function createAppState({
         // Превью не обязательно: файл всё равно откроется по клику.
       }
     }
+  }
+
+  // Плашка синхронизации не критична: при отказе команды лента остаётся
+  // рабочей, а время обновления показывают локальные часы.
+  async function loadSync() {
+    try {
+      state.sync = await bridge.syncStatus(clock());
+    } catch {
+      state.sync = null;
+    }
+    state.lastSyncAt = clock();
   }
 
   // Чтение файла и base64 — граница UI: байты дальше шифрует Rust.
@@ -180,6 +195,7 @@ export function createAppState({
         load('library', () => bridge.libraryItems()),
       ]);
       await loadThumbs();
+      await loadSync();
       if (state.identity?.fp) {
         await load('myProfile', () => bridge.profile(state.identity.fp));
         state.avatarDraft = state.myProfile?.profile?.avatar ?? null;
@@ -191,6 +207,7 @@ export function createAppState({
     loadFeed: async () => {
       const feed = await load('feed', () => bridge.feed());
       await loadThumbs();
+      await loadSync();
       return feed;
     },
     loadContacts: () => load('contacts', () => bridge.contacts()),
@@ -365,6 +382,7 @@ export function createAppState({
       state.uploads = [];
       state.feed = await bridge.feed();
       await loadThumbs();
+      await loadSync();
       return post;
     },
 
@@ -390,6 +408,7 @@ export function createAppState({
         now,
       });
       state.feed = await bridge.feed();
+      await loadSync();
       return post;
     },
 

@@ -33,6 +33,7 @@ const bridge = createBridge(async (name, args) => {
   }
   if (name === COMMANDS.setAudienceMembers) return { v: 1, changed: true };
   if (name === COMMANDS.setMyProfile) return { v: 1, outcome: 'inserted' };
+  if (name === COMMANDS.syncStatus) return { v: 1, pending: 2, failed: 0, due: 0, has_transport: false };
   return null;
 });
 
@@ -70,8 +71,10 @@ const saved = await bridge.setMyProfile({
   v: 1, ts: 1, display_name: 'Ann', bio: '', avatar: null, links: [], now: 1,
 });
 check(saved.outcome === 'inserted', 'profile save outcome');
+const sync = await bridge.syncStatus(1000);
+check(sync.pending === 2 && sync.has_transport === false, 'sync status from Rust');
 
-check(calls.length === 19, `expected 19 invoke calls, got ${calls.length}`);
+check(calls.length === 20, `expected 20 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
@@ -80,6 +83,7 @@ check(calls[15].args.blobId === 'aa', 'library thumb arg');
 check(calls[16].args.id === 'sphere_close', 'audience members arg');
 check(calls[17].args.req.id === 'sphere_close', 'set members arg');
 check(calls[18].args.req.display_name === 'Ann', 'profile request passed unchanged');
+check(calls[19].args.now === 1000, 'sync status time passed through');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

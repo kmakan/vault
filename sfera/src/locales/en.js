@@ -17,6 +17,9 @@ export default {
   feed_audience_sphere: 'Sphere “{id}”',
   feed_audience_selected: 'Selected: {n}',
   feed_audience_except: 'All except {n}',
+  feed_sync_unknown: 'Updated {at} · queue state unknown',
+  feed_sync_no_transport: 'Updated {at} · {n} queued · no delivery port',
+  feed_sync_queued: 'Updated {at} · {n} queued',
 
   contacts_incoming: 'Incoming',
   contacts_outgoing: 'Outgoing',

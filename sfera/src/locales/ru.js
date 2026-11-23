@@ -18,6 +18,9 @@ export default {
   feed_audience_sphere: 'Сфера «{id}»',
   feed_audience_selected: 'Выбранные: {n}',
   feed_audience_except: 'Все, кроме {n}',
+  feed_sync_unknown: 'Обновлено {at} · состояние очереди неизвестно',
+  feed_sync_no_transport: 'Обновлено {at} · {n} в очереди · транспорт не подключён',
+  feed_sync_queued: 'Обновлено {at} · {n} в очереди',
 
   contacts_incoming: 'Входящие',
   contacts_outgoing: 'Исходящие',

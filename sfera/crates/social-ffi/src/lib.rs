@@ -564,7 +564,38 @@ fn social_accept_contact_request(
     })
 }
 
-/// Прогов run outbox через порт доставки. Без порта — типизированная ошибка.
+/// Что видно в ленте про очередь: только числа. UI честно покажет, что
+/// порт доставки не подключён, вместо выдуманного «Отправлено».
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncStatusDto {
+    pub v: u8,
+    pub pending: usize,
+    pub failed: usize,
+    pub due: usize,
+    pub has_transport: bool,
+}
+
+fn sync_status(app: &SferaApp, now: u64, has_transport: bool) -> SyncStatusDto {
+    let outbox = app.outbox();
+    SyncStatusDto {
+        v: API_VERSION,
+        pending: outbox.pending_count(),
+        failed: outbox.failed_count(),
+        due: outbox.due(now).len(),
+        has_transport,
+    }
+}
+
+#[tauri::command]
+fn social_sync_status(
+    state: tauri::State<'_, SferaState>,
+    now: u64,
+) -> Result<SyncStatusDto, CommandError> {
+    let has_transport = state.delivery.is_some();
+    state.call(|app| Ok(sync_status(app, now, has_transport)))
+}
+
+/// Прогнать outbox через порт доставки. Без порта — типизированная ошибка.
 #[tauri::command]
 fn social_sync_outbox(state: tauri::State<'_, SferaState>, now: u64) -> Result<ReportDto, CommandError> {
     let delivery = state.delivery.clone().ok_or_else(|| CommandError::new("transport", "no delivery port"))?;
@@ -608,6 +639,7 @@ pub fn handles(command: &str) -> bool {
             | "social_set_audience_members"
             | "social_audience_members"
             | "social_sync_outbox"
+            | "social_sync_status"
             | "social_store_caps"
     )
 }
@@ -644,6 +676,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_set_audience_members,
         social_audience_members,
         social_sync_outbox,
+        social_sync_status,
         social_store_caps,
     ]
 }
@@ -700,6 +733,17 @@ mod tests {
         let except = audience_view(&Audience::AllExcept { fps: vec![fp("02:00:00:00:00:00:00:00:****")] });
         assert_eq!(except.kind, "except");
         assert_eq!(except.count, 1);
+    }
+
+    #[test]
+    fn sync_status_reports_queue_and_missing_port() {
+        let st = state();
+        let s = st.call(|app| Ok(sync_status(app, 1000, false))).unwrap();
+        assert_eq!(s.v, API_VERSION);
+        assert_eq!(s.pending, 0);
+        assert_eq!(s.failed, 0);
+        assert_eq!(s.due, 0);
+        assert!(!s.has_transport);
     }
 
     #[test]
