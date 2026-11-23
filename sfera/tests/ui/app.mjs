@@ -77,6 +77,11 @@ check(s.caps.kind === 'Local', 'caps loaded');
 check(api.openTab('profile') && s.tab === 'profile', 'tab switch');
 check(!api.openTab('billing') && s.tab === 'profile', 'unknown tab rejected');
 
+api.setDraft('unfinished post');
+check(s.draft === 'unfinished post', 'composer draft survives tab switches');
+api.setDraft(null);
+check(s.draft === '', 'empty draft is normalized');
+
 check(api.setLocale('en') && s.locale === 'en', 'locale switch');
 check(!api.setLocale('xx') && s.locale === 'en', 'unknown locale rejected');
 check(api.setTheme('light') && s.theme === 'light', 'theme switch');

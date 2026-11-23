@@ -1,11 +1,13 @@
 <script setup>
 // Создание поста: форма и один вызов. Адресат приходит из Rust готовым
 // `PostAudience`, UI его не собирает и не пересчитывает (ADR-006 §9.3).
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 const props = defineProps({ state: Object, api: Object });
 
-const body = ref('');
+// Вкладки монтируются заново: текст держится в состоянии приложения.
+const body = ref(props.state.draft ?? '');
+watch(body, (value) => props.api.setDraft(value));
 const audienceId = ref('');
 const busy = ref(false);
 const status = ref('');

@@ -7,6 +7,8 @@ import { createShell } from './shell.js';
 import { hasLocale, translate } from '../locales/index.js';
 import { THEMES } from '../themes/index.js';
 
+const DRAFT_KEY = 'sfera.draft';
+
 export function createAppState({
   bridge,
   locale = 'ru',
@@ -24,6 +26,9 @@ export function createAppState({
     theme: THEMES[theme] ? theme : 'dark',
     tab: shell.active(),
     apiVersion: null,
+    // Черновик композера живёт в состоянии приложения: вкладки монтируются
+    // заново, а набранный текст терять нельзя (продукт §3.3).
+    draft: '',
     link: null,
     identity: null,
     // Свой профиль (подписанный конверт). Форма редактирует его, подпись
@@ -138,12 +143,32 @@ export function createAppState({
       return ok;
     },
 
+    // Сохранение черновика — состояние UI, а не протокол: текст не подписы-
+    // вается и в Rust не уходит до публикации.
+    setDraft(text) {
+      state.draft = String(text ?? '');
+      if (typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem(DRAFT_KEY, state.draft);
+        } catch {
+          // Приватный режим или квота: черновик живёт до конца сессии.
+        }
+      }
+    },
+
     tabs() {
       return shell.tabs();
     },
 
     async init() {
       state.error = null;
+      if (typeof localStorage !== 'undefined') {
+        try {
+          state.draft = localStorage.getItem(DRAFT_KEY) ?? '';
+        } catch {
+          // Черновик необязателен: без хранилища начинаем с пустой формы.
+        }
+      }
       state.apiVersion = await bridge.apiVersion();
       await Promise.all([
         load('link', () => bridge.linkStatus()),
