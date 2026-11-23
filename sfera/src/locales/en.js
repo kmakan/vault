@@ -12,6 +12,11 @@ export default {
   feed_favourites: 'Favourites',
   feed_new_posts: '{n} new',
   feed_empty: 'No posts from your contacts yet',
+  feed_filter_all: 'All',
+  feed_audience_all: 'All contacts',
+  feed_audience_sphere: 'Sphere “{id}”',
+  feed_audience_selected: 'Selected: {n}',
+  feed_audience_except: 'All except {n}',
 
   contacts_incoming: 'Incoming',
   contacts_outgoing: 'Outgoing',

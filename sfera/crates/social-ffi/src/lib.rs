@@ -126,6 +126,33 @@ pub struct PublishPostRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostDto { pub v: u8, pub id: String, pub ts: u64 }
 
+/// Структурное описание аудитории поста. Разбор wire-формы — на границе
+/// Rust, подписи для людей — в локалях UI.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudienceViewDto {
+    /// `all` | `sphere` | `selected` | `except`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Сколько отпечатков перечислено (для `selected`/`except`).
+    pub count: usize,
+}
+
+fn audience_view(spec: &Audience) -> AudienceViewDto {
+    match spec {
+        Audience::AllContacts => AudienceViewDto { kind: "all".into(), id: None, count: 0 },
+        Audience::Sphere { id } => {
+            AudienceViewDto { kind: "sphere".into(), id: Some(id.clone()), count: 0 }
+        }
+        Audience::Selected { fps } => {
+            AudienceViewDto { kind: "selected".into(), id: None, count: fps.len() }
+        }
+        Audience::AllExcept { fps } => {
+            AudienceViewDto { kind: "except".into(), id: None, count: fps.len() }
+        }
+    }
+}
+
 /// Содержимое своего файла для просмотра. Ключ остался в Rust: наружу
 /// уходит уже расшифрованный файл, MIME и размер plaintext.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -272,7 +299,19 @@ fn social_receive_posts(state: tauri::State<'_, SferaState>, req: ReceivePostsRe
 fn social_feed(state: tauri::State<'_, SferaState>) -> Result<Vec<serde_json::Value>, CommandError> {
     state.call(|app| {
         app.feed().ordered().iter()
-            .map(|e| serde_json::to_value(e).map_err(|e| CommandError::input(e)))
+            .map(|e| {
+                let mut value = serde_json::to_value(e).map_err(CommandError::input)?;
+                // Аудитория — отдельным структурным полем: UI не разбирает
+                // enum wire-формата, только выбирает подпись из локалей.
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "audience_view".into(),
+                        serde_json::to_value(audience_view(&e.post.post.audience.spec))
+                            .map_err(CommandError::input)?,
+                    );
+                }
+                Ok(value)
+            })
             .collect()
     })
 }
@@ -638,6 +677,29 @@ mod tests {
         assert_eq!(id.v, API_VERSION);
         assert!((16..=64).contains(&id.fp.len()), "fp len {}", id.fp.len());
         assert!(!id.pub_key.is_empty());
+    }
+
+    #[test]
+    fn audience_view_is_structural_not_localized() {
+        use social_model::Fingerprint;
+        let all = audience_view(&Audience::AllContacts);
+        assert_eq!(all.kind, "all");
+        assert_eq!(all.id, None);
+
+        let sphere = audience_view(&Audience::Sphere { id: "fam".into() });
+        assert_eq!(sphere.kind, "sphere");
+        assert_eq!(sphere.id.as_deref(), Some("fam"));
+
+        let fp = |s: &str| Fingerprint::from_str(s);
+        let selected = audience_view(&Audience::Selected {
+            fps: vec![fp("02:00:00:00:00:00:00:00:****"), fp("03:00:00:00:00:00:00:00:****")],
+        });
+        assert_eq!(selected.kind, "selected");
+        assert_eq!(selected.count, 2);
+
+        let except = audience_view(&Audience::AllExcept { fps: vec![fp("02:00:00:00:00:00:00:00:****")] });
+        assert_eq!(except.kind, "except");
+        assert_eq!(except.count, 1);
     }
 
     #[test]

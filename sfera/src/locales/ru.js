@@ -13,6 +13,11 @@ export default {
   feed_favourites: 'Избранное',
   feed_new_posts: '{n} новых',
   feed_empty: 'Пока нет постов от ваших контактов',
+  feed_filter_all: 'Все',
+  feed_audience_all: 'Все контакты',
+  feed_audience_sphere: 'Сфера «{id}»',
+  feed_audience_selected: 'Выбранные: {n}',
+  feed_audience_except: 'Все, кроме {n}',
 
   contacts_incoming: 'Входящие',
   contacts_outgoing: 'Исходящие',

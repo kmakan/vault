@@ -12,6 +12,11 @@ export default {
   feed_favourites: '收藏',
   feed_new_posts: '{n} 条新动态',
   feed_empty: '暂无联系人发布的动态',
+  feed_filter_all: '全部',
+  feed_audience_all: '所有联系人',
+  feed_audience_sphere: '圈子「{id}」',
+  feed_audience_selected: '已选：{n}',
+  feed_audience_except: '全部，除 {n} 人',
 
   contacts_incoming: '收到的请求',
   contacts_outgoing: '发出的请求',
