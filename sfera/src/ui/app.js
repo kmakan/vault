@@ -29,6 +29,8 @@ export function createAppState({
     // Свой профиль (подписанный конверт). Форма редактирует его, подпись
     // и порядок «новее побеждает» остаются в Rust.
     myProfile: null,
+    // Выбранный, но ещё не сохранённый аватар: ссылка на блоб без ключа.
+    avatarDraft: null,
     feed: [],
     contacts: [],
     audiences: [],
@@ -81,6 +83,16 @@ export function createAppState({
         // Превью не обязательно: файл всё равно откроется по клику.
       }
     }
+  }
+
+  // Чтение файла и base64 — граница UI: байты дальше шифрует Rust.
+  function readBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
   }
 
   // Состав сферы: отпечатки и эпоха приходят из Rust, ключи не покидают ядро.
@@ -145,6 +157,7 @@ export function createAppState({
       await loadThumbs();
       if (state.identity?.fp) {
         await load('myProfile', () => bridge.profile(state.identity.fp));
+        state.avatarDraft = state.myProfile?.profile?.avatar ?? null;
       }
       await Promise.all((state.audiences ?? []).map((a) => fetchAudienceMembers(a.id)));
       return state;
@@ -164,7 +177,9 @@ export function createAppState({
 
     loadProfile: async () => {
       if (!state.identity?.fp) return null;
-      return load('myProfile', () => bridge.profile(state.identity.fp));
+      const profile = await load('myProfile', () => bridge.profile(state.identity.fp));
+      state.avatarDraft = profile?.profile?.avatar ?? null;
+      return profile;
     },
 
     // Имя, био и ссылки приходят из формы; подпись и валидация — в Rust.
@@ -177,12 +192,14 @@ export function createAppState({
         ts: now,
         display_name: displayName.trim(),
         bio,
-        avatar: null,
+        // Ссылка на аватар, а не его ключ: ключ остаётся в каталоге Rust.
+        avatar: state.avatarDraft ?? null,
         links,
         now,
       });
       if (state.identity?.fp) {
         state.myProfile = await bridge.profile(state.identity.fp);
+        state.avatarDraft = state.myProfile?.profile?.avatar ?? null;
       }
       return result;
     },
@@ -232,17 +249,36 @@ export function createAppState({
     // и должен уйти в E2E-конверт, а не сохраняться в состоянии экрана.
     async uploadFile(file) {
       if (!file) throw new Error('file required');
-      const dataBase64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
+      const dataBase64 = await readBase64(file);
       const result = await bridge.uploadMedia(file.type || 'application/octet-stream', dataBase64);
       state.uploads.push(result);
       state.library = await bridge.libraryItems();
       await loadThumbs();
       return result;
+    },
+
+    // Аватар — такой же шифрованный блоб, но в очередь вложений поста не
+    // попадает. Ключ остаётся в каталоге Rust, поэтому превью работает и
+    // после перезапуска, без повторной загрузки.
+    async uploadAvatar(file) {
+      if (!file) throw new Error('file required');
+      if (!String(file.type || '').startsWith('image/')) {
+        throw new Error('avatar must be an image');
+      }
+      const dataBase64 = await readBase64(file);
+      const result = await bridge.uploadMedia(file.type, dataBase64);
+      state.avatarDraft = {
+        blob_id: result.blob_id,
+        mime: result.mime,
+        size: result.size,
+      };
+      state.library = await bridge.libraryItems();
+      await loadThumbs();
+      return result;
+    },
+
+    clearAvatar() {
+      state.avatarDraft = null;
     },
 
     clearUploads() {
@@ -279,6 +315,8 @@ export function createAppState({
         state.previewUrl = null;
       }
       delete state.thumbs[blobId];
+      // Забытый блоб нельзя расшифровать: висячая ссылка на аватар не нужна.
+      if (state.avatarDraft?.blob_id === blobId) state.avatarDraft = null;
       state.library = await bridge.libraryItems();
     },
 

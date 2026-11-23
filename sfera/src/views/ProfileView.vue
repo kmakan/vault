@@ -1,7 +1,7 @@
 <script setup>
 // Профиль: идентичность из Rust, переключение языка и темы. Платные
 // возможности и организации появятся здесь же, отдельной вкладки не будет.
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { availableLocales } from '../locales/index.js';
 import { THEMES } from '../themes/index.js';
 
@@ -15,6 +15,34 @@ const bio = ref('');
 const links = ref([]);
 const profileBusy = ref(false);
 const profileStatus = ref('');
+const avatarInput = ref(null);
+const avatarStatus = ref('');
+const avatarBusy = ref(false);
+
+// Превью аватара — миниатюра из каталога Rust; сам файл не читается.
+const avatarThumb = computed(() => {
+  const id = props.state.avatarDraft?.blob_id;
+  return id ? props.state.thumbs[id] ?? '' : '';
+});
+
+function pickAvatar() {
+  avatarInput.value?.click();
+}
+
+async function onAvatar(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file || avatarBusy.value) return;
+  avatarBusy.value = true;
+  avatarStatus.value = '';
+  try {
+    await props.api.uploadAvatar(file);
+  } catch (e) {
+    avatarStatus.value = props.api.t('profile_avatar_fail') + ': ' + (e?.message ?? e);
+  } finally {
+    avatarBusy.value = false;
+  }
+}
 
 // Форма заполняется из подписанного профиля, который пришёл из Rust.
 watch(
@@ -73,6 +101,21 @@ async function acceptLink() {
 
     <div class="card">
       <h2>{{ api.t('profile_edit') }}</h2>
+      <div class="avatar-row">
+        <img v-if="avatarThumb" :src="avatarThumb" class="avatar" alt="" />
+        <div v-else class="avatar placeholder" aria-hidden="true">?</div>
+        <div class="avatar-actions">
+          <button type="button" class="ghost" :disabled="avatarBusy" @click="pickAvatar">
+            {{ avatarBusy ? api.t('create_encrypting') : api.t('profile_avatar_pick') }}
+          </button>
+          <button v-if="state.avatarDraft" type="button" class="ghost"
+                  @click="api.clearAvatar()">
+            {{ api.t('profile_avatar_remove') }}
+          </button>
+        </div>
+        <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatar" />
+      </div>
+      <p v-if="avatarStatus" class="muted">{{ avatarStatus }}</p>
       <label class="field">
         <span class="muted">{{ api.t('profile_name') }}</span>
         <input v-model="name" class="text-input" maxlength="80" autocomplete="off" />
@@ -146,6 +189,24 @@ async function acceptLink() {
   color: var(--text-primary);
   font: inherit;
 }
+.avatar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-subtle);
+  flex: none;
+}
+.avatar.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: 20px;
+}
+.avatar-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .links { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .link-row { display: flex; align-items: center; gap: 6px; }
 .link-row .text-input { flex: 1; min-width: 0; }

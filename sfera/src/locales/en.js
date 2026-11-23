@@ -66,6 +66,9 @@ export default {
   profile_link_label: 'Label',
   profile_link_url: 'https://…',
   profile_remove_link: 'Remove link',
+  profile_avatar_pick: 'Choose avatar',
+  profile_avatar_remove: 'Remove avatar',
+  profile_avatar_fail: 'Could not upload avatar',
 
   settings_language: 'Language',
   settings_theme: 'Theme',

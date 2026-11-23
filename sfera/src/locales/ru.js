@@ -67,6 +67,9 @@ export default {
   profile_link_label: 'Подпись',
   profile_link_url: 'https://…',
   profile_remove_link: 'Удалить ссылку',
+  profile_avatar_pick: 'Выбрать аватар',
+  profile_avatar_remove: 'Убрать аватар',
+  profile_avatar_fail: 'Не удалось загрузить аватар',
 
   settings_language: 'Язык',
   settings_theme: 'Тема оформления',

@@ -30,11 +30,19 @@ const bridge = {
   profile: async () => myProfile,
   setMyProfile: async (req) => {
     myProfile = {
-      profile: { display_name: req.display_name, bio: req.bio, links: req.links },
+      profile: {
+        display_name: req.display_name,
+        bio: req.bio,
+        avatar: req.avatar ?? null,
+        links: req.links,
+      },
       sig: 'x',
     };
     return { v: 7, outcome: 'inserted' };
   },
+  uploadMedia: async (mime) => ({
+    v: 7, blob_id: 'av1', mime, size: 12, kind: 'Image', file_key_hex: '00',
+  }),
   libraryItems: async () => [],
   libraryForget: async () => true,
   libraryOpen: async (blobId) => ({
@@ -110,6 +118,28 @@ check(s.myProfile.profile.display_name === 'Ann2', 'profile reloaded after save'
 let nameThrew = false;
 try { await api.saveProfile({ displayName: '   ' }); } catch { nameThrew = true; }
 check(nameThrew, 'empty display name rejected before Rust');
+
+// FileReader — граница браузера; в тесте только отдаём готовый data URL.
+globalThis.FileReader = class {
+  readAsDataURL(file) {
+    this.result = `data:${file.type};base64,AAAA`;
+    queueMicrotask(() => this.onload?.());
+  }
+};
+await api.uploadAvatar({ type: 'image/png' });
+check(s.uploads.length === 0, 'avatar does not enter post attachments');
+check(s.avatarDraft?.blob_id === 'av1', 'avatar draft points at uploaded blob');
+await api.saveProfile({ displayName: 'Ann3' });
+check(s.myProfile.profile.avatar?.blob_id === 'av1', 'avatar saved with profile');
+api.clearAvatar();
+check(s.avatarDraft === null, 'avatar can be removed before save');
+let avatarThrew = false;
+try { await api.uploadAvatar({ type: 'text/plain' }); } catch { avatarThrew = true; }
+check(avatarThrew, 'non-image avatar rejected before upload');
+
+s.avatarDraft = { blob_id: 'b9', mime: 'image/png', size: 1 };
+await api.forgetFile('b9');
+check(s.avatarDraft === null, 'forgetting the avatar blob clears the draft');
 
 let threw = false;
 try { await api.publish({ body: '   ', audience }); } catch { threw = true; }

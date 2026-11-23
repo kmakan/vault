@@ -66,6 +66,9 @@ export default {
   profile_link_label: '标签',
   profile_link_url: 'https://…',
   profile_remove_link: '删除链接',
+  profile_avatar_pick: '选择头像',
+  profile_avatar_remove: '移除头像',
+  profile_avatar_fail: '无法上传头像',
 
   settings_language: '语言',
   settings_theme: '主题',
