@@ -91,4 +91,8 @@ export default {
   storage_gallery: '我的文件',
   storage_gallery_empty: '尚未上传文件',
   storage_forget: '从列表中移除',
+  storage_preview_title: '文件预览',
+  storage_preview_close: '关闭预览',
+  storage_preview_no_image: '仅图片支持预览',
+  storage_preview_fail: '无法打开文件',
 };

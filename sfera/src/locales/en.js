@@ -91,4 +91,8 @@ export default {
   storage_gallery: 'My files',
   storage_gallery_empty: 'No files uploaded yet',
   storage_forget: 'Remove from list',
+  storage_preview_title: 'File preview',
+  storage_preview_close: 'Close preview',
+  storage_preview_no_image: 'Preview is available for images only',
+  storage_preview_fail: 'Could not open file',
 };

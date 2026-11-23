@@ -20,6 +20,11 @@ const bridge = {
   contacts: async () => [{ fp: 'aa:bb', role: 'friend' }],
   audiences: async () => [audience],
   storeCaps: async () => ({ kind: 'Local', range: true }),
+  libraryItems: async () => [],
+  libraryForget: async () => true,
+  libraryOpen: async (blobId) => ({
+    v: 7, blob_id: blobId, mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA',
+  }),
   publishPost: async (req) => { calls.push(req); return { v: 7, id: 'p2', ts: req.ts }; },
   companionAction: async (handled) => ({ install: !handled, target: 'vault://open' }),
 };
@@ -49,6 +54,21 @@ check(api.setTheme('light') && s.theme === 'light', 'theme switch');
 check(!api.setTheme('neon') && s.theme === 'light', 'unknown theme rejected');
 check(api.themeVars()['--bg-primary'] === '#ffffff', 'theme vars from theme registry');
 check(api.t('nav_feed') === 'Feed', 'translate uses active locale');
+
+const content = await api.openFile('blob-1');
+check(content.kind === 'Image', 'opened file comes from Rust');
+check(s.preview.blob_id === 'blob-1', 'preview is set');
+check(s.previewUrl === 'data:image/png;base64,AAA', 'image preview url for display only');
+api.closePreview();
+check(s.preview === null && s.previewUrl === null, 'preview closed');
+
+bridge.libraryOpen = async (blobId) => ({
+  v: 7, blob_id: blobId, mime: 'application/pdf', kind: 'Document', size: 9, data_base64: 'AAA',
+});
+const doc = await api.openFile('blob-2');
+check(doc.kind === 'Document' && s.previewUrl === null, 'documents have no inline preview');
+await api.forgetFile('blob-2');
+check(s.preview === null && s.previewUrl === null, 'forgetting open file closes preview');
 
 let threw = false;
 try { await api.publish({ body: '   ', audience }); } catch { threw = true; }

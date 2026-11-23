@@ -10,12 +10,19 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use social_media_kind::MediaKind;
+use storage_api::{BlobId, BlobStore, Locator};
+use tokio::io::AsyncReadExt;
 
 pub const FILE: &str = "media_library.json";
+
+/// Потолок для полной расшифровки в UI: большие файлы открываются через
+/// Range/стриминг, а не загружаются целиком в память окна.
+pub const MAX_OPEN_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryEntry {
@@ -152,6 +159,69 @@ pub fn forget_at(keys_dir: &Path, blob_id: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Расшифрованный свой файл для просмотра в UI. `bytes` — plaintext,
+/// поэтому `Debug` печатает только размер, а не содержимое.
+pub struct Opened {
+    pub blob_id: String,
+    pub mime: String,
+    pub kind: MediaKind,
+    pub size: u64,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Opened")
+            .field("blob_id", &self.blob_id)
+            .field("mime", &self.mime)
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+fn entry_at(keys_dir: &Path, blob_id: &str) -> Result<Option<LibraryEntry>> {
+    Ok(load_at(keys_dir)?.into_iter().find(|e| e.blob_id == blob_id))
+}
+
+/// Открыть свой файл: найти запись каталога, прочитать шифротекст из
+/// хранилища и расшифровать. Ключ не покидает Rust; в UI уходит результат,
+/// который интерфейс только показывает.
+pub async fn open_at(
+    keys_dir: &Path,
+    store: &dyn BlobStore,
+    blob_id: &str,
+) -> Result<Option<Opened>> {
+    let Some(entry) = entry_at(keys_dir, blob_id)? else {
+        return Ok(None);
+    };
+    if entry.size > MAX_OPEN_BYTES {
+        return Err(anyhow!(
+            "file is too large to open in UI: {} bytes (max {MAX_OPEN_BYTES})",
+            entry.size
+        ));
+    }
+    let key: [u8; 32] = hex::decode(&entry.file_key_hex)
+        .context("file key is not hex")?
+        .try_into()
+        .map_err(|_| anyhow!("file key must be 32 bytes"))?;
+    let loc = Locator {
+        store_id: entry.store_id.clone(),
+        uri: entry.uri.clone(),
+        blob_id: BlobId::from_str(&entry.blob_id).map_err(|e| anyhow!("bad blob id: {e}"))?,
+    };
+    let mut reader = store.get(&loc, None).await.context("read blob")?;
+    let mut cipher = Vec::new();
+    reader.read_to_end(&mut cipher).await.context("read blob body")?;
+    let bytes = social_media::decrypt_blob(&cipher, &key).context("decrypt blob")?;
+    Ok(Some(Opened {
+        blob_id: entry.blob_id,
+        mime: entry.mime,
+        kind: entry.kind,
+        size: bytes.len() as u64,
+        bytes,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +272,42 @@ mod tests {
         let dbg = format!("{:?}", entries[0]);
         assert!(!dbg.contains(&"cd".repeat(32)));
         assert!(dbg.contains("<redacted>"));
+    }
+
+    #[tokio::test]
+    async fn open_returns_plaintext_and_keeps_key_inside() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path().join("blobs")).unwrap();
+        let plaintext = b"real photo bytes";
+        let up = social_upload::upload_encrypted(&store, "image/png", plaintext)
+            .await
+            .unwrap();
+        remember_at(dir.path(), &up, 5).unwrap();
+
+        let opened = open_at(dir.path(), &store, &up.blob_id).await.unwrap().unwrap();
+        assert_eq!(opened.bytes, plaintext);
+        assert_eq!(opened.mime, "image/png");
+        assert_eq!(opened.kind, MediaKind::Image);
+        assert_eq!(opened.size, plaintext.len() as u64);
+        // Debug расшифрованного файла не печатает содержимое.
+        assert!(!format!("{opened:?}").contains("real photo"));
+    }
+
+    #[tokio::test]
+    async fn open_unknown_blob_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path()).unwrap();
+        assert!(open_at(dir.path(), &store, &"0".repeat(64)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn oversized_file_is_rejected_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path()).unwrap();
+        let mut big = uploaded("a", "video/mp4");
+        big.size = MAX_OPEN_BYTES + 1;
+        remember_at(dir.path(), &big, 1).unwrap();
+        let err = open_at(dir.path(), &store, &big.blob_id).await.unwrap_err();
+        assert!(err.to_string().contains("too large"));
     }
 }

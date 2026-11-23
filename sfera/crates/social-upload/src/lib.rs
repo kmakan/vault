@@ -42,11 +42,12 @@ impl std::fmt::Debug for UploadResult {
     }
 }
 
-/// Зашифровать и записать файл. `store_id` нужен только для DTO: сам адаптер
-/// уже выбран вызывающим через `storage-factory`.
+/// Зашифровать и записать файл. Адаптер уже выбран вызывающим через
+/// `storage-factory`; идентификатор хранилища берём из `Locator`, который
+/// вернул сам адаптер, — иначе DTO и манифест разойдутся с реальной локацией
+/// (например, `Local` вместо `local`) и файл не откроется по этому адресу.
 pub async fn upload_encrypted(
     store: &dyn BlobStore,
-    store_id: &str,
     mime: &str,
     plaintext: &[u8],
 ) -> Result<UploadResult, StorageError> {
@@ -70,7 +71,7 @@ pub async fn upload_encrypted(
         mime: mime.to_string(),
         kind: social_media_kind::classify(mime),
         size,
-        store_id: store_id.to_string(),
+        store_id: loc.store_id.clone(),
         uri: loc.uri,
     })
 }
@@ -113,7 +114,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = LocalStore::new(dir.path()).unwrap();
         let plaintext = b"secret photo bytes";
-        let r = upload_encrypted(&store, "device", "image/jpeg", plaintext).await.unwrap();
+        let r = upload_encrypted(&store, "image/jpeg", plaintext).await.unwrap();
 
         assert_eq!(r.kind, MediaKind::Image);
         assert_eq!(r.blob_id.len(), 64);
@@ -121,6 +122,8 @@ mod tests {
         assert_ne!(r.blob_id, r.content_id, "хеш файла и хеш содержимого разные");
         assert_eq!(r.file_key_hex.len(), 64);
         assert_eq!(r.size, plaintext.len() as u64 + 71 + 16); // header + tag
+        // id хранилища — из Locator адаптера, а не из UI-подписи.
+        assert_eq!(r.store_id, "local");
 
         let bytes = std::fs::read(&r.uri).unwrap();
         assert!(bytes.starts_with(b"VAULTBLOB1"));
@@ -136,7 +139,7 @@ mod tests {
     async fn manifest_carries_key_and_matches_locator() {
         let dir = tempfile::tempdir().unwrap();
         let store = LocalStore::new(dir.path()).unwrap();
-        let r = upload_encrypted(&store, "device", "video/mp4", b"video bytes")
+        let r = upload_encrypted(&store, "video/mp4", b"video bytes")
             .await.unwrap();
         let m = build_manifest("post-1", &r).unwrap();
         assert_eq!(m.post_id, "post-1");

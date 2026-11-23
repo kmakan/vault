@@ -22,6 +22,9 @@ const bridge = createBridge(async (name, args) => {
   if (name === COMMANDS.planFor) return { months: 12, kopecks: 149000 };
   if (name === COMMANDS.mediaKind) return 'Video';
   if (name === COMMANDS.orgAllowsMedia) return false;
+  if (name === COMMANDS.libraryOpen) {
+    return { v: 1, blob_id: 'aa', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA' };
+  }
   return null;
 });
 
@@ -47,11 +50,14 @@ const plan = await bridge.planFor({ plans: [] }, 12);
 check(plan.months === 12, 'plan_for passed through');
 check((await bridge.mediaKind('video/mp4')) === 'Video', 'media kind from Rust');
 check((await bridge.orgAllowsMedia('viewer')) === false, 'org rights from Rust');
+const content = await bridge.libraryOpen('aa');
+check(content.kind === 'Image' && content.data_base64 === 'AAA', 'library content from Rust');
 
-check(calls.length === 14, `expected 14 invoke calls, got ${calls.length}`);
+check(calls.length === 15, `expected 15 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
+check(calls[14].args.blobId === 'aa', 'library open arg');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

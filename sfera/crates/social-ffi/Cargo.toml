@@ -10,6 +10,7 @@ description = "Vault Sfera: тонкий слой Tauri-команд social_* (A
 social-app = { path = "../social-app" }
 social-contacts = { path = "../social-contacts" }
 social-upload = { path = "../social-upload" }
+social-media-kind = { path = "../social-media-kind" }
 social-manifest = { path = "../social-manifest" }
 social-library = { path = "../social-library" }
 social-post = { path = "../social-post" }

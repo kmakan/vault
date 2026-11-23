@@ -34,6 +34,10 @@ export function createAppState({
     // затем уходит в E2E-манифест и очищается.
     uploads: [],
     library: [],
+    // Открытый файл: содержимое уже расшифровано в Rust. `previewUrl` —
+    // только способ показать картинку; для остальных типов он пуст.
+    preview: null,
+    previewUrl: null,
     error: null,
   });
 
@@ -147,8 +151,29 @@ export function createAppState({
 
     loadLibrary: () => load('library', () => bridge.libraryItems()),
 
+    // Просмотр своего файла: расшифровка и ключ — в Rust, здесь только
+    // показ уже готовых байтов.
+    async openFile(blobId) {
+      const content = await bridge.libraryOpen(blobId);
+      if (!content) throw new Error('file not found');
+      state.preview = content;
+      state.previewUrl = content.kind === 'Image'
+        ? `data:${content.mime};base64,${content.data_base64}`
+        : null;
+      return content;
+    },
+
+    closePreview() {
+      state.preview = null;
+      state.previewUrl = null;
+    },
+
     async forgetFile(blobId) {
       await bridge.libraryForget(blobId);
+      if (state.preview?.blob_id === blobId) {
+        state.preview = null;
+        state.previewUrl = null;
+      }
       state.library = await bridge.libraryItems();
     },
 

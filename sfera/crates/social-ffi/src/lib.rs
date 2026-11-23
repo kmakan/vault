@@ -126,6 +126,18 @@ pub struct PublishPostRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostDto { pub v: u8, pub id: String, pub ts: u64 }
 
+/// Содержимое своего файла для просмотра. Ключ остался в Rust: наружу
+/// уходит уже расшифрованный файл, MIME и размер plaintext.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryContentDto {
+    pub v: u8,
+    pub blob_id: String,
+    pub mime: String,
+    pub kind: social_media_kind::MediaKind,
+    pub size: u64,
+    pub data_base64: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReceivePostsRequest {
     pub v: u8,
@@ -391,8 +403,7 @@ async fn social_upload_media(
         .decode(&data_base64)
         .map_err(|e| CommandError::input(format!("bad base64: {e}")))?;
     let store = state.store_handle()?;
-    let store_id = store.caps().kind;
-    let result = social_upload::upload_encrypted(store.as_ref(), &format!("{store_id:?}"), &mime, &bytes)
+    let result = social_upload::upload_encrypted(store.as_ref(), &mime, &bytes)
         .await
         .map_err(|e| CommandError::backend(format!("upload: {e}")))?;
     let now = std::time::SystemTime::now()
@@ -417,6 +428,29 @@ fn social_library_items(state: tauri::State<'_, SferaState>) -> Result<Vec<socia
 fn social_library_forget(state: tauri::State<'_, SferaState>, blob_id: String) -> Result<bool, CommandError> {
     social_library::forget_at(&state.keys_dir, &blob_id)
         .map_err(|e| CommandError::backend(format!("library: {e}")))
+}
+
+/// Прочитать и расшифровать свой файл для предпросмотра. Расшифровка и
+/// поиск ключа — в `social-library`; FFI только кодирует байты в base64.
+/// `None` — файла нет в каталоге (например, запись удалена).
+#[tauri::command]
+async fn social_library_open(
+    state: tauri::State<'_, SferaState>,
+    blob_id: String,
+) -> Result<Option<LibraryContentDto>, CommandError> {
+    use base64::Engine as _;
+    let store = state.store_handle()?;
+    let opened = social_library::open_at(&state.keys_dir, store.as_ref(), &blob_id)
+        .await
+        .map_err(|e| CommandError::backend(format!("library: {e}")))?;
+    Ok(opened.map(|o| LibraryContentDto {
+        v: API_VERSION,
+        blob_id: o.blob_id,
+        mime: o.mime,
+        kind: o.kind,
+        size: o.size,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&o.bytes),
+    }))
 }
 
 /// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
@@ -471,6 +505,7 @@ pub fn handles(command: &str) -> bool {
             | "social_upload_media"
             | "social_library_items"
             | "social_library_forget"
+            | "social_library_open"
             | "social_publish_with_media"
             | "social_create_audience"
             | "social_set_audience_members"
@@ -504,6 +539,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_upload_media,
         social_library_items,
         social_library_forget,
+        social_library_open,
         social_publish_with_media,
         social_create_audience,
         social_set_audience_members,

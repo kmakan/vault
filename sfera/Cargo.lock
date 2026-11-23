@@ -3280,6 +3280,7 @@ dependencies = [
  "social-contacts",
  "social-library",
  "social-manifest",
+ "social-media-kind",
  "social-model",
  "social-post",
  "social-sync",
@@ -3352,9 +3353,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "social-media",
  "social-media-kind",
  "social-upload",
+ "storage-api",
+ "storage-local",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

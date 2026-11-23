@@ -92,4 +92,8 @@ export default {
   storage_gallery: 'Мои файлы',
   storage_gallery_empty: 'Вы ещё ничего не загрузили',
   storage_forget: 'Убрать из списка',
+  storage_preview_title: 'Просмотр файла',
+  storage_preview_close: 'Закрыть просмотр',
+  storage_preview_no_image: 'Предпросмотр доступен только для изображений',
+  storage_preview_fail: 'Не удалось открыть файл',
 };

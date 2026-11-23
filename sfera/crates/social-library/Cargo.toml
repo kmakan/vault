@@ -8,10 +8,15 @@ description = "Vault Sfera: локальный каталог своих мед�
 
 [dev-dependencies]
 tempfile = "3"
+storage-local = { path = "../storage-local" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [dependencies]
 social-upload = { path = "../social-upload" }
+social-media = { path = "../social-media" }
 social-media-kind = { path = "../social-media-kind" }
+storage-api = { path = "../storage-api" }
+tokio = { version = "1", features = ["io-util"] }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 serde_json = "1"
