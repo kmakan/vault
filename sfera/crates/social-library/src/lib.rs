@@ -36,6 +36,20 @@ pub struct LibraryEntry {
     pub store_id: String,
     pub uri: String,
     pub added_at: u64,
+    /// Миниатюра, если она была сделана при загрузке. Ключ не хранится:
+    /// он выводится из ключа файла.
+    #[serde(default)]
+    pub thumb: Option<ThumbRef>,
+}
+
+/// Локация миниатюры в хранилище. Секретов нет: ключ выводится из ключа файла.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThumbRef {
+    pub blob_id: String,
+    pub store_id: String,
+    pub uri: String,
+    /// Размер шифрованного блоба миниатюры.
+    pub size: u64,
 }
 
 /// DTO для UI: без ключа и без локального пути.
@@ -46,6 +60,8 @@ pub struct LibraryItem {
     pub kind: MediaKind,
     pub size: u64,
     pub added_at: u64,
+    /// Есть ли готовая миниатюра (ключ и локатор остаются в Rust).
+    pub thumb_blob_id: Option<String>,
 }
 
 impl From<&LibraryEntry> for LibraryItem {
@@ -56,6 +72,7 @@ impl From<&LibraryEntry> for LibraryItem {
             kind: e.kind,
             size: e.size,
             added_at: e.added_at,
+            thumb_blob_id: e.thumb.as_ref().map(|t| t.blob_id.clone()),
         }
     }
 }
@@ -137,6 +154,12 @@ pub fn remember_at(keys_dir: &Path, uploaded: &social_upload::UploadResult, now:
         store_id: uploaded.store_id.clone(),
         uri: uploaded.uri.clone(),
         added_at: now,
+        thumb: uploaded.thumb.as_ref().map(|t| ThumbRef {
+            blob_id: t.blob_id.clone(),
+            store_id: t.store_id.clone(),
+            uri: t.uri.clone(),
+            size: t.size,
+        }),
     });
     write_at(keys_dir, &entries)
 }
@@ -183,9 +206,15 @@ fn entry_at(keys_dir: &Path, blob_id: &str) -> Result<Option<LibraryEntry>> {
     Ok(load_at(keys_dir)?.into_iter().find(|e| e.blob_id == blob_id))
 }
 
-/// Открыть свой файл: найти запись каталога, прочитать шифротекст из
-/// хранилища и расшифровать. Ключ не покидает Rust; в UI уходит результат,
-/// который интерфейс только показывает.
+fn file_key(entry: &LibraryEntry) -> Result<[u8; 32]> {
+    hex::decode(&entry.file_key_hex)
+        .context("file key is not hex")?
+        .try_into()
+        .map_err(|_| anyhow!("file key must be 32 bytes"))
+}
+
+/// Прочитать и расшифровать свой файл для предпросмотра. Ключ не покидает
+/// Rust; в UI уходит результат, который интерфейс только показывает.
 pub async fn open_at(
     keys_dir: &Path,
     store: &dyn BlobStore,
@@ -200,10 +229,7 @@ pub async fn open_at(
             entry.size
         ));
     }
-    let key: [u8; 32] = hex::decode(&entry.file_key_hex)
-        .context("file key is not hex")?
-        .try_into()
-        .map_err(|_| anyhow!("file key must be 32 bytes"))?;
+    let key = file_key(&entry)?;
     let loc = Locator {
         store_id: entry.store_id.clone(),
         uri: entry.uri.clone(),
@@ -217,6 +243,39 @@ pub async fn open_at(
         blob_id: entry.blob_id,
         mime: entry.mime,
         kind: entry.kind,
+        size: bytes.len() as u64,
+        bytes,
+    }))
+}
+
+/// Прочитать и расшифровать миниатюру своего файла. `None` — миниатюры нет
+/// (не изображение или файл загружен до её появления). `blob_id` в результате —
+/// основной блоб: по нему UI связывает превью с записью каталога.
+pub async fn open_thumb_at(
+    keys_dir: &Path,
+    store: &dyn BlobStore,
+    blob_id: &str,
+) -> Result<Option<Opened>> {
+    let Some(entry) = entry_at(keys_dir, blob_id)? else {
+        return Ok(None);
+    };
+    let Some(thumb) = entry.thumb.as_ref() else {
+        return Ok(None);
+    };
+    let key = file_key(&entry)?;
+    let loc = Locator {
+        store_id: thumb.store_id.clone(),
+        uri: thumb.uri.clone(),
+        blob_id: BlobId::from_str(&thumb.blob_id).map_err(|e| anyhow!("bad thumb id: {e}"))?,
+    };
+    let mut reader = store.get(&loc, None).await.context("read thumb")?;
+    let mut cipher = Vec::new();
+    reader.read_to_end(&mut cipher).await.context("read thumb body")?;
+    let bytes = social_media::decrypt_thumbnail(&cipher, &key).context("decrypt thumb")?;
+    Ok(Some(Opened {
+        blob_id: entry.blob_id,
+        mime: "image/jpeg".into(),
+        kind: MediaKind::Image,
         size: bytes.len() as u64,
         bytes,
     }))
@@ -237,6 +296,7 @@ mod tests {
             size: 42,
             store_id: "device".into(),
             uri: "/tmp/x.blob".into(),
+            thumb: None,
         }
     }
 
@@ -298,6 +358,45 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = storage_local::LocalStore::new(dir.path()).unwrap();
         assert!(open_at(dir.path(), &store, &"0".repeat(64)).await.unwrap().is_none());
+        assert!(open_thumb_at(dir.path(), &store, &"0".repeat(64)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn open_thumb_returns_jpeg_for_image() {
+        use image::ImageEncoder;
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path().join("blobs")).unwrap();
+        let img = image::RgbImage::from_pixel(800, 600, image::Rgb([10, 20, 30]));
+        let mut src = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut src)
+            .write_image(img.as_raw(), 800, 600, image::ExtendedColorType::Rgb8)
+            .unwrap();
+
+        let up = social_upload::upload_encrypted(&store, "image/png", &src)
+            .await
+            .unwrap();
+        assert!(up.thumb.is_some(), "у изображения есть миниатюра");
+        remember_at(dir.path(), &up, 1).unwrap();
+
+        let opened = open_thumb_at(dir.path(), &store, &up.blob_id)
+            .await
+            .unwrap()
+            .expect("thumb");
+        assert_eq!(opened.mime, "image/jpeg");
+        assert_eq!(opened.kind, MediaKind::Image);
+        assert_eq!(&opened.bytes[..2], &[0xFF, 0xD8]);
+        assert_eq!(opened.blob_id, up.blob_id, "превью связано с основным блобом");
+
+        let item = items_at(dir.path()).unwrap();
+        assert_eq!(item[0].thumb_blob_id, up.thumb.map(|t| t.blob_id));
+    }
+
+    #[tokio::test]
+    async fn open_thumb_without_thumbnail_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path()).unwrap();
+        remember_at(dir.path(), &uploaded("a", "video/mp4"), 1).unwrap();
+        assert!(open_thumb_at(dir.path(), &store, &"a".repeat(32)).await.unwrap().is_none());
     }
 
     #[tokio::test]

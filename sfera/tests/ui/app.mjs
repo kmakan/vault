@@ -25,6 +25,9 @@ const bridge = {
   libraryOpen: async (blobId) => ({
     v: 7, blob_id: blobId, mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA',
   }),
+  libraryThumb: async (blobId) => ({
+    v: 7, blob_id: blobId, mime: 'image/jpeg', kind: 'Image', size: 3, data_base64: 'AAA',
+  }),
   mediaKind: async (mime) => (mime.startsWith('image/') ? 'Image' : 'Document'),
   publishPost: async (req) => { calls.push(req); return { v: 7, id: 'p2', ts: req.ts }; },
   companionAction: async (handled) => ({ install: !handled, target: 'vault://open' }),
@@ -71,6 +74,12 @@ const doc = await api.openFile('blob-2');
 check(doc.kind === 'Document' && s.previewUrl === null, 'documents have no inline preview');
 await api.forgetFile('blob-2');
 check(s.preview === null && s.previewUrl === null, 'forgetting open file closes preview');
+
+s.library = [{ blob_id: 'b1', thumb_blob_id: 't1' }];
+s.feed = [{ id: 'p1', post: { post: { media: [{ blob_id: 'b2', thumb_blob_id: 't2' }] } } }];
+await api.loadThumbs();
+check(s.thumbs.b1 === 'data:image/jpeg;base64,AAA', 'library thumbnail loaded');
+check(s.thumbs.b2 === 'data:image/jpeg;base64,AAA', 'feed media thumbnail loaded');
 
 let threw = false;
 try { await api.publish({ body: '   ', audience }); } catch { threw = true; }

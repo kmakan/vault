@@ -10,6 +10,7 @@ description = "Vault Sfera: локальный каталог своих мед�
 tempfile = "3"
 storage-local = { path = "../storage-local" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dependencies]
 social-upload = { path = "../social-upload" }

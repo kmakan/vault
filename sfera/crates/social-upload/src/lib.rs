@@ -8,10 +8,28 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use social_media::{encrypt_blob, generate_file_key, generate_nonce_prefix, DEFAULT_CHUNK_SIZE};
+use social_media::{
+    encrypt_blob, encrypt_thumbnail, generate_file_key, generate_nonce_prefix, thumb_key,
+    DEFAULT_CHUNK_SIZE,
+};
 use social_media_kind::MediaKind;
 use social_manifest::{BlobEntry, BlobKey, Manifest, ManifestError};
 use storage_api::{BlobId, BlobStore, Locator, StorageError};
+
+pub mod thumb;
+
+/// Миниатюра, записанная отдельным блобом. Ключ не хранится: он выводится
+/// из ключа файла (`social_media::thumb_key`).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThumbResult {
+    pub blob_id: String,
+    pub content_id: String,
+    pub mime: String,
+    /// Размер шифрованного блоба миниатюры.
+    pub size: u64,
+    pub store_id: String,
+    pub uri: String,
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadResult {
@@ -29,6 +47,10 @@ pub struct UploadResult {
     pub size: u64,
     pub store_id: String,
     pub uri: String,
+    /// Маленький JPEG для галереи/ленты; `None` — не изображение или битый
+    /// файл. Отсутствие миниатюры не мешает открыть полный файл.
+    #[serde(default)]
+    pub thumb: Option<ThumbResult>,
 }
 
 impl std::fmt::Debug for UploadResult {
@@ -63,6 +85,33 @@ pub async fn upload_encrypted(
         .put(&storage_id, Box::new(reader), size)
         .await?;
 
+    // Миниатюра — отдельный блоб со своим ключом (HKDF от ключа файла).
+    // Её отсутствие не ошибка: картинка может быть битой или не image/*.
+    let thumb = match thumb::make_thumbnail(plaintext, mime) {
+        Some(bytes) => {
+            let encrypted_thumb = encrypt_thumbnail(&bytes, &file_key)
+                .map_err(|e| StorageError::Backend(format!("thumb encrypt: {e}")))?;
+            let thumb_size = encrypted_thumb.bytes.len() as u64;
+            let thumb_id = BlobId::from_bytes(Sha256::digest(&encrypted_thumb.bytes).into());
+            let thumb_loc = store
+                .put(
+                    &thumb_id,
+                    Box::new(std::io::Cursor::new(encrypted_thumb.bytes)),
+                    thumb_size,
+                )
+                .await?;
+            Some(ThumbResult {
+                blob_id: thumb_id.to_hex(),
+                content_id: encrypted_thumb.blob_id.to_hex(),
+                mime: "image/jpeg".into(),
+                size: thumb_size,
+                store_id: thumb_loc.store_id.clone(),
+                uri: thumb_loc.uri,
+            })
+        }
+        None => None,
+    };
+
     Ok(UploadResult {
         blob_id: storage_id.to_hex(),
         content_id: encrypted.blob_id.to_hex(),
@@ -73,6 +122,7 @@ pub async fn upload_encrypted(
         size,
         store_id: loc.store_id.clone(),
         uri: loc.uri,
+        thumb,
     })
 }
 
@@ -99,7 +149,35 @@ pub fn build_manifest(post_id: &str, uploaded: &UploadResult) -> Result<Manifest
         mime: uploaded.mime.clone(),
         size: uploaded.size,
     };
-    let manifest = Manifest::new(post_id, vec![entry]);
+    let mut entries = vec![entry];
+    // Миниатюра — отдельный блоб; получателю нужен её ключ (HKDF от ключа
+    // файла) и локатор. Ключ едет в манифесте, как и ключ основного файла.
+    if let Some(t) = &uploaded.thumb {
+        let thumb_blob_id = BlobId::from_bytes(
+            hex::decode(&t.blob_id)
+                .map_err(|_| ManifestError::BlobMismatch)?
+                .try_into()
+                .map_err(|_| ManifestError::BlobMismatch)?,
+        );
+        let file_key: [u8; 32] = hex::decode(&uploaded.file_key_hex)
+            .map_err(|_| ManifestError::BlobMismatch)?
+            .try_into()
+            .map_err(|_| ManifestError::BlobMismatch)?;
+        entries.push(BlobEntry {
+            key: BlobKey {
+                blob_id: thumb_blob_id,
+                key_hex: hex::encode(thumb_key(&file_key)),
+            },
+            locators: vec![Locator {
+                store_id: t.store_id.clone(),
+                uri: t.uri.clone(),
+                blob_id: thumb_blob_id,
+            }],
+            mime: t.mime.clone(),
+            size: t.size,
+        });
+    }
+    let manifest = Manifest::new(post_id, entries);
     manifest.validate()?;
     Ok(manifest)
 }
@@ -159,9 +237,46 @@ mod tests {
             file_key_hex: "cd".repeat(32),
             nonce_prefix_hex: "ef".repeat(16), mime: "video/mp4".into(),
             kind: MediaKind::Video, size: 123, store_id: "device".into(), uri: "/x".into(),
+            thumb: None,
         };
         let dbg = format!("{r:?}");
         assert!(!dbg.contains(&"cd".repeat(32)));
         assert!(dbg.contains("<redacted>"));
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        use image::ImageEncoder;
+        let img = image::RgbImage::from_pixel(width, height, image::Rgb([10, 90, 200]));
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn image_upload_creates_encrypted_thumbnail_and_manifest_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalStore::new(dir.path()).unwrap();
+        let src = png(1200, 800);
+        let r = upload_encrypted(&store, "image/png", &src).await.unwrap();
+        let thumb = r.thumb.as_ref().expect("thumbnail for a real image");
+        assert_eq!(thumb.mime, "image/jpeg");
+        assert_ne!(thumb.blob_id, r.blob_id);
+
+        let cipher = std::fs::read(&thumb.uri).unwrap();
+        assert!(cipher.starts_with(b"VAULTBLOB1"));
+        let file_key: [u8; 32] = hex::decode(&r.file_key_hex).unwrap().try_into().unwrap();
+        let plain = social_media::decrypt_thumbnail(&cipher, &file_key).unwrap();
+        assert_eq!(&plain[..2], &[0xFF, 0xD8], "миниатюра — JPEG");
+
+        let m = build_manifest("post-1", &r).unwrap();
+        assert_eq!(m.entries.len(), 2, "файл + миниатюра");
+        let entry = m
+            .entries
+            .iter()
+            .find(|e| e.key.blob_id.to_hex() == thumb.blob_id)
+            .expect("thumb entry");
+        assert_eq!(entry.key.key_hex, hex::encode(thumb_key(&file_key)));
     }
 }

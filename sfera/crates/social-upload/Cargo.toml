@@ -20,3 +20,7 @@ social-media-kind = { path = "../social-media-kind" }
 serde = { version = "1", features = ["derive"] }
 hex = "0.4"
 sha2 = "0.10"
+# Только декодирование/уменьшение картинки для миниатюры. Форматы — те, что
+# реально приходят с телефонов; HEIC/AVIF сознательно не тянем (нет миниатюры,
+# полный файл всё равно доступен).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }

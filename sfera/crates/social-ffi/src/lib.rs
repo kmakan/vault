@@ -212,6 +212,20 @@ fn check(v: u8) -> Result<(), CommandError> {
     if v == API_VERSION { Ok(()) } else { Err(CommandError::version()) }
 }
 
+/// DTO содержимого: уже расшифрованные байты, MIME и размер plaintext.
+/// Ключ и формат блоба остаются в Rust.
+fn content_dto(o: social_library::Opened) -> LibraryContentDto {
+    use base64::Engine as _;
+    LibraryContentDto {
+        v: API_VERSION,
+        blob_id: o.blob_id,
+        mime: o.mime,
+        kind: o.kind,
+        size: o.size,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&o.bytes),
+    }
+}
+
 // ── Команды ──────────────────────────────────────────────────────────────
 
 /// Версия wire-контракта: UI сверяет её перед вызовами.
@@ -367,7 +381,15 @@ fn social_publish_with_media(
         );
         media.push(social_post::MediaRef {
             blob_id,
-            thumb_blob_id: None,
+            // Миниатюра — отдельный блоб; её id нужен получателю, чтобы
+            // показать превью без скачивания полного файла.
+            thumb_blob_id: u.thumb.as_ref().and_then(|t| {
+                hex::decode(&t.blob_id)
+                    .ok()?
+                    .try_into()
+                    .ok()
+                    .map(storage_api::BlobId::from_bytes)
+            }),
             mime: u.mime.clone(),
             size: u.size,
         });
@@ -438,19 +460,25 @@ async fn social_library_open(
     state: tauri::State<'_, SferaState>,
     blob_id: String,
 ) -> Result<Option<LibraryContentDto>, CommandError> {
-    use base64::Engine as _;
     let store = state.store_handle()?;
     let opened = social_library::open_at(&state.keys_dir, store.as_ref(), &blob_id)
         .await
         .map_err(|e| CommandError::backend(format!("library: {e}")))?;
-    Ok(opened.map(|o| LibraryContentDto {
-        v: API_VERSION,
-        blob_id: o.blob_id,
-        mime: o.mime,
-        kind: o.kind,
-        size: o.size,
-        data_base64: base64::engine::general_purpose::STANDARD.encode(&o.bytes),
-    }))
+    Ok(opened.map(content_dto))
+}
+
+/// Прочитать и расшифровать миниатюру своего файла. `None` — миниатюры нет
+/// (не изображение или файл загружен до её появления).
+#[tauri::command]
+async fn social_library_thumb(
+    state: tauri::State<'_, SferaState>,
+    blob_id: String,
+) -> Result<Option<LibraryContentDto>, CommandError> {
+    let store = state.store_handle()?;
+    let opened = social_library::open_thumb_at(&state.keys_dir, store.as_ref(), &blob_id)
+        .await
+        .map_err(|e| CommandError::backend(format!("library: {e}")))?;
+    Ok(opened.map(content_dto))
 }
 
 /// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
@@ -506,6 +534,7 @@ pub fn handles(command: &str) -> bool {
             | "social_library_items"
             | "social_library_forget"
             | "social_library_open"
+            | "social_library_thumb"
             | "social_publish_with_media"
             | "social_create_audience"
             | "social_set_audience_members"
@@ -540,6 +569,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_library_items,
         social_library_forget,
         social_library_open,
+        social_library_thumb,
         social_publish_with_media,
         social_create_audience,
         social_set_audience_members,

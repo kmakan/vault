@@ -28,6 +28,7 @@ export const COMMANDS = Object.freeze({
   libraryItems: 'social_library_items',
   libraryForget: 'social_library_forget',
   libraryOpen: 'social_library_open',
+  libraryThumb: 'social_library_thumb',
 });
 
 export function createBridge(invoke) {
@@ -130,6 +131,11 @@ export function createBridge(invoke) {
     // Расшифрованный файл приходит из Rust; ключ и формат UI не видит.
     libraryOpen(blobId) {
       return invoke(COMMANDS.libraryOpen, { blobId });
+    },
+
+    // Маленький JPEG для плитки; None — миниатюры нет.
+    libraryThumb(blobId) {
+      return invoke(COMMANDS.libraryThumb, { blobId });
     },
   };
 }

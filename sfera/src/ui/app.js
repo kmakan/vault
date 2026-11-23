@@ -34,6 +34,9 @@ export function createAppState({
     // затем уходит в E2E-манифест и очищается.
     uploads: [],
     library: [],
+    // Миниатюры по blob_id: маленький data URL для плитки/ленты. Полный
+    // файл по-прежнему открывается отдельным вызовом.
+    thumbs: {},
     // Открытый файл: содержимое уже расшифровано в Rust. `previewUrl` —
     // только способ показать картинку; для остальных типов он пуст.
     preview: null,
@@ -51,8 +54,33 @@ export function createAppState({
     }
   }
 
+  // Миниатюры не критичны: ошибка одного превью не должна ронять экран.
+  async function loadThumbs() {
+    const ids = new Set();
+    for (const item of state.library ?? []) {
+      if (item.thumb_blob_id) ids.add(item.blob_id);
+    }
+    for (const entry of state.feed ?? []) {
+      for (const m of entry.post?.post?.media ?? []) {
+        if (m.thumb_blob_id) ids.add(m.blob_id);
+      }
+    }
+    for (const id of ids) {
+      if (state.thumbs[id]) continue;
+      try {
+        const content = await bridge.libraryThumb(id);
+        if (content) {
+          state.thumbs[id] = `data:${content.mime};base64,${content.data_base64}`;
+        }
+      } catch {
+        // Превью не обязательно: файл всё равно откроется по клику.
+      }
+    }
+  }
+
   return {
     state,
+    loadThumbs,
 
     t(key, params) {
       return translate(state.locale, key, params);
@@ -96,10 +124,15 @@ export function createAppState({
         load('caps', () => bridge.storeCaps()),
         load('library', () => bridge.libraryItems()),
       ]);
+      await loadThumbs();
       return state;
     },
 
-    loadFeed: () => load('feed', () => bridge.feed()),
+    loadFeed: async () => {
+      const feed = await load('feed', () => bridge.feed());
+      await loadThumbs();
+      return feed;
+    },
     loadContacts: () => load('contacts', () => bridge.contacts()),
 
     // Тип медиа решает Rust: UI только показывает готовую подпись.
@@ -147,6 +180,7 @@ export function createAppState({
       const result = await bridge.uploadMedia(file.type || 'application/octet-stream', dataBase64);
       state.uploads.push(result);
       state.library = await bridge.libraryItems();
+      await loadThumbs();
       return result;
     },
 
@@ -154,7 +188,11 @@ export function createAppState({
       state.uploads = [];
     },
 
-    loadLibrary: () => load('library', () => bridge.libraryItems()),
+    loadLibrary: async () => {
+      const library = await load('library', () => bridge.libraryItems());
+      await loadThumbs();
+      return library;
+    },
 
     // Просмотр своего файла: расшифровка и ключ — в Rust, здесь только
     // показ уже готовых байтов.
@@ -179,6 +217,7 @@ export function createAppState({
         state.preview = null;
         state.previewUrl = null;
       }
+      delete state.thumbs[blobId];
       state.library = await bridge.libraryItems();
     },
 
@@ -198,6 +237,7 @@ export function createAppState({
       const post = await bridge.publishWithMedia(req, state.uploads);
       state.uploads = [];
       state.feed = await bridge.feed();
+      await loadThumbs();
       return post;
     },
 

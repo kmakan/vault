@@ -25,6 +25,9 @@ const bridge = createBridge(async (name, args) => {
   if (name === COMMANDS.libraryOpen) {
     return { v: 1, blob_id: 'aa', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA' };
   }
+  if (name === COMMANDS.libraryThumb) {
+    return { v: 1, blob_id: 'aa', mime: 'image/jpeg', kind: 'Image', size: 3, data_base64: 'AAA' };
+  }
   return null;
 });
 
@@ -52,12 +55,15 @@ check((await bridge.mediaKind('video/mp4')) === 'Video', 'media kind from Rust')
 check((await bridge.orgAllowsMedia('viewer')) === false, 'org rights from Rust');
 const content = await bridge.libraryOpen('aa');
 check(content.kind === 'Image' && content.data_base64 === 'AAA', 'library content from Rust');
+const thumb = await bridge.libraryThumb('aa');
+check(thumb.mime === 'image/jpeg', 'thumbnail from Rust');
 
-check(calls.length === 15, `expected 15 invoke calls, got ${calls.length}`);
+check(calls.length === 16, `expected 16 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
 check(calls[14].args.blobId === 'aa', 'library open arg');
+check(calls[15].args.blobId === 'aa', 'library thumb arg');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

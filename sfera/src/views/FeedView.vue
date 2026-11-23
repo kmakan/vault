@@ -72,7 +72,9 @@ function when(ts) {
       <div v-if="entry.post?.post?.media?.length" class="media-row">
         <button v-for="m in entry.post.post.media" :key="m.blob_id" type="button"
                 class="media-btn" @click="openMedia(m)">
-          {{ kindLabel(m.mime) }} · {{ m.size }} B
+          <img v-if="state.thumbs[m.blob_id]" class="media-thumb"
+               :src="state.thumbs[m.blob_id]" alt="" />
+          <span>{{ kindLabel(m.mime) }} · {{ m.size }} B</span>
         </button>
       </div>
     </article>
@@ -99,6 +101,9 @@ function when(ts) {
   margin-top: 10px;
 }
 .media-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -107,6 +112,12 @@ function when(ts) {
   cursor: pointer;
   font: inherit;
   font-size: 12px;
+}
+.media-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
 }
 .media-btn:hover {
   border-color: var(--accent-primary);

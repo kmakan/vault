@@ -71,6 +71,8 @@ function quota(bytes) {
                  role="button" tabindex="0"
                  @click="openPreview(item.blob_id)"
                  @keydown.enter="openPreview(item.blob_id)">
+          <img v-if="state.thumbs[item.blob_id]" class="tile-thumb"
+               :src="state.thumbs[item.blob_id]" alt="" />
           <span class="tile-kind">{{ item.kind }}</span>
           <span class="fp">{{ item.blob_id.slice(0, 12) }}…</span>
           <span class="muted">{{ item.size }} B</span>
@@ -131,5 +133,6 @@ function quota(bytes) {
 .tile { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: var(--radius-md); background: var(--bg-secondary); font-size: 11px; cursor: pointer; }
 .tile:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 .tile-kind { color: var(--accent-secondary); font-weight: 600; }
+.tile-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-sm); margin-bottom: 4px; background: var(--bg-primary); }
 .tile-remove { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 16px; }
 </style>
