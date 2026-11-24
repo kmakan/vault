@@ -138,6 +138,7 @@ fn contact_book_tracks_state_and_lists_only_contacts() {
         spheres: Vec::new(),
         history_granted: false,
         state: RelationState::Requested,
+        address: String::new(),
     });
     book.upsert(ContactRecord::blocked(c.clone()));
 
@@ -180,6 +181,7 @@ fn set_role_rejects_missing_and_non_contact_records() {
         spheres: Vec::new(),
         history_granted: false,
         state: RelationState::Requested,
+        address: String::new(),
     });
     assert_eq!(book.set_role(&fp(3), Role::Close), Err(ContactError::NotContact));
     assert_eq!(book.get(&fp(3)).unwrap().role, Role::Friend);
@@ -241,4 +243,31 @@ fn mark_nonce_prevents_double_grant() {
     assert!(!book.mark_nonce(&fp(1), &fp(2), "grant-1"), "повторная выдача запрещена");
     assert!(book.nonce_seen(&fp(1), &fp(2), "grant-1"));
     assert!(!book.nonce_seen(&fp(1), &fp(2), "grant-2"));
+}
+
+#[test]
+fn request_address_is_carried_into_record() {
+    // Адрес из заявки — единственный способ узнать, куда доставлять конверты
+    // этому контакту. Если он теряется, отправка профиля невозможна.
+    let mut book = ContactBook::new();
+    let req = ContactRequest::new(fp(1), fp(2), 100, "n-addr", "привет")
+        .unwrap()
+        .with_address("anna@example.org");
+    assert_eq!(book.accept_request(&req).unwrap(), RequestOutcome::Accepted);
+    assert_eq!(book.get(&fp(1)).unwrap().address, "anna@example.org");
+}
+
+#[test]
+fn empty_request_address_does_not_erase_known_one() {
+    // Повторная заявка без адреса не должна обнулять уже известный адрес:
+    // иначе одна старая форма ломает доставку.
+    let mut book = ContactBook::new();
+    let with_addr = ContactRequest::new(fp(1), fp(2), 100, "n-1", "привет")
+        .unwrap()
+        .with_address("anna@example.org");
+    book.accept_request(&with_addr).unwrap();
+
+    let without = ContactRequest::new(fp(1), fp(2), 101, "n-2", "ещё раз").unwrap();
+    book.accept_request(&without).unwrap();
+    assert_eq!(book.get(&fp(1)).unwrap().address, "anna@example.org");
 }

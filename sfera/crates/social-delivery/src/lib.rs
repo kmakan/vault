@@ -23,6 +23,28 @@ pub struct RecipientKeyMaterial {
     pub x25519_public_hex: String,
     /// ML-KEM-768 ek получателя, base64.
     pub pq_ek_b64: String,
+    /// Адрес получателя в книге отправителя (подсказка доставки).
+    /// Пусто — адрес неизвестен; на шифр не влияет.
+    pub address: String,
+}
+
+impl RecipientKeyMaterial {
+    /// Материал получателя из контакта bundle связывания. Ключи берутся
+    /// только публичные: приватная половина остаётся у владельца (ADR-009 §4).
+    pub fn from_linked(contact: &social_link::LinkedContact) -> Self {
+        Self {
+            fp: contact.fp.clone(),
+            x25519_public_hex: contact.x25519_pub.clone(),
+            pq_ek_b64: contact.pq_ek.clone(),
+            address: contact.address.clone(),
+        }
+    }
+
+    /// Готов ли контакт к адресной отправке: нужны оба публичных ключа.
+    /// Без них шифровать нечем — конверт не собрать.
+    pub fn can_seal(&self) -> bool {
+        !self.x25519_public_hex.is_empty() && !self.pq_ek_b64.is_empty()
+    }
 }
 
 /// Приватные ключи отправителя для обёртки.
@@ -131,4 +153,77 @@ pub fn unwrap_audience_key(
     let bytes = hex::decode(plaintext.trim()).map_err(|_| DeliveryError::BadKey)?;
     let key: [u8; 32] = bytes.try_into().map_err(|_| DeliveryError::BadKey)?;
     Ok(key)
+}
+
+// --- Конверт профиля (ADR-006 §7.6) ---------------------------------------
+//
+// Профиль (имя, аватар, ссылки) публикуется адресно: каждому контакту — свой
+// конверт, запечатанный ТЕМ ЖЕ E2E-примитивом Vault, что и сообщения. Открытый
+// профиль в конверте не лежит, поэтому сервер/релей его не читает.
+//
+// Конверт отличается от обёртки ключа аудитории назначением, а не шифром:
+// `wrap_audience_key` несёт 32-байтный ключ эпохи, `seal_payload` — произвольный
+// текст (профиль). Разделяем типы, чтобы их нельзя было перепутать местами.
+
+/// Адресный конверт произвольного содержимого.
+///
+/// `PartialEq` не выводится: `HybridHeader` из `vault-core` его не реализует,
+/// а сравнивать конверты целиком незачем — адресат и адрес проверяются полями.
+#[derive(Clone, Debug)]
+pub struct SealedEnvelope {
+    /// Кому адресован конверт (X25519-отпечаток получателя).
+    pub to: Fingerprint,
+    /// Адрес получателя в книге отправителя: подсказка для доставки и для
+    /// случая, когда отпечаток не совпал (алиас, смена адреса).
+    pub address: String,
+    /// Шифротекст (base64), как его отдаёт `hybrid_encrypt_vault`.
+    pub wire: String,
+    /// Гибридный заголовок: `kemct` и метаданные PQ.
+    pub header: HybridHeader,
+}
+
+/// Запечатать `plaintext` для получателя.
+pub fn seal_payload(
+    plaintext: &str,
+    sender: &SenderKeyMaterial,
+    recipient: &RecipientKeyMaterial,
+) -> Result<SealedEnvelope, DeliveryError> {
+    let (wire, header) = hybrid_encrypt_vault(
+        plaintext,
+        &sender.x25519_private_hex,
+        &recipient.x25519_public_hex,
+        sender.pq_seed_hex.as_deref(),
+        &recipient.pq_ek_b64,
+    )
+    .map_err(|e| DeliveryError::Wrap(e.to_string()))?;
+
+    Ok(SealedEnvelope {
+        to: recipient.fp.clone(),
+        address: recipient.address.clone(),
+        wire,
+        header,
+    })
+}
+
+/// Открыть конверт получателем. `sender_x25519_public_hex` — публичный ключ
+/// отправителя: он нужен гибридному примитиву для вывода общего секрета.
+pub fn open_payload(
+    envelope: &SealedEnvelope,
+    recipient_x25519_private_hex: &str,
+    sender_x25519_public_hex: &str,
+    recipient_pq_seed_hex: &str,
+) -> Result<String, DeliveryError> {
+    let kemct = envelope
+        .header
+        .kemct
+        .as_deref()
+        .ok_or(DeliveryError::MissingKemct)?;
+    hybrid_decrypt_vault(
+        &envelope.wire,
+        recipient_x25519_private_hex,
+        sender_x25519_public_hex,
+        recipient_pq_seed_hex,
+        kemct,
+    )
+    .map_err(|e| DeliveryError::Unwrap(e.to_string()))
 }

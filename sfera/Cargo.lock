@@ -3319,6 +3319,7 @@ dependencies = [
  "hex",
  "rand 0.8.8",
  "social-audience",
+ "social-link",
  "social-model",
  "vault-core",
  "x25519-dalek",
@@ -3421,6 +3422,23 @@ dependencies = [
  "serde",
  "sha2",
  "social-model",
+]
+
+[[package]]
+name = "social-keys"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "ml-kem",
+ "serde",
+ "serde_json",
+ "social-delivery",
+ "social-link",
+ "social-model",
+ "tempfile",
+ "vault-core",
+ "x25519-dalek",
 ]
 
 [[package]]

@@ -9,6 +9,9 @@ description = "Vault Sfera: адресная обёртка ключа ауди�
 [dependencies]
 social-model = { path = "../social-model" }
 social-audience = { path = "../social-audience" }
+# Контакт bundle → материал получателя (From<&LinkedContact>). Зависимость
+# односторонняя: social-link не знает про social-delivery, цикла нет.
+social-link = { path = "../social-link" }
 # Общий E2E-примитив Vault (PQ-hybrid) — не второй шифр, а тот же, что в
 # мессенджере. Ключ аудитории обёртывается адресно каждому участнику.
 vault-core = { path = "../../../vault-core" }

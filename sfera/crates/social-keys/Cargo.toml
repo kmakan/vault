@@ -1,0 +1,25 @@
+[package]
+name = "social-keys"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: ключи шифрования Sfera — генерация, хранение, материал для конвертов (ADR-006 §7.6)"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-delivery = { path = "../social-delivery" }
+# Тот же E2E-примитив Vault: X25519 + ML-KEM-768. Не второй шифр.
+vault-core = { path = "../../../vault-core" }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+base64 = "0.22"
+# Публичный ключ ML-KEM сериализуется трейтом KeyExport из этого крейта.
+# Версия та же, что у vault-core: иначе два ml-kem в дереве.
+ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
+
+[dev-dependencies]
+tempfile = "3"
+social-link = { path = "../social-link" }

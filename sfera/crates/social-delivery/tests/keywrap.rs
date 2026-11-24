@@ -38,6 +38,7 @@ fn recipient(u: &User) -> RecipientKeyMaterial {
         fp: u.fp.clone(),
         x25519_public_hex: u.x_pub.clone(),
         pq_ek_b64: u.pq_ek.clone(),
+        address: format!("{}@example.org", u.fp.as_str()),
     }
 }
 

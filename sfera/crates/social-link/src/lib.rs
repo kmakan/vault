@@ -21,12 +21,26 @@ pub const LINK_DOMAIN: &[u8] = b"sfera-link:v1\0";
 pub const LINK_SCHEME: &str = "vault://link-sfera";
 
 /// Контакт с ключом для переноса графа (без приватного ключа!).
+///
+/// Ключи шифрования приходят из книги ключей мессенджера (`peer_keys.json`):
+/// X25519-публичный и ML-KEM-768 ek. Приватные ключи контакта не покидают его
+/// устройство — Sfera получает только публичную половину (ADR-009 §4).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkedContact {
     pub fp: Fingerprint,
     pub pub_key: String,
     #[serde(default)]
     pub label: String,
+    /// X25519-публичный ключ контакта, hex (32 байта). Пусто — ключа нет.
+    #[serde(default)]
+    pub x25519_pub: String,
+    /// ML-KEM-768 ek контакта, base64. Пусто — PQ-ключа нет.
+    #[serde(default)]
+    pub pq_ek: String,
+    /// Адрес, под которым контакт лежит в книге мессенджера. По нему Sfera
+    /// находит получателя, когда отпечаток не совпал (алиас/смена адреса).
+    #[serde(default)]
+    pub address: String,
 }
 
 /// Сфера (группа контактов) для переноса.
@@ -144,6 +158,9 @@ mod tests {
             fp: Fingerprint::from_public_key_hex(CONTACT).unwrap(),
             pub_key: CONTACT.into(),
             label: "Анна".into(),
+            x25519_pub: CONTACT.into(),
+            pq_ek: "pq-ek".into(),
+            address: "anna@example.org".into(),
         };
         LinkBundle::create(
             ACCOUNT, account(), cert, vec![contact.clone()],

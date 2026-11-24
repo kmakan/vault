@@ -122,6 +122,9 @@ mod tests {
             fp: fp(3),
             pub_key: CONTACT.into(),
             label: "Анна".into(),
+            x25519_pub: CONTACT.into(),
+            pq_ek: "pq-ek".into(),
+            address: "anna@example.org".into(),
         };
         let bundle = LinkBundle::create(
             ACCOUNT, account(), cert, vec![contact], vec![], 1,

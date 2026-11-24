@@ -20,6 +20,9 @@ pub struct ContactRequest {
     /// Nonce для дедупа повторной доставки.
     pub nonce: String,
     pub message: String,
+    /// Адрес заявителя — подсказка доставки, не идентичность. Пусто — нет.
+    #[serde(default)]
+    pub address: String,
 }
 
 impl ContactRequest {
@@ -39,7 +42,14 @@ impl ContactRequest {
             ts,
             nonce: nonce.into(),
             message: message.into(),
+            address: String::new(),
         })
+    }
+
+    /// Приложить адрес доставки (цепочка вызовов, чтобы не ломать `new`).
+    pub fn with_address(mut self, address: impl Into<String>) -> Self {
+        self.address = address.into();
+        self
     }
 }
 
@@ -54,6 +64,11 @@ pub struct ContactRecord {
     pub spheres: Vec<String>,
     pub history_granted: bool,
     pub state: RelationState,
+    /// Адрес доставки, известный от заявителя. Подсказка, не идентичность:
+    /// конверты адресуются отпечатком, а адрес помогает, когда отпечаток
+    /// не совпал (алиас, смена ящика).
+    #[serde(default)]
+    pub address: String,
 }
 
 impl ContactRecord {
@@ -70,6 +85,7 @@ impl ContactRecord {
             spheres,
             history_granted,
             state: RelationState::Contact,
+            address: String::new(),
         }
     }
 
@@ -81,6 +97,7 @@ impl ContactRecord {
             spheres: Vec::new(),
             history_granted: false,
             state: RelationState::Blocked,
+            address: String::new(),
         }
     }
 }
@@ -214,6 +231,11 @@ impl ContactBook {
                 .cloned()
                 .unwrap_or_else(|| ContactRecord::contact(req.from.clone(), Role::Acquaintance, Vec::new(), false));
             record.state = next;
+            // Адрес из заявки переносим в запись: иначе он теряется, и
+            // доставить конверт этому контакту будет некуда.
+            if !req.address.is_empty() {
+                record.address = req.address.clone();
+            }
             self.upsert(record);
         }
         self.seen_nonces.insert(key);
