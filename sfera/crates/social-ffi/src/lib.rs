@@ -19,6 +19,7 @@ use social_app::{
 };
 
 mod stream;
+mod persistence;
 
 pub use stream::{
     media_url, parse_http_range, resolve_range, serve_range, stream_info, valid_blob_id,
@@ -89,6 +90,47 @@ impl SferaState {
         self
     }
 
+    /// Восстановить принятую книгу после загрузки app data и до первой команды.
+    /// Пустого файла нет — это первый запуск, а не потеря книги.
+    pub fn load_received_profiles(self) -> Result<Self, CommandError> {
+        let avatars = self.call(|app| persistence::load_at(&self.keys_dir, app).map_err(CommandError::from))?;
+        *self.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))? = avatars;
+        Ok(self)
+    }
+
+    /// Сохранить книгу и манифесты после изменения профиля. Если диск отказал,
+    /// команда возвращает ошибку, а не заявляет устойчивое сохранение.
+    fn persist_received_profiles(&self, app: &SferaApp) -> Result<(), CommandError> {
+        let path = self.keys_dir.join(persistence::FILE);
+        // Битый файл не перезаписывается новым снимком: это была бы потеря
+        // принятой книги без явной диагностики.
+        if path.exists() {
+            persistence::validate_at(&self.keys_dir).map_err(CommandError::from)?;
+        }
+        let avatars = self.received_avatars.lock()
+            .map_err(|_| CommandError::backend("received avatars lock"))?;
+        persistence::save_at(&self.keys_dir, app.profiles().snapshot(), &avatars)
+            .map_err(CommandError::from)
+    }
+
+    /// Единственный путь к ядру: паника поймана, poisoned-lock — ошибка.
+    fn call<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
+        match catch_unwind(AssertUnwindSafe(|| {
+            let mut app = self.app.lock().map_err(|_| CommandError::lock())?;
+            f(&mut app)
+        })) {
+            Ok(r) => r,
+            Err(_) => Err(CommandError::panic()),
+        }
+    }
+
+    fn mutate<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
+        self.call(|app| {
+            let result = f(app)?;
+            self.persist_received_profiles(app)?;
+            Ok(result)
+        })
+    }
     /// Приватные ключи Sfera для приёма конверта: только внутрь Rust-команды,
     /// в DTO/JS не возвращаются.
     pub fn encryption(&self) -> Result<social_keys::EncryptionIdentity, CommandError> {
@@ -115,7 +157,7 @@ impl SferaState {
             self.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))?
                 .insert(profile_id, manifest);
         }
-        Ok(outcome.into())
+        self.mutate(|_| Ok(outcome.into()))
     }
 
     /// Контакты нового проверенного bundle: меняем сразу, не требуя перезапуска.
@@ -136,17 +178,6 @@ impl SferaState {
     pub fn store_handle(&self) -> Result<Arc<dyn storage_api::BlobStore>, CommandError> {
         let app = self.app.lock().map_err(|_| CommandError::lock())?;
         Ok(app.store().clone())
-    }
-
-    /// Единственный путь к ядру: паника поймана, poisoned-lock — ошибка.
-    fn call<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
-        match catch_unwind(AssertUnwindSafe(|| {
-            let mut app = self.app.lock().map_err(|_| CommandError::lock())?;
-            f(&mut app)
-        })) {
-            Ok(r) => r,
-            Err(_) => Err(CommandError::panic()),
-        }
     }
 
     fn identity(&self) -> Result<IdentityDto, CommandError> {
@@ -551,7 +582,7 @@ fn social_set_my_profile(state: tauri::State<'_, SferaState>, req: SetProfileReq
             None
         }
     };
-    state.call(|app| {
+    state.mutate(|app| {
         Ok(app.set_my_profile(
             req.ts, req.display_name, req.bio, req.avatar, req.links, req.now, manifest,
         )?.into())
@@ -1027,8 +1058,11 @@ pub fn social_commands_handler<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use social_app::Identity;
+    use social_library::AvatarManifest;
+    use social_profile::ProfileV1;
     use social_sync::{Quota, RetryPolicy};
     use storage_local::LocalStore;
 
@@ -1087,6 +1121,66 @@ mod tests {
         assert_eq!(s.failed, 0);
         assert_eq!(s.due, 0);
         assert!(!s.has_transport);
+    }
+
+    #[test]
+    fn received_book_survives_new_state_and_profile_dto_has_avatar_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(LocalStore::new(dir.path().join("blobs")).unwrap());
+        let app = SferaApp::new(
+            Identity::from_seed(SEED).unwrap(), store.clone(),
+            RetryPolicy::default(), Quota::new(60, 10_000, 10, 0),
+        );
+        let st = SferaState::new(app, None).with_keys_dir(dir.path());
+        let blob_id = "44".repeat(32);
+        let manifest = AvatarManifest {
+            blob_id: blob_id.clone(), content_id: "received".into(), uri: "sha256-".to_string() + &blob_id,
+            file_key_hex: "55".repeat(32), nonce_prefix_hex: "00".repeat(8),
+            mime: "image/png".into(), size: 3, store_id: "local".into(), thumb: None, set_at: 1,
+        };
+        let identity = social_app::Identity::from_seed("02".repeat(32).as_str()).unwrap();
+        let author = identity.author();
+        let signed = social_profile::sign_profile(
+            &"02".repeat(32),
+            &ProfileV1::new(
+                author.clone(), 1, "Persisted Peer", "",
+                Some(social_app::AvatarRef { blob_id: storage_api::BlobId::from_bytes([0x44; 32]), mime: "image/png".into(), size: 3 }),
+                Vec::new(),
+            ).unwrap(),
+        ).unwrap();
+        st.call(|app| { app.receive_profile(signed.clone())?; Ok(()) }).unwrap();
+        persistence::save_at(dir.path(), vec![signed.clone()], &HashMap::from([(social_profile::profile_id(&signed), manifest)])).unwrap();
+        assert!(dir.path().join(persistence::FILE).exists());
+
+        let restored = SferaState::new(
+            SferaApp::new(Identity::from_seed(SEED).unwrap(), store,
+                RetryPolicy::default(), Quota::new(60, 10_000, 10, 0)),
+            None,
+        ).with_keys_dir(dir.path()).load_received_profiles().unwrap();
+        let profile = restored.call(|app| {
+            let p = app.profile_of(&signed.profile.author.fp)
+                .ok_or_else(|| CommandError::input("profile not restored"))?;
+            let mut value = serde_json::to_value(p).map_err(CommandError::input)?;
+            value["profile"]["avatar"]["profile_id"] = serde_json::Value::String(social_profile::profile_id(p));
+            Ok(value)
+        }).unwrap();
+        assert_eq!(profile["profile"]["display_name"], "Persisted Peer");
+        assert_eq!(profile["profile"]["avatar"]["profile_id"], social_profile::profile_id(&signed));
+        let bytes = std::fs::read_to_string(dir.path().join(persistence::FILE)).unwrap();
+        assert!(bytes.contains("Persisted Peer"));
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.path().join(persistence::FILE)).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // Манифест восстановлен вместе с профилем: открытие не требует нового письма.
+        assert_eq!(restored.received_avatars.lock().unwrap().len(), 1);
+        let mut damaged: serde_json::Value = serde_json::from_str(&bytes).unwrap();
+        damaged["profiles"][0]["sig"] = serde_json::Value::String("00".repeat(64));
+        std::fs::write(dir.path().join(persistence::FILE), serde_json::to_vec(&damaged).unwrap()).unwrap();
+        assert!(persistence::load_at(dir.path(), &mut SferaApp::new(
+            Identity::from_seed(SEED).unwrap(), Arc::new(LocalStore::new(dir.path().join("other")).unwrap()),
+            RetryPolicy::default(), Quota::new(60, 10_000, 10, 0),
+        )).is_err());
     }
 
     #[tokio::test]

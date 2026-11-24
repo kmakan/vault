@@ -221,7 +221,10 @@ fn build_state<R: tauri::Runtime>(
     }
     let delivery = smtp::SmtpConfig::from_env()?
         .map(|config| Arc::new(smtp::SmtpDelivery::new(config)) as Arc<dyn social_ffi::DeliveryPort>);
-    Ok(SferaState::new(core, delivery).with_keys_dir(data_dir.join("keys")))
+    Ok(SferaState::new(core, delivery)
+        .with_keys_dir(data_dir.join("keys"))
+        .load_received_profiles()
+        .map_err(|e| invalid(format!("received profiles: {}", e.message)))?)
 }
 
 /// Один `invoke_handler` на приложение: Tauri допускает только один, поэтому

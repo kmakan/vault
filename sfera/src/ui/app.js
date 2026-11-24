@@ -229,6 +229,7 @@ export function createAppState({
         state.avatarDraft = state.myProfile?.profile?.avatar ?? null;
       }
       await Promise.all((state.audiences ?? []).map((a) => fetchAudienceMembers(a.id)));
+      await Promise.all((state.contacts ?? []).map((c) => loadContactProfile(c.fp)));
       return state;
     },
 
