@@ -14,6 +14,9 @@ let contactRole = 'friend';
 let roleRequest = null;
 let streamCalls = [];
 let openCalls = [];
+let receivedProfile = null;
+let avatarCalls = [];
+let inboxCalls = 0;
 
 const bridge = {
   apiVersion: async () => 7,
@@ -23,7 +26,7 @@ const bridge = {
     if (failFeed) throw new Error('feed down');
     return [{ id: 'p1' }];
   },
-  contacts: async () => [{ fp: 'aa:bb', role: contactRole }],
+  contacts: async () => [{ fp: 'peer:fp', role: contactRole }, { fp: 'aa:bb', role: contactRole }],
   roleOptions: async () => [
     { value: 'friend', can_view_media: true, can_react: true, can_view_history: false, can_request_chat: true, profile: 'full' },
     { value: 'restricted', can_view_media: false, can_react: false, can_view_history: false, can_request_chat: false, profile: 'none' },
@@ -40,7 +43,15 @@ const bridge = {
     return { v: 7, changed: true };
   },
   storeCaps: async () => ({ kind: 'Local', range: true }),
-  profile: async () => myProfile,
+  profile: async (fp) => fp === 'peer:fp' ? receivedProfile : myProfile,
+  receiveInbox: async () => {
+    inboxCalls += 1;
+    return { scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0 };
+  },
+  openReceivedAvatar: async (id) => {
+    avatarCalls.push(id);
+    return { v: 7, blob_id: 'remote-avatar', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'REMOTE' };
+  },
   setMyProfile: async (req) => {
     myProfile = {
       profile: {
@@ -93,7 +104,7 @@ check(s.apiVersion === 7, 'api version comes from Rust');
 check(s.link.linked === false, 'link status loaded');
 check(s.identity.fp === 'aa:bb', 'identity loaded');
 check(s.feed.length === 1, 'feed loaded');
-check(s.contacts.length === 1, 'contacts loaded');
+check(s.contacts.length === 2, 'contacts loaded');
 check(s.roleOptions.length === 2 && s.roleOptions[0].value === 'friend', 'role presets loaded from Rust');
 check(s.audiences[0].id === 'sphere_close', 'audiences loaded');
 check(s.audienceMembers.sphere_close.members.length === 1, 'sphere members loaded on init');
@@ -101,6 +112,21 @@ check(s.myProfile.profile.display_name === 'Ann', 'own profile loaded');
 check(s.caps.kind === 'Local', 'caps loaded');
 check(s.sync?.pending === 2 && s.sync.has_transport === false, 'sync status loaded');
 check(s.lastSyncAt === 1000, 'last sync time from injected clock');
+
+receivedProfile = {
+  profile: { display_name: 'Peer', bio: '', avatar: { blob_id: 'remote', profile_id: 'peer-profile-id' }, links: [] },
+  sig: 'signed',
+};
+const received = await api.receiveInbox();
+check(inboxCalls === 1 && received.accepted === 1, 'explicit IMAP cycle');
+check(s.receiveReport.accepted === 1, 'receive report comes from Rust');
+check(s.contactProfiles['peer:fp'].profile.display_name === 'Peer', 'received profile shown by fingerprint');
+check(s.contactProfiles['aa:bb'].profile.display_name === 'Ann', 'own profile is not replaced by peer');
+check(avatarCalls.join(',') === 'peer-profile-id', 'avatar lookup uses Rust profile id, not blob id');
+check(s.contactAvatars['peer:fp'] === 'data:image/png;base64,REMOTE', 'received avatar rendered from Rust bytes');
+receivedProfile = { profile: { display_name: 'Peer', bio: '', avatar: null, links: [] }, sig: 'signed' };
+await api.loadContactProfile('peer:fp');
+check(!s.contactAvatars['peer:fp'], 'removing remote avatar clears stale preview');
 
 check(api.openTab('profile') && s.tab === 'profile', 'tab switch');
 check(!api.openTab('billing') && s.tab === 'profile', 'unknown tab rejected');

@@ -134,6 +134,11 @@ export default {
   contacts_invite_accepted: 'Invitation accepted',
   contacts_invite_duplicate: 'This invitation was already processed',
   contacts_invite_bad: 'Invalid invitation code',
+  contacts_receive: 'Check mail',
+  contacts_receiving: 'Checking…',
+  contacts_receive_report: 'Profiles accepted: {n}; rejected: {rejected}',
+  contacts_receive_fail: 'Could not check mail',
+  contacts_receive_hint: 'One mailbox check; ordinary mail is not read or marked as seen',
 
   storage_upload_title: 'Add file',
   storage_uploaded: 'Encrypted: {name} ({kind}, {size} bytes)',

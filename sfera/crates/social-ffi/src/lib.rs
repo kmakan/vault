@@ -564,7 +564,18 @@ fn social_profile(state: tauri::State<'_, SferaState>, fp: String) -> Result<Opt
         let fp = social_app::Fingerprint::from_str(&fp);
         match app.profile_of(&fp) {
             None => Ok(None),
-            Some(p) => Ok(Some(serde_json::to_value(p).map_err(CommandError::input)?)),
+            Some(p) => {
+                let mut value = serde_json::to_value(p).map_err(CommandError::input)?;
+                if let (Some(avatar), Some(id)) = (
+                    value.get_mut("profile").and_then(|p| p.get_mut("avatar")),
+                    p.profile.avatar.as_ref().map(|_| social_profile::profile_id(p)),
+                ) {
+                    if let Some(object) = avatar.as_object_mut() {
+                        object.insert("profile_id".into(), serde_json::Value::String(id));
+                    }
+                }
+                Ok(Some(value))
+            }
         }
     })
 }

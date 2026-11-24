@@ -1,6 +1,6 @@
 <script setup>
 // Контакты: состав и состояние приходят из `social-contacts`.
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 
 const props = defineProps({ state: Object, api: Object });
 const inviteText = ref('');
@@ -12,6 +12,29 @@ const sphereBusy = ref(false);
 const sphereStatus = ref('');
 const roleBusy = ref('');
 const roleStatus = ref({ fp: '', text: '' });
+const inboxBusy = ref(false);
+const inboxStatus = ref('');
+const receivedSummary = computed(() => {
+  const r = props.state.receiveReport;
+  return r ? props.api.t('contacts_receive_report', { n: r.accepted, rejected: r.rejected }) : '';
+});
+
+async function receiveInbox() {
+  if (inboxBusy.value) return;
+  inboxBusy.value = true;
+  inboxStatus.value = '';
+  try {
+    await props.api.receiveInbox();
+    inboxStatus.value = receivedSummary.value;
+  } catch (e) {
+    inboxStatus.value = props.api.t('contacts_receive_fail') + ': ' + (e?.message ?? e);
+  } finally {
+    inboxBusy.value = false;
+  }
+}
+
+function profileOf(fp) { return props.state.contactProfiles?.[fp]?.profile ?? null; }
+function avatarOf(fp) { return props.state.contactAvatars?.[fp] ?? ''; }
 
 // Значения ролей и права приходят из Rust; UI только подставляет подписи.
 function roleLabel(value) {
@@ -123,6 +146,14 @@ async function acceptInvite() {
 
     <p v-if="state.error" class="error">{{ state.error }}</p>
 
+    <div class="card inbox">
+      <button type="button" class="ghost" :disabled="inboxBusy" @click="receiveInbox">
+        {{ inboxBusy ? api.t('contacts_receiving') : api.t('contacts_receive') }}
+      </button>
+      <p v-if="inboxStatus" class="muted">{{ inboxStatus }}</p>
+      <p class="muted hint">{{ api.t('contacts_receive_hint') }}</p>
+    </div>
+
     <div class="card invite">
       <h2>{{ api.t('contacts_invite_title') }}</h2>
       <textarea v-model="inviteText" class="invite-input" rows="3"
@@ -167,9 +198,14 @@ async function acceptInvite() {
     <div v-if="!state.contacts.length" class="empty">{{ api.t('contacts_empty') }}</div>
 
     <article v-for="contact in state.contacts" :key="contact.fp" class="card contact">
-      <div class="contact-main">
-        <span class="fp">{{ contact.fp }}</span>
-        <span class="muted">{{ stateLabel(contact.state) }}</span>
+      <div class="contact-heading">
+        <img v-if="avatarOf(contact.fp)" :src="avatarOf(contact.fp)" class="contact-avatar" alt="" />
+        <div v-else class="contact-avatar placeholder" aria-hidden="true">?</div>
+        <div class="contact-main">
+          <strong v-if="profileOf(contact.fp)">{{ profileOf(contact.fp).display_name }}</strong>
+          <span class="fp">{{ contact.fp }}</span>
+          <span class="muted">{{ stateLabel(contact.state) }}</span>
+        </div>
       </div>
       <div class="role-row">
         <label class="role-field">
@@ -198,7 +234,26 @@ async function acceptInvite() {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
+.contact-heading { display: flex; align-items: center; gap: 10px; }
+.contact-avatar {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-subtle);
+}
+.contact-avatar.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+.inbox { margin-bottom: 12px; }
+.inbox .hint { margin: 8px 0 0; font-size: 11px; }
 .role-row {
   display: flex;
   align-items: center;

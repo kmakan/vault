@@ -135,6 +135,11 @@ export default {
   contacts_invite_accepted: 'Приглашение принято',
   contacts_invite_duplicate: 'Это приглашение уже было',
   contacts_invite_bad: 'Неверный код приглашения',
+  contacts_receive: 'Проверить почту',
+  contacts_receiving: 'Проверяем…',
+  contacts_receive_report: 'Принято профилей: {n}; отклонено: {rejected}',
+  contacts_receive_fail: 'Не удалось проверить почту',
+  contacts_receive_hint: 'Один запрос к ящику; обычные письма не читаются и не отмечаются прочитанными',
 
   storage_upload_title: 'Добавить файл',
   storage_uploaded: 'Зашифровано: {name} ({kind}, {size} байт)',

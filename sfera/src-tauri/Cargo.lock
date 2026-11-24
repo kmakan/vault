@@ -4321,6 +4321,7 @@ dependencies = [
  "social-manifest",
  "social-media-kind",
  "social-post",
+ "social-profile",
  "social-upload",
  "storage-api",
  "tauri",

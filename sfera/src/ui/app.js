@@ -38,6 +38,10 @@ export function createAppState({
     avatarDraft: null,
     feed: [],
     contacts: [],
+    // Принятые по IMAP профили по fingerprint; avatar — только data URL
+    // из Rust, ключ и манифест в состоянии JS не появляются.
+    contactProfiles: {},
+    contactAvatars: {},
     // Пресеты прав по ролям приходят из social-rights через FFI.
     roleOptions: [],
     audiences: [],
@@ -48,6 +52,7 @@ export function createAppState({
     // не выдавать локальную публикацию за доставку.
     sync: null,
     lastSyncAt: null,
+    receiveReport: null,
     // Результаты загрузки: ключ файла живёт здесь только до публикации,
     // затем уходит в E2E-манифест и очищается.
     uploads: [],
@@ -115,6 +120,26 @@ export function createAppState({
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
+  }
+
+  // Принятый профиль — именно по fingerprint из подписанного конверта,
+  // не по адресу письма. AvatarRef сам не содержит profile_id, поэтому его
+  // вычисляет Rust в DTO (UI не повторяет хеш).
+  async function loadContactProfile(fp) {
+    try {
+      const profile = await bridge.profile(fp);
+      state.contactProfiles[fp] = profile;
+      if (profile?.profile?.avatar) {
+        const content = await bridge.openReceivedAvatar(profile.profile.avatar.profile_id);
+        state.contactAvatars[fp] = `data:${content.mime};base64,${content.data_base64}`;
+      } else {
+        delete state.contactAvatars[fp];
+      }
+      return profile;
+    } catch (e) {
+      state.error = String(e?.message ?? e);
+      return null;
+    }
   }
 
   // Состав сферы: отпечатки и эпоха приходят из Rust, ключи не покидают ядро.
@@ -214,6 +239,16 @@ export function createAppState({
       return feed;
     },
     loadContacts: () => load('contacts', () => bridge.contacts()),
+    loadContactProfile,
+
+    // Явный запрос пользователя, не фоновый цикл. Отчёт и профили читаются
+    // только из Rust; внешняя доставка по-прежнему подтверждается отдельно.
+    async receiveInbox() {
+      const report = await bridge.receiveInbox();
+      state.receiveReport = report;
+      await Promise.all((state.contacts ?? []).map((c) => loadContactProfile(c.fp)));
+      return report;
+    },
 
     // Роль меняется только у принятого контакта: состояние проверяет Rust.
     // fp и role приходят из формы, версию протокола UI не изобретает.

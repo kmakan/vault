@@ -3376,6 +3376,7 @@ dependencies = [
  "social-media-kind",
  "social-model",
  "social-post",
+ "social-profile",
  "social-sync",
  "social-upload",
  "storage-api",

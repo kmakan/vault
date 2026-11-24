@@ -12,6 +12,7 @@ social-contacts = { path = "../social-contacts" }
 social-link = { path = "../social-link" }
 social-keys = { path = "../social-keys" }
 social-delivery = { path = "../social-delivery" }
+social-profile = { path = "../social-profile" }
 social-upload = { path = "../social-upload" }
 social-media-kind = { path = "../social-media-kind" }
 social-manifest = { path = "../social-manifest" }
