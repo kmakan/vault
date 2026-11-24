@@ -2,9 +2,9 @@
 
 use sha2::{Digest, Sha256};
 use social_media::{
-    decrypt_blob, decrypt_chunk, decrypt_range, decrypt_thumbnail, encrypt_blob,
-    encrypt_thumbnail, parse_header, thumb_key, verify_integrity, EncryptedBlob, MediaError,
-    HEADER_LEN, MAGIC, TAG_LEN, VERSION,
+    cipher_range_for, decrypt_blob, decrypt_chunk, decrypt_chunk_from, decrypt_range,
+    decrypt_thumbnail, encrypt_blob, encrypt_thumbnail, parse_header, parse_header_prefix,
+    thumb_key, verify_integrity, EncryptedBlob, MediaError, HEADER_LEN, MAGIC, TAG_LEN, VERSION,
 };
 use storage_api::Range;
 
@@ -201,6 +201,31 @@ fn empty_plaintext_produces_header_only() {
     assert!(decrypt_range(&blob.bytes, &KEY, Range::new(0, None).unwrap())
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn prefix_parse_and_chunk_slice_match_full_decryption() {
+    let pt = pattern(25); // 4 чанка по 8 байт: 8, 8, 8, 1
+    let blob = enc(&pt, 8);
+    // Префикс доступен без всего блоба и совпадает с полным разбором.
+    assert_eq!(parse_header_prefix(&blob.bytes[..HEADER_LEN]).unwrap(), parse_header(&blob.bytes).unwrap());
+    // Короткий префикс — ошибка, а не паника.
+    assert_eq!(parse_header_prefix(&blob.bytes[..HEADER_LEN - 1]).unwrap_err(), MediaError::InvalidHeader);
+
+    // Диапазон через границу чанков: читаем только нужный срез шифротекста.
+    let header = parse_header_prefix(&blob.bytes[..HEADER_LEN]).unwrap();
+    let cipher = cipher_range_for(&header, 5, 19).unwrap();
+    let slice = &blob.bytes[cipher.start..cipher.end];
+    assert!(cipher.end - cipher.start < blob.bytes.len(), "читаем меньше целого блоба");
+    let mut out = Vec::new();
+    for i in 0..=2 {
+        out.extend_from_slice(&decrypt_chunk_from(slice, cipher.start as u64, &header, &KEY, i).unwrap());
+    }
+    // Срезаем ровно запрошенный plaintext [5,19).
+    out.drain(..5);
+    out.truncate(19 - 5);
+    assert_eq!(out, decrypt_range(&blob.bytes, &KEY, Range::new(5, Some(19)).unwrap()).unwrap());
+    assert_eq!(out, pt[5..19]);
 }
 
 #[test]

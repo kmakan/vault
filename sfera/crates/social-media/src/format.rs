@@ -162,6 +162,20 @@ pub fn encrypt_blob(
 /// Структурный разбор заголовка. Хэш не проверяет — для этого есть
 /// [`verify_integrity`] (потоковый клиент может не иметь всего блоба).
 pub fn parse_header(blob: &[u8]) -> Result<BlobHeader, MediaError> {
+    let header = parse_header_fields(blob)?;
+    if blob.len() != header.expected_len()? {
+        return Err(MediaError::LengthMismatch);
+    }
+    Ok(header)
+}
+
+/// Разбор только префикса из 71 байт: для потокового чтения доступен не весь
+/// блоб, а только его начало. Полную длину проверяет [`parse_header`].
+pub fn parse_header_prefix(blob: &[u8]) -> Result<BlobHeader, MediaError> {
+    parse_header_fields(blob)
+}
+
+fn parse_header_fields(blob: &[u8]) -> Result<BlobHeader, MediaError> {
     if blob.len() < HEADER_LEN || &blob[..MAGIC.len()] != MAGIC {
         return Err(MediaError::InvalidHeader);
     }
@@ -190,17 +204,30 @@ pub fn parse_header(blob: &[u8]) -> Result<BlobHeader, MediaError> {
             .try_into()
             .map_err(|_| MediaError::InvalidHeader)?,
     );
-    let header = BlobHeader {
+    Ok(BlobHeader {
         version,
         chunk_size,
         blob_id,
         nonce_prefix,
         total,
-    };
-    if blob.len() != header.expected_len()? {
-        return Err(MediaError::LengthMismatch);
+    })
+}
+
+/// Диапазон байт шифротекста, нужный для plaintext `[start, end)`.
+/// Границы уже должны быть клампнуты к `header.total`.
+pub fn cipher_range_for(
+    header: &BlobHeader,
+    start: u64,
+    end: u64,
+) -> Result<std::ops::Range<usize>, MediaError> {
+    if start >= end || end > header.total {
+        return Err(MediaError::InvalidRange("range outside plaintext".into()));
     }
-    Ok(header)
+    let first = start / header.chunk_size as u64;
+    let last = (end - 1) / header.chunk_size as u64;
+    let (from, _) = chunk_bounds(first, header)?;
+    let (to, len) = chunk_bounds(last, header)?;
+    Ok(from..to + len)
 }
 
 /// Проверка `blob_id == SHA-256(ciphertext)` перед доверием к данным провайдера.
@@ -219,10 +246,38 @@ fn decrypt_chunk_with_header(
     file_key: &[u8; 32],
     i: u64,
 ) -> Result<Vec<u8>, MediaError> {
-    let (offset, ct_len) = chunk_bounds(i, header)?;
+    let (offset, _) = chunk_bounds(i, header)?;
+    let chunk = blob.get(offset..).ok_or(MediaError::LengthMismatch)?;
+    decrypt_chunk_at(chunk, header, file_key, i)
+}
+
+/// Расшифровать чанк из среза шифротекста, начинающегося с абсолютного байта
+/// `base` исходного блоба. Позволяет читать с диска только нужные чанки.
+pub fn decrypt_chunk_from(
+    blob: &[u8],
+    base: u64,
+    header: &BlobHeader,
+    file_key: &[u8; 32],
+    i: u64,
+) -> Result<Vec<u8>, MediaError> {
+    let (absolute, _) = chunk_bounds(i, header)?;
+    let offset = (absolute as u64)
+        .checked_sub(base)
+        .ok_or_else(|| MediaError::InvalidRange("slice base is past the chunk".into()))?;
     let chunk = blob
-        .get(offset..offset + ct_len)
+        .get(offset as usize..)
         .ok_or(MediaError::LengthMismatch)?;
+    decrypt_chunk_at(chunk, header, file_key, i)
+}
+
+fn decrypt_chunk_at(
+    chunk: &[u8],
+    header: &BlobHeader,
+    file_key: &[u8; 32],
+    i: u64,
+) -> Result<Vec<u8>, MediaError> {
+    let (_, ct_len) = chunk_bounds(i, header)?;
+    let chunk = chunk.get(..ct_len).ok_or(MediaError::LengthMismatch)?;
     if ct_len < TAG_LEN {
         return Err(MediaError::AuthFailed(i));
     }

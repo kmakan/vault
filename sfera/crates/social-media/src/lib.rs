@@ -11,8 +11,8 @@ pub mod format;
 pub mod thumb;
 
 pub use format::{
-    decrypt_blob, decrypt_chunk, decrypt_range, encrypt_blob, parse_header, verify_integrity,
-    BlobHeader, EncryptedBlob,
+    cipher_range_for, decrypt_blob, decrypt_chunk, decrypt_chunk_from, decrypt_range, encrypt_blob,
+    parse_header, parse_header_prefix, verify_integrity, BlobHeader, EncryptedBlob,
 };
 pub use thumb::{decrypt_thumbnail, encrypt_thumbnail, thumb_key, THUMB_INFO};
 

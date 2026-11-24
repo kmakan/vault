@@ -12,6 +12,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use storage_api::Range;
 use social_app::{
     AppError, Audience, ContactRecord, MediaRef, PostAudience, ProfileLink,
     SferaApp, SignedPost, StoreCaps, SyncReport,
@@ -165,6 +166,30 @@ pub struct LibraryContentDto {
     pub data_base64: String,
 }
 
+/// Запрос Range для стриминга: JS передаёт только границы. Выбор чанков,
+/// расшифровка и кламп — в `social-library`, здесь нет протокольных решений.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryRangeRequestDto {
+    pub v: u8,
+    pub blob_id: String,
+    pub start: u64,
+    /// `None` — до конца plaintext.
+    pub end: Option<u64>,
+}
+
+/// Расшифрованный диапазон: границы после клампа и полный размер plaintext,
+/// чтобы UI мог показать прогресс и запросить следующий кусок.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryRangeDto {
+    pub v: u8,
+    pub blob_id: String,
+    pub mime: String,
+    pub size: u64,
+    pub start: u64,
+    pub end: u64,
+    pub data_base64: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReceivePostsRequest {
     pub v: u8,
@@ -297,6 +322,19 @@ fn content_dto(o: social_library::Opened) -> LibraryContentDto {
         mime: o.mime,
         kind: o.kind,
         size: o.size,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&o.bytes),
+    }
+}
+
+fn range_dto(o: social_library::OpenedRange) -> LibraryRangeDto {
+    use base64::Engine as _;
+    LibraryRangeDto {
+        v: API_VERSION,
+        blob_id: o.blob_id,
+        mime: o.mime,
+        size: o.size,
+        start: o.start,
+        end: o.end,
         data_base64: base64::engine::general_purpose::STANDARD.encode(&o.bytes),
     }
 }
@@ -598,6 +636,29 @@ async fn social_library_open(
     Ok(opened.map(content_dto))
 }
 
+/// Прочитать полуоткрытый диапазон своего файла, не загружая его целиком.
+/// Границы и версия проверяются на границе, чанки и шифр — в `social-library`.
+async fn library_open_range(
+    state: &SferaState,
+    req: LibraryRangeRequestDto,
+) -> Result<Option<LibraryRangeDto>, CommandError> {
+    check(req.v)?;
+    let range = Range::new(req.start, req.end).map_err(CommandError::input)?;
+    let store = state.store_handle()?;
+    let opened = social_library::open_range_at(&state.keys_dir, store.as_ref(), &req.blob_id, range)
+        .await
+        .map_err(|e| CommandError::backend(format!("library: {e}")))?;
+    Ok(opened.map(range_dto))
+}
+
+#[tauri::command]
+async fn social_library_open_range(
+    state: tauri::State<'_, SferaState>,
+    req: LibraryRangeRequestDto,
+) -> Result<Option<LibraryRangeDto>, CommandError> {
+    library_open_range(&state, req).await
+}
+
 /// Прочитать и расшифровать миниатюру своего файла. `None` — миниатюры нет
 /// (не изображение или файл загружен до её появления).
 #[tauri::command]
@@ -698,6 +759,7 @@ pub fn handles(command: &str) -> bool {
             | "social_library_items"
             | "social_library_forget"
             | "social_library_open"
+            | "social_library_open_range"
             | "social_library_thumb"
             | "social_publish_with_media"
             | "social_create_audience"
@@ -737,6 +799,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_library_items,
         social_library_forget,
         social_library_open,
+        social_library_open_range,
         social_library_thumb,
         social_publish_with_media,
         social_create_audience,
@@ -939,8 +1002,78 @@ mod tests {
         assert_eq!(members, vec![fp_str]);
     }
 
+    #[tokio::test]
+    async fn library_range_command_returns_clamped_plaintext() {
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(LocalStore::new(dir.path().join("blobs")).unwrap());
+        let plaintext: Vec<u8> = (0..25u32).map(|i| (i % 251) as u8).collect();
+        let up = social_upload::upload_encrypted(store.as_ref(), "video/mp4", &plaintext)
+            .await
+            .unwrap();
+        social_library::remember_at(dir.path(), &up, 1).unwrap();
+
+        let app = SferaApp::new(
+            Identity::from_seed(SEED).unwrap(),
+            store,
+            RetryPolicy::default(),
+            Quota::new(60, 10_000, 10, 0),
+        );
+        let st = SferaState::new(app, None).with_keys_dir(dir.path());
+
+        let dto = library_open_range(&st, LibraryRangeRequestDto {
+            v: API_VERSION,
+            blob_id: up.blob_id.clone(),
+            start: 5,
+            end: Some(19),
+        })
+        .await
+        .unwrap()
+        .expect("range");
+        assert_eq!(dto.v, API_VERSION);
+        assert_eq!((dto.start, dto.end, dto.size), (5, 19, 25));
+        assert_eq!(dto.mime, "video/mp4");
+        let got = base64::engine::general_purpose::STANDARD
+            .decode(&dto.data_base64)
+            .unwrap();
+        assert_eq!(got, plaintext[5..19]);
+
+        // Открытый конец клампится к размеру plaintext.
+        let tail = library_open_range(&st, LibraryRangeRequestDto {
+            v: API_VERSION,
+            blob_id: up.blob_id.clone(),
+            start: 22,
+            end: None,
+        })
+        .await
+        .unwrap()
+        .expect("tail");
+        assert_eq!((tail.start, tail.end), (22, 25));
+
+        // Чужая версия и невалидные границы не доходят до хранилища.
+        let err = library_open_range(&st, LibraryRangeRequestDto {
+            v: API_VERSION + 1,
+            blob_id: up.blob_id.clone(),
+            start: 0,
+            end: Some(1),
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "version");
+        let err = library_open_range(&st, LibraryRangeRequestDto {
+            v: API_VERSION,
+            blob_id: up.blob_id,
+            start: 10,
+            end: Some(5),
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "input");
+    }
+
     #[test]
     fn handles_only_own_commands() {
+        assert!(handles("social_library_open_range"));
         assert!(handles("social_feed"));
         assert!(handles("social_audiences"));
         assert!(!handles("social_companion_action"));

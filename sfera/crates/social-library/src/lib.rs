@@ -15,7 +15,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use social_media_kind::MediaKind;
-use storage_api::{BlobId, BlobStore, Locator};
+use storage_api::{BlobId, BlobStore, Locator, Range};
 use tokio::io::AsyncReadExt;
 
 pub const FILE: &str = "media_library.json";
@@ -23,6 +23,8 @@ pub const FILE: &str = "media_library.json";
 /// Потолок для полной расшифровки в UI: большие файлы открываются через
 /// Range/стриминг, а не загружаются целиком в память окна.
 pub const MAX_OPEN_BYTES: u64 = 64 * 1024 * 1024;
+/// Потолок на один Range-ответ: несколько чанков, но не весь файл в память.
+pub const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryEntry {
@@ -213,6 +215,14 @@ fn file_key(entry: &LibraryEntry) -> Result<[u8; 32]> {
         .map_err(|_| anyhow!("file key must be 32 bytes"))
 }
 
+fn locator(entry: &LibraryEntry) -> Result<Locator> {
+    Ok(Locator {
+        store_id: entry.store_id.clone(),
+        uri: entry.uri.clone(),
+        blob_id: BlobId::from_str(&entry.blob_id).map_err(|e| anyhow!("bad blob id: {e}"))?,
+    })
+}
+
 /// Прочитать и расшифровать свой файл для предпросмотра. Ключ не покидает
 /// Rust; в UI уходит результат, который интерфейс только показывает.
 pub async fn open_at(
@@ -230,11 +240,7 @@ pub async fn open_at(
         ));
     }
     let key = file_key(&entry)?;
-    let loc = Locator {
-        store_id: entry.store_id.clone(),
-        uri: entry.uri.clone(),
-        blob_id: BlobId::from_str(&entry.blob_id).map_err(|e| anyhow!("bad blob id: {e}"))?,
-    };
+    let loc = locator(&entry)?;
     let mut reader = store.get(&loc, None).await.context("read blob")?;
     let mut cipher = Vec::new();
     reader.read_to_end(&mut cipher).await.context("read blob body")?;
@@ -245,6 +251,111 @@ pub async fn open_at(
         kind: entry.kind,
         size: bytes.len() as u64,
         bytes,
+    }))
+}
+
+/// Расшифрованный диапазон своего файла. `start`/`end` — фактические границы
+/// после клампа; `size` — полная длина plaintext. Ключ и шифротекст наружу не
+/// попадают, `Debug` печатает только размеры.
+pub struct OpenedRange {
+    pub blob_id: String,
+    pub mime: String,
+    pub size: u64,
+    pub start: u64,
+    pub end: u64,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for OpenedRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenedRange")
+            .field("blob_id", &self.blob_id)
+            .field("mime", &self.mime)
+            .field("size", &self.size)
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("bytes_len", &self.bytes.len())
+            .finish()
+    }
+}
+
+/// Прочитать из `BlobStore` только нужные чанки и вернуть plaintext
+/// полуоткрытого диапазона `[start, end)`. В отличие от [`open_at`], не
+/// загружает весь файл — фундамент для Range-стриминга аудио/видео.
+pub async fn open_range_at(
+    keys_dir: &Path,
+    store: &dyn BlobStore,
+    blob_id: &str,
+    range: Range,
+) -> Result<Option<OpenedRange>> {
+    let Some(entry) = entry_at(keys_dir, blob_id)? else {
+        return Ok(None);
+    };
+    let key = file_key(&entry)?;
+    let loc = locator(&entry)?;
+
+    // Заголовок читается отдельным запросом: 71 байт вместо всего блоба.
+    let head_range = Range::new(0, Some(social_media::HEADER_LEN as u64))
+        .context("bad header range")?;
+    let mut reader = store.get(&loc, Some(head_range)).await.context("read blob header")?;
+    let mut head = Vec::with_capacity(social_media::HEADER_LEN);
+    reader.read_to_end(&mut head).await.context("read header bytes")?;
+    let header = social_media::parse_header_prefix(&head).context("parse blob header")?;
+
+    let total = header.total;
+    let start = range.start.min(total);
+    let end = range.end.unwrap_or(total).min(total);
+    if end <= start {
+        return Ok(Some(OpenedRange {
+            blob_id: entry.blob_id,
+            mime: entry.mime,
+            size: total,
+            start,
+            end: start,
+            bytes: Vec::new(),
+        }));
+    }
+    if end - start > MAX_RANGE_BYTES {
+        return Err(anyhow!(
+            "range too large: {} bytes (max {MAX_RANGE_BYTES})",
+            end - start
+        ));
+    }
+
+    let cipher = social_media::cipher_range_for(&header, start, end)
+        .context("compute cipher range")?;
+    let cipher_range = Range::new(cipher.start as u64, Some(cipher.end as u64))
+        .context("bad cipher range")?;
+    let mut reader = store.get(&loc, Some(cipher_range)).await.context("read blob range")?;
+    let mut bytes = Vec::with_capacity(cipher.end - cipher.start);
+    reader.read_to_end(&mut bytes).await.context("read cipher bytes")?;
+
+    let first = start / header.chunk_size as u64;
+    let last = (end - 1) / header.chunk_size as u64;
+    let mut out = Vec::with_capacity((end - start) as usize);
+    for i in first..=last {
+        let pt = social_media::decrypt_chunk_from(
+            &bytes,
+            cipher.start as u64,
+            &header,
+            &key,
+            i,
+        )
+        .context("decrypt range chunk")?;
+        let chunk_start = i * header.chunk_size as u64;
+        let local_start = start.saturating_sub(chunk_start) as usize;
+        let local_end = (end.min(chunk_start + pt.len() as u64) - chunk_start) as usize;
+        if local_start < local_end {
+            out.extend_from_slice(&pt[local_start..local_end]);
+        }
+    }
+    Ok(Some(OpenedRange {
+        blob_id: entry.blob_id,
+        mime: entry.mime,
+        size: total,
+        start,
+        end,
+        bytes: out,
     }))
 }
 
@@ -351,6 +462,67 @@ mod tests {
         assert_eq!(opened.size, plaintext.len() as u64);
         // Debug расшифрованного файла не печатает содержимое.
         assert!(!format!("{opened:?}").contains("real photo"));
+    }
+
+    #[tokio::test]
+    async fn range_open_reads_only_needed_chunks_and_clamps() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path().join("blobs")).unwrap();
+        let key = [0x11; 32];
+        let nonce = [0x22; 16];
+        let plaintext: Vec<u8> = (0..25u32).map(|i| (i % 251) as u8).collect();
+        let enc = social_media::encrypt_blob(&plaintext, &key, &nonce, 8).unwrap();
+        // Идентификатор хранилища — SHA-256 шифротекста, а не content_id из заголовка.
+        let storage_id = BlobId::from_bytes(Sha256::digest(&enc.bytes).into());
+        let loc = store
+            .put(
+                &storage_id,
+                Box::new(std::io::Cursor::new(enc.bytes.clone())),
+                enc.bytes.len() as u64,
+            )
+            .await
+            .unwrap();
+
+        let mut up = uploaded("r", "video/mp4");
+        up.blob_id = storage_id.to_hex();
+        up.file_key_hex = hex::encode(key);
+        up.nonce_prefix_hex = hex::encode(nonce);
+        up.size = plaintext.len() as u64;
+        up.store_id = loc.store_id;
+        up.uri = loc.uri;
+        remember_at(dir.path(), &up, 1).unwrap();
+
+        // Диапазон через границы чанков.
+        let mid = open_range_at(
+            dir.path(), &store, &up.blob_id, Range::new(5, Some(19)).unwrap(),
+        ).await.unwrap().unwrap();
+        assert_eq!(mid.bytes, plaintext[5..19]);
+        assert_eq!((mid.start, mid.end, mid.size), (5, 19, 25));
+        assert!(!format!("{mid:?}").contains(&hex::encode(key)), "ключ не должен попадать в Debug");
+
+        // Кламп к концу и открытый конец.
+        let tail = open_range_at(
+            dir.path(), &store, &up.blob_id, Range::new(20, Some(1000)).unwrap(),
+        ).await.unwrap().unwrap();
+        assert_eq!(tail.bytes, plaintext[20..25]);
+        assert_eq!((tail.start, tail.end), (20, 25));
+        let rest = open_range_at(
+            dir.path(), &store, &up.blob_id, Range::new(22, None).unwrap(),
+        ).await.unwrap().unwrap();
+        assert_eq!(rest.bytes, plaintext[22..]);
+
+        // За пределами блоба — пустой диапазон, без ошибки.
+        let past = open_range_at(
+            dir.path(), &store, &up.blob_id, Range::new(100, Some(200)).unwrap(),
+        ).await.unwrap().unwrap();
+        assert!(past.bytes.is_empty());
+        assert_eq!(past.start, past.end);
+
+        // Неизвестный блоб — None.
+        assert!(open_range_at(
+            dir.path(), &store, &"0".repeat(64), Range::new(0, Some(1)).unwrap(),
+        ).await.unwrap().is_none());
     }
 
     #[tokio::test]
