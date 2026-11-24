@@ -581,4 +581,211 @@ mod tests {
         let err = open_at(dir.path(), &store, &big.blob_id).await.unwrap_err();
         assert!(err.to_string().contains("too large"));
     }
+    #[test]
+    fn avatar_manifest_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        remember_at(dir.path(), &uploaded("a", "image/png"), 10).unwrap();
+        let m = remember_avatar_at(dir.path(), &"a".repeat(32), 30).unwrap();
+        assert_eq!(m.blob_id, "a".repeat(32));
+        assert_eq!(m.set_at, 30);
+        let read = avatar_at(dir.path()).unwrap().expect("манифест есть");
+        assert_eq!(read.blob_id, m.blob_id);
+        assert_eq!(read.file_key_hex, m.file_key_hex);
+    }
+
+    #[test]
+    fn avatar_requires_own_blob() {
+        // Аватаром нельзя объявить блоб, которого нет в своём каталоге:
+        // иначе профиль сошлётся на чужой файл, и получатель не откроет его.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(remember_avatar_at(dir.path(), &"f".repeat(32), 10).is_err());
+        assert!(avatar_at(dir.path()).unwrap().is_none());
+    }
+}
+
+// --- Манифест аватара (ADR-006 §7.6) --------------------------------------
+//
+// Профиль ссылается на аватар как на блоб (`AvatarRef`), но по одному
+// `blob_id` нельзя ни открыть файл, ни переслать его получателю: нужен ключ,
+// локатор и миниатюра. Манифест хранит это ОТДЕЛЬНО от каталога: каталог —
+// «что я загрузил», манифест — «какой из этого мой аватар». Так профиль не
+// зависит от того, что человек удалил из библиотеки.
+
+/// Имя файла манифеста аватара в каталоге ключей.
+pub const AVATAR_FILE: &str = "avatar_manifest.json";
+
+/// Манифест аватара: то, что нужно, чтобы отдать аватар получателю.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AvatarManifest {
+    pub blob_id: String,
+    pub content_id: String,
+    pub file_key_hex: String,
+    pub nonce_prefix_hex: String,
+    pub mime: String,
+    pub size: u64,
+    pub store_id: String,
+    pub uri: String,
+    /// Миниатюра, если сделана при загрузке.
+    #[serde(default)]
+    pub thumb: Option<ThumbRef>,
+    /// Когда аватар поставлен (для «новее побеждает» на стороне получателя).
+    pub set_at: u64,
+}
+
+impl std::fmt::Debug for AvatarManifest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AvatarManifest")
+            .field("blob_id", &self.blob_id)
+            .field("file_key_hex", &"<redacted>")
+            .field("mime", &self.mime)
+            .field("size", &self.size)
+            .field("set_at", &self.set_at)
+            .finish()
+    }
+}
+
+fn avatar_path(keys_dir: &Path) -> PathBuf {
+    keys_dir.join(AVATAR_FILE)
+}
+
+/// Запомнить аватар. Требует, чтобы блоб был СВОИМ: аватаром нельзя объявить
+/// файл, которого нет в каталоге, — иначе профиль сошлётся на чужой блоб.
+pub fn remember_avatar_at(keys_dir: &Path, blob_id: &str, now: u64) -> Result<AvatarManifest> {
+    let entries = load_at(keys_dir)?;
+    let entry = entries
+        .iter()
+        .find(|e| e.blob_id == blob_id)
+        .ok_or_else(|| anyhow!("blob {blob_id} is not in the media library"))?;
+    let manifest = AvatarManifest {
+        blob_id: entry.blob_id.clone(),
+        content_id: entry.content_id.clone(),
+        file_key_hex: entry.file_key_hex.clone(),
+        nonce_prefix_hex: entry.nonce_prefix_hex.clone(),
+        mime: entry.mime.clone(),
+        size: entry.size,
+        store_id: entry.store_id.clone(),
+        uri: entry.uri.clone(),
+        thumb: entry.thumb.clone(),
+        set_at: now,
+    };
+    write_avatar_at(keys_dir, &manifest)?;
+    Ok(manifest)
+}
+
+/// Прочитать манифест аватара. `None` — аватар не задан (это нормально).
+pub fn avatar_at(keys_dir: &Path) -> Result<Option<AvatarManifest>> {
+    let path = avatar_path(keys_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("read {}", path.display()))?;
+    let manifest: AvatarManifest =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(manifest))
+}
+
+/// Записать манифест атомарно и с правами 0600: в нём ключ файла.
+pub fn write_avatar_at(keys_dir: &Path, manifest: &AvatarManifest) -> Result<()> {
+    std::fs::create_dir_all(keys_dir)
+        .with_context(|| format!("create {}", keys_dir.display()))?;
+    let path = avatar_path(keys_dir);
+    let body = serde_json::to_string_pretty(manifest).context("serialize avatar manifest")?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(body.as_bytes())
+            .with_context(|| format!("write {}", tmp.display()))?;
+        f.sync_all().with_context(|| format!("sync {}", tmp.display()))?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&tmp)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&tmp, perms)?;
+    }
+    std::fs::rename(&tmp, &path).with_context(|| format!("rename {}", path.display()))?;
+    Ok(())
+}
+
+/// Снять аватар: профиль останется без аватара, блоб в библиотеке не трогаем.
+pub fn forget_avatar_at(keys_dir: &Path) -> Result<bool> {
+    let path = avatar_path(keys_dir);
+    if !path.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod avatar_tests {
+    use super::*;
+
+    fn uploaded(id: &str, mime: &str) -> social_upload::UploadResult {
+        social_upload::UploadResult {
+            blob_id: id.repeat(32),
+            content_id: "b".repeat(32),
+            file_key_hex: "cd".repeat(32),
+            nonce_prefix_hex: "ef".repeat(16),
+            mime: mime.into(),
+            kind: social_media_kind::classify(mime),
+            size: 42,
+            store_id: "device".into(),
+            uri: "/tmp/x.blob".into(),
+            thumb: None,
+        }
+    }
+
+    #[test]
+    fn avatar_manifest_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        remember_at(dir.path(), &uploaded("a", "image/png"), 10).unwrap();
+        let m = remember_avatar_at(dir.path(), &"a".repeat(32), 30).unwrap();
+        assert_eq!(m.blob_id, "a".repeat(32));
+        assert_eq!(m.set_at, 30);
+        let read = avatar_at(dir.path()).unwrap().expect("манифест есть");
+        assert_eq!(read.blob_id, m.blob_id);
+        assert_eq!(read.file_key_hex, m.file_key_hex);
+    }
+
+    #[test]
+    fn avatar_requires_own_blob() {
+        // Аватаром нельзя объявить блоб, которого нет в своём каталоге:
+        // иначе профиль сошлётся на чужой файл, и получатель не откроет его.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(remember_avatar_at(dir.path(), &"f".repeat(32), 10).is_err());
+        assert!(avatar_at(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn avatar_absent_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(avatar_at(dir.path()).unwrap().is_none());
+        assert!(!forget_avatar_at(dir.path()).unwrap(), "снимать нечего");
+    }
+
+    #[test]
+    fn avatar_debug_hides_file_key() {
+        let dir = tempfile::tempdir().unwrap();
+        remember_at(dir.path(), &uploaded("a", "image/png"), 10).unwrap();
+        let m = remember_avatar_at(dir.path(), &"a".repeat(32), 30).unwrap();
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("<redacted>"), "{dbg}");
+        assert!(!dbg.contains(&m.file_key_hex), "ключ файла утёк в Debug");
+    }
+
+    #[test]
+    fn forget_avatar_keeps_library_entry() {
+        // Снятие аватара не удаляет файл из библиотеки: человек мог загрузить
+        // картинку не только ради аватара.
+        let dir = tempfile::tempdir().unwrap();
+        remember_at(dir.path(), &uploaded("a", "image/png"), 10).unwrap();
+        remember_avatar_at(dir.path(), &"a".repeat(32), 30).unwrap();
+        assert!(forget_avatar_at(dir.path()).unwrap());
+        assert_eq!(items_at(dir.path()).unwrap().len(), 1, "файл остался в каталоге");
+        assert!(avatar_at(dir.path()).unwrap().is_none());
+    }
 }

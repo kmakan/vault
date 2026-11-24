@@ -2,6 +2,7 @@
 
 use social_model::post::{sign_with_domain, verify_value, SIGN_DOMAIN as POST_DOMAIN};
 use social_profile::{
+    profile_id, profile_id_short,
     compose, sign_profile, verify_profile, AvatarRef, ProfileBook, ProfileError, ProfileLink,
     ProfileV1, SignedProfile, UpsertOutcome, SIGN_DOMAIN,
 };
@@ -267,4 +268,36 @@ fn profile_v1_validate_standalone() {
     let mut p: ProfileV1 = signed.profile;
     p.links.push(link("плохо", "gopher://x"));
     assert!(matches!(p.validate(), Err(ProfileError::BadUrl(_))));
+}
+
+#[test]
+fn profile_id_is_stable_across_name_and_avatar_changes() {
+    // Ссылка на профиль не должна ломаться, когда человек меняет имя или
+    // аватар: идентификатор считается от публичного ключа, не от содержимого.
+    let first = compose(SEED_A, 100, "Анна", "", None, vec![]).unwrap();
+    let renamed = compose(SEED_A, 200, "Анна Петрова", "био", None, vec![]).unwrap();
+    assert_eq!(profile_id(&first), profile_id(&renamed));
+}
+
+#[test]
+fn profile_id_differs_between_authors() {
+    let a = compose(SEED_A, 100, "Анна", "", None, vec![]).unwrap();
+    let b = compose(SEED_B, 100, "Анна", "", None, vec![]).unwrap();
+    assert_ne!(profile_id(&a), profile_id(&b));
+}
+
+#[test]
+fn profile_id_is_full_sha256_hex() {
+    let p = compose(SEED_A, 100, "Анна", "", None, vec![]).unwrap();
+    let id = profile_id(&p);
+    assert_eq!(id.len(), 64, "полная форма — 64 hex-символа");
+    assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(profile_id_short(&p), id[..16]);
+}
+
+#[test]
+fn profile_id_is_not_the_signature() {
+    // Домены разделены: идентификатор не может совпасть с подписью и наоборот.
+    let p = compose(SEED_A, 100, "Анна", "", None, vec![]).unwrap();
+    assert_ne!(profile_id(&p), p.sig);
 }

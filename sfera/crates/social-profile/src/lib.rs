@@ -10,6 +10,7 @@
 //! как и у медиа поста. Решения о видимости профиля принимает `social-rights`;
 //! здесь — только форма, подпись и чистое правило «новее побеждает» в книге.
 
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -20,6 +21,10 @@ use storage_api::BlobId;
 pub const PROFILE_KIND: &str = "social_profile";
 /// Домен подписи профиля. Не менять без мажорной версии формата.
 pub const SIGN_DOMAIN: &[u8] = b"sfera-profile:v1\0";
+
+/// Домен идентификатора профиля: отделён от домена подписи, чтобы значение
+/// `profile_id` нельзя было предъявить как подпись и наоборот.
+pub const PROFILE_ID_DOMAIN: &[u8] = b"sfera-profile-id:v1\0";
 
 pub const MAX_NAME_CHARS: usize = 80;
 pub const MAX_BIO_CHARS: usize = 500;
@@ -355,4 +360,24 @@ mod tests {
         let err = compose(SEED, 1, "Аня", "", None, links).unwrap_err();
         assert!(matches!(err, ProfileError::BadUrl(_)));
     }
+}
+
+/// Стабильный идентификатор профиля для ссылок и публичных страниц
+/// (ADR-008: коммерческие страницы должны быть адресуемы).
+///
+/// Считается от ПУБЛИЧНОГО ключа автора, а не от `ts` или имени: смена
+/// отображаемого имени или аватара не должна ломать уже разосланные ссылки.
+/// Домен разделён с подписью профиля — значение нельзя спутать с подписью
+/// или переиспользовать как её.
+pub fn profile_id(signed: &SignedProfile) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PROFILE_ID_DOMAIN);
+    hasher.update(signed.profile.author.pub_key.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Короткая форма идентификатора для показа человеку: первые 16 hex-символов.
+/// Для адресации использовать полную (`profile_id`), короткая — только подпись.
+pub fn profile_id_short(signed: &SignedProfile) -> String {
+    profile_id(signed)[..16].to_string()
 }
