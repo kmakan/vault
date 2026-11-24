@@ -28,8 +28,11 @@ storage-local = { path = "../crates/storage-local" }
 vault-client = { path = "../../vault-client" }
 tokio = { version = "1", features = ["rt", "time"] }
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
+native-tls = "0.2"
+social-delivery = { path = "../crates/social-delivery" }
 rand = "0.8"
 hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+social-profile = { path = "../crates/social-profile" }

@@ -21,6 +21,7 @@ use storage_local::LocalStore;
 use tauri::Manager;
 
 mod smtp;
+mod imap;
 
 const IDENTITY_FILE: &str = "identity.json";
 /// Принятый bundle связывания (ADR-009 §4). Только публичные данные.
@@ -96,7 +97,18 @@ fn social_link_accept<R: tauri::Runtime>(
 
 fn shell_commands_handler<R: tauri::Runtime>(
 ) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![social_link_status, social_link_accept]
+    tauri::generate_handler![social_link_status, social_link_accept, social_receive_inbox]
+}
+
+/// Явный цикл IMAP: без фонового монитора и без скрытого доступа к ящику.
+#[tauri::command]
+fn social_receive_inbox<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<imap::ReceiveReport, String> {
+    let config = imap::ImapConfig::from_env()?
+        .ok_or_else(|| "SFERA_IMAP is not configured".to_string())?;
+    let state = app.state::<SferaState>();
+    imap::receive_once(&config, &app.path().app_data_dir().map_err(|e| e.to_string())?, &state)
 }
 
 /// Один Range-ответ протокола в HTTP. Код, MIME и Content-Range приходят из
@@ -217,7 +229,7 @@ fn build_state<R: tauri::Runtime>(
 /// самими командами (`handles`).
 fn dispatch<R: tauri::Runtime>(invoke: tauri::ipc::Invoke<R>) -> bool {
     let command = invoke.message.command().to_string();
-    if command == "social_link_status" {
+    if command == "social_link_status" || command == "social_link_accept" || command == "social_receive_inbox" {
         shell_commands_handler()(invoke)
     } else if social_ffi_bridge::handles(&command) {
         social_ffi_bridge::social_bridge_commands_handler()(invoke)

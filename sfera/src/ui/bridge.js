@@ -23,6 +23,7 @@ export const COMMANDS = Object.freeze({
   profile: 'social_profile',
   setMyProfile: 'social_set_my_profile',
   receiveProfile: 'social_receive_profile',
+  receiveInbox: 'social_receive_inbox',
   openReceivedAvatar: 'social_open_received_avatar',
   storeCaps: 'social_store_caps',
   companion: 'social_companion_action',
@@ -117,6 +118,11 @@ export function createBridge(invoke) {
     // Входной E2E-конверт и ключи разбирает только Rust.
     receiveProfile(envelope) {
       return invoke(COMMANDS.receiveProfile, { envelope });
+    },
+
+    // Явный PEEK-цикл; фонового монитора ящика UI не создаёт.
+    receiveInbox() {
+      return invoke(COMMANDS.receiveInbox);
     },
 
     // Чужой аватар открывается по profile_id; ключ не покидает Rust.

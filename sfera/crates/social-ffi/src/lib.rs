@@ -96,6 +96,28 @@ impl SferaState {
             .map_err(|e| CommandError::backend(format!("encryption: {e}")))
     }
 
+    /// Тот же приём, что и Tauri-команда: транспорт не получает приватные
+    /// ключи и не может подменить DTO или манифест.
+    pub fn receive_profile_envelope(
+        &self,
+        envelope: &social_delivery::SealedEnvelope,
+    ) -> Result<OutcomeDto, CommandError> {
+        let encryption = self.encryption()?;
+        let (outcome, profile_id, manifest) = self.call(|app| {
+            let received = app.receive_profile_envelope(
+                envelope,
+                encryption.x25519_private_hex(),
+                encryption.pq_seed_hex(),
+            )?;
+            Ok((received.outcome, received.profile_id, received.avatar_manifest))
+        })?;
+        if let Some(manifest) = manifest {
+            self.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))?
+                .insert(profile_id, manifest);
+        }
+        Ok(outcome.into())
+    }
+
     /// Контакты нового проверенного bundle: меняем сразу, не требуя перезапуска.
     pub fn set_link_contacts(&self, contacts: Vec<social_link::LinkedContact>) -> Result<(), String> {
         let mut app = self.app.lock().map_err(|_| "app state lock poisoned".to_string())?;
@@ -553,20 +575,7 @@ fn social_receive_profile(
     state: tauri::State<'_, SferaState>,
     envelope: social_delivery::SealedEnvelope,
 ) -> Result<OutcomeDto, CommandError> {
-    let encryption = state.encryption()?;
-    let (outcome, profile_id, manifest) = state.call(|app| {
-        let received = app.receive_profile_envelope(
-            &envelope,
-            encryption.x25519_private_hex(),
-            encryption.pq_seed_hex(),
-        )?;
-        Ok((received.outcome, received.profile_id, received.avatar_manifest))
-    })?;
-    if let Some(manifest) = manifest {
-        state.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))?
-            .insert(profile_id, manifest);
-    }
-    Ok(outcome.into())
+    state.receive_profile_envelope(&envelope)
 }
 
 /// Единственное решение о доступе — в `social-rights`; FFI только передаёт.
