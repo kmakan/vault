@@ -339,11 +339,60 @@ impl ProfileBook {
     }
 }
 
+/// Сериализовать подписанный профиль для E2E-конверта. Вместе с ним может
+/// ехать манифест аватара: его тип принадлежит social-library, поэтому здесь
+/// он передаётся готовым JSON-значением, без обратной зависимости фич.
+pub fn envelope_json(
+    signed: &SignedProfile,
+    avatar_manifest: Option<&serde_json::Value>,
+) -> Result<String, ProfileError> {
+    let mut value = serde_json::json!({ "profile": signed });
+    if let Some(manifest) = avatar_manifest {
+        value["avatar_manifest"] = manifest.clone();
+    }
+    serde_json::to_string(&value).map_err(|e| ProfileError::Canonical(e.to_string()))
+}
+
+/// Идентификатор одной версии публикации. Стабильный `profile_id` отвечает
+/// на «какой профиль», а outbox требует также «какая версия»: иначе обновление
+/// имени или аватара навсегда выглядело бы дубликатом первой отправки.
+pub fn publication_id(signed: &SignedProfile, recipient: &Fingerprint) -> Result<String, ProfileError> {
+    let canonical = canonical_profile(&signed.profile).map_err(ProfileError::Canonical)?;
+    let mut hasher = Sha256::new();
+    hasher.update(PROFILE_ID_DOMAIN);
+    hasher.update(&canonical);
+    hasher.update(recipient.as_str().as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const SEED: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn profile_publication_id_changes_with_version_and_recipient() {
+        let first = compose(SEED, 100, "Анна", "", None, vec![]).unwrap();
+        let updated = compose(SEED, 200, "Анна Петрова", "", None, vec![]).unwrap();
+        let alice = Fingerprint::from_public_key_hex(&"11".repeat(32)).unwrap();
+        let bob = Fingerprint::from_public_key_hex(&"22".repeat(32)).unwrap();
+        assert_ne!(publication_id(&first, &alice).unwrap(), publication_id(&updated, &alice).unwrap());
+        assert_ne!(publication_id(&first, &alice).unwrap(), publication_id(&first, &bob).unwrap());
+        assert_eq!(publication_id(&first, &alice).unwrap(), publication_id(&first, &alice).unwrap());
+    }
+
+    #[test]
+    fn envelope_contains_signed_profile_and_optional_avatar_manifest() {
+        let signed = compose(SEED, 100, "Анна", "", None, vec![]).unwrap();
+        let manifest = serde_json::json!({"blob_id":"ab","file_key_hex":"cd"});
+        let value: serde_json::Value = serde_json::from_str(&envelope_json(&signed, Some(&manifest)).unwrap()).unwrap();
+        assert_eq!(value["profile"]["profile"]["display_name"], "Анна");
+        assert_eq!(value["profile"]["sig"], signed.sig);
+        assert_eq!(value["avatar_manifest"], manifest);
+        let without: serde_json::Value = serde_json::from_str(&envelope_json(&signed, None).unwrap()).unwrap();
+        assert!(without.get("avatar_manifest").is_none());
+    }
 
     #[test]
     fn name_with_only_spaces_is_rejected() {

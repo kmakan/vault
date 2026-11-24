@@ -50,22 +50,29 @@ fn link_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<std::path::
     Ok(app.path().app_data_dir()?.join(LINK_FILE))
 }
 
-#[tauri::command]
-fn social_link_status<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<LinkStatus, String> {
-    let path = link_path(&app).map_err(|e| format!("link path: {e}"))?;
-    let Ok(text) = std::fs::read_to_string(path) else {
+fn read_link(path: &Path) -> Result<Option<social_link::LinkBundle>, Box<dyn std::error::Error>> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Ok(None) };
+    let bundle: social_link::LinkBundle = serde_json::from_str(&text)?;
+    bundle.verify(0).map_err(|e| invalid(format!("link verify: {e:?}")))?;
+    Ok(Some(bundle))
+}
+
+fn link_status_from_path(path: &Path) -> Result<LinkStatus, String> {
+    let Some(bundle) = read_link(path).map_err(|e| format!("link file: {e}"))? else {
         return Ok(LinkStatus { linked: false, account_fp: None, encryption_fp: None, seq: None });
     };
-    let bundle: social_link::LinkBundle =
-        serde_json::from_str(&text).map_err(|e| format!("link file: {e}"))?;
-    // Проверяем цепочку при каждом чтении: подменённый файл не станет «связанным».
-    bundle.verify(0).map_err(|e| format!("link verify: {e:?}"))?;
     Ok(LinkStatus {
         linked: true,
         account_fp: Some(bundle.payload.account.fp.as_str().to_string()),
         encryption_fp: Some(bundle.payload.device_cert.device_pub_key().to_string()),
         seq: Some(bundle.payload.seq),
     })
+}
+
+#[tauri::command]
+fn social_link_status<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<LinkStatus, String> {
+    let path = link_path(&app).map_err(|e| format!("link path: {e}"))?;
+    link_status_from_path(&path)
 }
 
 /// Принять QR/bundle из мессенджера. Сохраняем только после проверки цепочки.
@@ -79,7 +86,10 @@ fn social_link_accept<R: tauri::Runtime>(
     let path = link_path(&app).map_err(|e| format!("link path: {e}"))?;
     std::fs::write(&path, serde_json::to_vec(&bundle).map_err(|e| e.to_string())?)
         .map_err(|e| format!("link write: {e}"))?;
-    social_link_status(app)
+    if let Some(state) = app.try_state::<SferaState>() {
+        state.set_link_contacts(bundle.payload.contacts.clone())?;
+    }
+    link_status_from_path(&path)
 }
 
 fn shell_commands_handler<R: tauri::Runtime>(
@@ -179,13 +189,21 @@ fn build_state<R: tauri::Runtime>(
     let identity = Identity::from_seed(seed(app)?)?;
     let store = LocalStore::new(app.path().app_data_dir()?.join("blobs"))?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let core = SferaApp::new(
+    let mut core = SferaApp::new(
         identity,
         Arc::new(store),
         RetryPolicy::default(),
         Quota::new(QUOTA_WINDOW_SECS, QUOTA_BYTES, QUOTA_ITEMS, now),
     );
-    Ok(SferaState::new(core, None))
+    let data_dir = app.path().app_data_dir()?;
+    let mut entropy = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut entropy);
+    let encryption = social_keys::load_or_create_at(&data_dir, entropy)?;
+    core.set_encryption_identity(encryption.sender_material());
+    if let Some(bundle) = read_link(&data_dir.join(LINK_FILE))? {
+        core.set_link_contacts(bundle.payload.contacts);
+    }
+    Ok(SferaState::new(core, None).with_keys_dir(data_dir.join("keys")))
 }
 
 /// Один `invoke_handler` на приложение: Tauri допускает только один, поэтому

@@ -321,12 +321,8 @@ export function createAppState({
         throw new Error('avatar must be an image');
       }
       const dataBase64 = await readBase64(file);
-      const result = await bridge.uploadMedia(file.type, dataBase64);
-      state.avatarDraft = {
-        blob_id: result.blob_id,
-        mime: result.mime,
-        size: result.size,
-      };
+      const result = await bridge.uploadAvatar(file.type, dataBase64);
+      state.avatarDraft = result.avatar;
       state.library = await bridge.libraryItems();
       await loadThumbs();
       return result;

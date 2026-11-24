@@ -22,6 +22,9 @@ const bridge = createBridge(async (name, args) => {
   if (name === COMMANDS.planFor) return { months: 12, kopecks: 149000 };
   if (name === COMMANDS.mediaKind) return 'Video';
   if (name === COMMANDS.orgAllowsMedia) return false;
+  if (name === COMMANDS.uploadAvatar) {
+    return { v: 1, avatar: { blob_id: 'aa', mime: 'image/png', size: 3 } };
+  }
   if (name === COMMANDS.libraryOpen) {
     return { v: 1, blob_id: 'aa', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA' };
   }
@@ -66,6 +69,8 @@ const plan = await bridge.planFor({ plans: [] }, 12);
 check(plan.months === 12, 'plan_for passed through');
 check((await bridge.mediaKind('video/mp4')) === 'Video', 'media kind from Rust');
 check((await bridge.orgAllowsMedia('viewer')) === false, 'org rights from Rust');
+const avatar = await bridge.uploadAvatar('image/png', 'AAA');
+check(avatar.avatar.blob_id === 'aa', 'avatar ref from Rust');
 const content = await bridge.libraryOpen('aa');
 check(content.kind === 'Image' && content.data_base64 === 'AAA', 'library content from Rust');
 const thumb = await bridge.libraryThumb('aa');
@@ -86,19 +91,20 @@ const roles = await bridge.roleOptions();
 check(roles[0].value === 'friend' && roles[0].profile === 'full', 'role presets from Rust');
 await bridge.setContactRole({ v: 1, fp: 'aa:bb', role: 'friend' });
 
-check(calls.length === 23, `expected 23 invoke calls, got ${calls.length}`);
+check(calls.length === 24, `expected 24 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
-check(calls[14].args.blobId === 'aa', 'library open arg');
-check(calls[15].args.blobId === 'aa', 'library thumb arg');
-check(calls[16].args.blobId === 'aa', 'library stream arg');
-check(calls[17].args.id === 'sphere_close', 'audience members arg');
-check(calls[18].args.req.id === 'sphere_close', 'set members arg');
-check(calls[19].args.req.display_name === 'Ann', 'profile request passed unchanged');
-check(calls[20].args.now === 1000, 'sync status time passed through');
-check(calls[21].name === COMMANDS.roleOptions, 'role options command');
-check(calls[22].args.req.role === 'friend' && calls[22].args.req.fp === 'aa:bb', 'role request passed unchanged');
+check(calls[14].args.dataBase64 === 'AAA', 'avatar bytes passed to Rust');
+check(calls[15].args.blobId === 'aa', 'library open arg');
+check(calls[16].args.blobId === 'aa', 'library thumb arg');
+check(calls[17].args.blobId === 'aa', 'library stream arg');
+check(calls[18].args.id === 'sphere_close', 'audience members arg');
+check(calls[19].args.req.id === 'sphere_close', 'set members arg');
+check(calls[20].args.req.display_name === 'Ann', 'profile request passed unchanged');
+check(calls[21].args.now === 1000, 'sync status time passed through');
+check(calls[22].name === COMMANDS.roleOptions, 'role options command');
+check(calls[23].args.req.role === 'friend' && calls[23].args.req.fp === 'aa:bb', 'role request passed unchanged');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

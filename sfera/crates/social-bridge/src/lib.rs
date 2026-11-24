@@ -160,3 +160,142 @@ mod tests {
         assert_eq!(p.sent_keys, 3);
     }
 }
+
+// --- Конверты профиля для контактов (ADR-006 §7.6) ------------------------
+//
+// Профиль публикуется адресно: каждому контакту — свой конверт, запечатанный
+// его публичным ключом. Здесь композиция: `social-delivery` умеет печатать,
+// `social-bridge` решает, КОМУ и с каким адресом. Правил шифрования тут нет.
+
+use social_delivery::{seal_payload, RecipientKeyMaterial, SealedEnvelope, SenderKeyMaterial};
+
+/// Один конверт профиля: адресат, адрес доставки и шифротекст.
+#[derive(Clone, Debug)]
+pub struct ProfileEnvelope {
+    pub to: Fingerprint,
+    pub address: String,
+    pub envelope: SealedEnvelope,
+}
+
+/// Итог рассылки: кому ушло и кого пропустили.
+#[derive(Clone, Debug, Default)]
+pub struct EnvelopeBatch {
+    pub sealed: Vec<ProfileEnvelope>,
+    /// Контакты без ключей шифрования: отправить нечем. Не ошибка — их
+    /// просто не видно в списке адресатов, и это надо показать человеку.
+    pub skipped: Vec<Fingerprint>,
+}
+
+/// Запечатать профиль каждому контакту, у кого есть ключи.
+///
+/// `contacts` — из книги контактов (адрес) и bundle (ключи). Контакт без
+/// ключей попадает в `skipped`, а не в ошибку: один неполный контакт не
+/// должен срывать рассылку остальным.
+pub fn seal_profile_for_contacts(
+    profile_json: &str,
+    sender: &SenderKeyMaterial,
+    contacts: &[social_link::LinkedContact],
+) -> EnvelopeBatch {
+    let mut batch = EnvelopeBatch::default();
+    for contact in contacts {
+        let material = RecipientKeyMaterial::from_linked(contact);
+        if !material.can_seal() {
+            batch.skipped.push(contact.fp.clone());
+            continue;
+        }
+        match seal_payload(profile_json, sender, &material) {
+            Ok(envelope) => batch.sealed.push(ProfileEnvelope {
+                to: contact.fp.clone(),
+                address: contact.address.clone(),
+                envelope,
+            }),
+            // Ключи битые (не hex, не base64): контакт пропускаем, остальным
+            // конверты всё равно нужны.
+            Err(_) => batch.skipped.push(contact.fp.clone()),
+        }
+    }
+    batch
+}
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::*;
+    use social_delivery::open_payload;
+
+    fn identity(byte: u8) -> social_keys::EncryptionIdentity {
+        social_keys::EncryptionIdentity::generate([byte; 32]).unwrap()
+    }
+
+    fn contact_of(id: &social_keys::EncryptionIdentity, address: &str) -> social_link::LinkedContact {
+        social_link::LinkedContact {
+            fp: id.fingerprint().unwrap(),
+            pub_key: id.x25519_public_hex().to_string(),
+            label: address.to_string(),
+            x25519_pub: id.x25519_public_hex().to_string(),
+            pq_ek: id.pq_ek_b64().to_string(),
+            address: address.to_string(),
+        }
+    }
+
+    #[test]
+    fn profile_is_sealed_to_every_contact_with_keys() {
+        let alice = identity(11);
+        let bob = identity(22);
+        let carol = identity(33);
+        let contacts = vec![contact_of(&bob, "bob@example.org"), contact_of(&carol, "carol@example.org")];
+
+        let batch = seal_profile_for_contacts(r#"{"name":"Алиса"}"#, &alice.sender_material(), &contacts);
+        assert_eq!(batch.sealed.len(), 2);
+        assert!(batch.skipped.is_empty());
+
+        // Боб открывает СВОЙ конверт и видит профиль.
+        let for_bob = batch.sealed.iter().find(|e| e.to == bob.fingerprint().unwrap()).unwrap();
+        assert_eq!(for_bob.address, "bob@example.org");
+        let opened = open_payload(
+            &for_bob.envelope,
+            bob.x25519_private_hex(),
+            &for_bob.envelope.from_x25519.clone(),
+            bob.pq_seed_hex(),
+        )
+        .unwrap();
+        assert_eq!(for_bob.envelope.from_x25519, alice.x25519_public_hex());
+        assert_eq!(for_bob.envelope.v, social_delivery::ENVELOPE_VERSION);
+        let wire = serde_json::to_string(&for_bob.envelope).unwrap();
+        assert!(!wire.contains(alice.x25519_private_hex()), "приватный ключ не сериализуется");
+        assert_eq!(opened, r#"{"name":"Алиса"}"#);
+    }
+
+    #[test]
+    fn contact_without_keys_is_skipped_not_fatal() {
+        // Один неполный контакт не должен срывать рассылку остальным.
+        let alice = identity(44);
+        let bob = identity(55);
+        let mut no_keys = contact_of(&bob, "bob@example.org");
+        no_keys.x25519_pub = String::new();
+        no_keys.pq_ek = String::new();
+
+        let batch = seal_profile_for_contacts("профиль", &alice.sender_material(), &[no_keys]);
+        assert!(batch.sealed.is_empty());
+        assert_eq!(batch.skipped.len(), 1, "контакт без ключей виден в skipped");
+    }
+
+    #[test]
+    fn broken_keys_are_skipped_not_fatal() {
+        // Битые ключи (не hex/base64) — тот же исход: пропуск, а не паника.
+        let alice = identity(66);
+        let bob = identity(77);
+        let mut broken = contact_of(&bob, "bob@example.org");
+        broken.x25519_pub = "не-hex".into();
+
+        let batch = seal_profile_for_contacts("профиль", &alice.sender_material(), &[broken]);
+        assert!(batch.sealed.is_empty());
+        assert_eq!(batch.skipped.len(), 1);
+    }
+
+    #[test]
+    fn empty_contact_list_gives_empty_batch() {
+        let alice = identity(88);
+        let batch = seal_profile_for_contacts("профиль", &alice.sender_material(), &[]);
+        assert!(batch.sealed.is_empty() && batch.skipped.is_empty());
+    }
+}

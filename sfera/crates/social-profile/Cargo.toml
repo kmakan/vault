@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 # profile_id: SHA-256 от публичного ключа автора (домен отделён от подписи).
 sha2 = "0.10"
 hex = "0.4"
+serde_json = "1"
 
 [dev-dependencies]
 serde_json = "1"

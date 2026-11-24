@@ -88,10 +88,11 @@ fn profile_publication_goes_through_outbox_and_book() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(Quota::new(60, 10_000, 10, 0), dir.path());
 
-    let outcome = app
-        .set_my_profile(100, "Аня", "био", None, vec![], 10)
+    let publication = app
+        .set_my_profile(100, "Аня", "био", None, vec![], 10, None)
         .unwrap();
-    assert_eq!(outcome, social_profile::UpsertOutcome::Inserted);
+    assert_eq!(publication.outcome, social_profile::UpsertOutcome::Inserted);
+    assert_eq!(publication.sealed, 0);
     assert_eq!(app.outbox().len(), 1);
     let me = app.identity().fingerprint().clone();
     let mine = app.profile_of(&me).unwrap().clone();
@@ -112,6 +113,45 @@ fn profile_publication_goes_through_outbox_and_book() {
         "старый профиль не откатывает новый"
     );
     assert_eq!(app.profile_of(&me).unwrap().profile.display_name, "Аня");
+}
+
+#[test]
+fn profile_is_sealed_per_contact_with_avatar_and_updates_are_not_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(Quota::new(60, 100_000, 10, 0), dir.path());
+    let alice = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
+    let bob = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
+    app.set_encryption_identity(alice.sender_material());
+    app.set_link_contacts(vec![social_link::LinkedContact {
+        fp: bob.fingerprint().unwrap(),
+        pub_key: social_model::post::public_key_hex(SEED2).unwrap(),
+        label: "Боб".into(),
+        x25519_pub: bob.x25519_public_hex().to_string(),
+        pq_ek: bob.pq_ek_b64().to_string(),
+        address: "bob@example.org".into(),
+    }]);
+    let manifest = serde_json::json!({"blob_id":"ab","file_key_hex":"cd"});
+
+    let first = app.set_my_profile(100, "Аня", "био", None, vec![], 10, Some(manifest.clone())).unwrap();
+    assert_eq!(first.sealed, 1);
+    assert_eq!(first.skipped, 0);
+    assert_eq!(app.outbox().len(), 1);
+    let item = app.outbox().due(10)[0];
+    assert_eq!(item.to.as_deref(), Some("bob@example.org"));
+    let envelope: social_delivery::SealedEnvelope = serde_json::from_str(item.envelope.as_deref().unwrap()).unwrap();
+    let plain = social_delivery::open_payload(
+        &envelope, bob.x25519_private_hex(), &envelope.from_x25519, bob.pq_seed_hex(),
+    ).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&plain).unwrap();
+    assert_eq!(body["profile"]["profile"]["display_name"], "Аня");
+    assert_eq!(body["avatar_manifest"], manifest);
+    assert!(!plain.contains(alice.x25519_private_hex()));
+
+    // Повтор той же версии идемпотентен, новая версия доезжает отдельным id.
+    app.set_my_profile(100, "Аня", "био", None, vec![], 11, Some(manifest.clone())).unwrap();
+    assert_eq!(app.outbox().len(), 1);
+    app.set_my_profile(200, "Аня Петрова", "био", None, vec![], 12, Some(manifest)).unwrap();
+    assert_eq!(app.outbox().len(), 2);
 }
 
 #[test]

@@ -53,8 +53,8 @@ const bridge = {
     };
     return { v: 7, outcome: 'inserted' };
   },
-  uploadMedia: async (mime) => ({
-    v: 7, blob_id: 'av1', mime, size: 12, kind: 'Image', file_key_hex: '00',
+  uploadAvatar: async (mime) => ({
+    v: 7, avatar: { blob_id: 'av1', mime, size: 12 },
   }),
   libraryItems: async () => [],
   libraryForget: async () => true,

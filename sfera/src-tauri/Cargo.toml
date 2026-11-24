@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 social-app = { path = "../crates/social-app" }
 social-link = { path = "../crates/social-link" }
+social-keys = { path = "../crates/social-keys" }
 social-ffi = { path = "../crates/social-ffi" }
 social-ffi-bridge = { path = "../crates/social-ffi-bridge" }
 social-ffi-extra = { path = "../crates/social-ffi-extra" }

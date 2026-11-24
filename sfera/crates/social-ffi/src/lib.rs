@@ -86,6 +86,13 @@ impl SferaState {
         self
     }
 
+    /// Контакты нового проверенного bundle: меняем сразу, не требуя перезапуска.
+    pub fn set_link_contacts(&self, contacts: Vec<social_link::LinkedContact>) -> Result<(), String> {
+        let mut app = self.app.lock().map_err(|_| "app state lock poisoned".to_string())?;
+        app.set_link_contacts(contacts);
+        Ok(())
+    }
+
     /// Каталог ключей нужен потоковому HTTP-протоколу: URL содержит только
     /// blob_id, ключ и локальный путь наружу не уходят.
     pub fn keys_dir(&self) -> &std::path::Path {
@@ -322,14 +329,46 @@ pub struct OutcomeDto { pub v: u8, pub outcome: String }
 
 impl From<social_app::ProfileUpsertOutcome> for OutcomeDto {
     fn from(o: social_app::ProfileUpsertOutcome) -> Self {
-        let outcome = match o {
-            social_app::ProfileUpsertOutcome::Inserted => "inserted",
-            social_app::ProfileUpsertOutcome::Updated => "updated",
-            social_app::ProfileUpsertOutcome::Duplicate => "duplicate",
-            social_app::ProfileUpsertOutcome::Stale => "stale",
-        };
+        let outcome = profile_outcome_name(o);
         Self { v: API_VERSION, outcome: outcome.into() }
     }
+}
+
+fn profile_outcome_name(o: social_app::ProfileUpsertOutcome) -> &'static str {
+    match o {
+        social_app::ProfileUpsertOutcome::Inserted => "inserted",
+        social_app::ProfileUpsertOutcome::Updated => "updated",
+        social_app::ProfileUpsertOutcome::Duplicate => "duplicate",
+        social_app::ProfileUpsertOutcome::Stale => "stale",
+    }
+}
+
+/// Результат публикации: сколько адресных конвертов готово и сколько контактов
+/// осталось без ключей. Сами ключи и адреса в DTO не попадают.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfilePublicationDto {
+    pub v: u8,
+    pub outcome: String,
+    pub sealed: usize,
+    pub skipped: usize,
+}
+
+impl From<social_app::ProfilePublication> for ProfilePublicationDto {
+    fn from(p: social_app::ProfilePublication) -> Self {
+        Self {
+            v: API_VERSION,
+            outcome: profile_outcome_name(p.outcome).into(),
+            sealed: p.sealed,
+            skipped: p.skipped,
+        }
+    }
+}
+
+/// Аватар для UI: ссылка на блоб, без ключа файла и локального пути.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AvatarDto {
+    pub v: u8,
+    pub avatar: social_app::AvatarRef,
 }
 
 fn check(v: u8) -> Result<(), CommandError> {
@@ -461,11 +500,28 @@ fn social_mark_read(state: tauri::State<'_, SferaState>, post_id: String) -> Res
 }
 
 #[tauri::command]
-fn social_set_my_profile(state: tauri::State<'_, SferaState>, req: SetProfileRequest) -> Result<OutcomeDto, CommandError> {
+fn social_set_my_profile(state: tauri::State<'_, SferaState>, req: SetProfileRequest) -> Result<ProfilePublicationDto, CommandError> {
     check(req.v)?;
+    let avatar = req.avatar.clone();
+    let manifest = match avatar {
+        Some(ref a) => {
+            let stored = social_library::avatar_at(&state.keys_dir)
+                .map_err(|e| CommandError::backend(format!("avatar: {e}")))?
+                .ok_or_else(|| CommandError::input("avatar manifest not found; upload avatar first"))?;
+            if stored.blob_id != a.blob_id.to_hex() {
+                return Err(CommandError::input("avatar does not match the remembered manifest"));
+            }
+            Some(serde_json::to_value(stored).map_err(CommandError::input)?)
+        }
+        None => {
+            social_library::forget_avatar_at(&state.keys_dir)
+                .map_err(|e| CommandError::backend(format!("avatar: {e}")))?;
+            None
+        }
+    };
     state.call(|app| {
         Ok(app.set_my_profile(
-            req.ts, req.display_name, req.bio, req.avatar, req.links, req.now,
+            req.ts, req.display_name, req.bio, req.avatar, req.links, req.now, manifest,
         )?.into())
     })
 }
@@ -607,9 +663,9 @@ fn social_publish_with_media(
 /// Загрузить файл: шифрование в `social-media`, запись через `BlobStore`.
 /// base64 приходит из UI; ключ файла уходит только в ответе и должен попасть
 /// в E2E-конверт, а не в хранилище или логи (ADR-006 §5.2).
-#[tauri::command]
-async fn social_upload_media(
-    state: tauri::State<'_, SferaState>,
+/// Общая загрузка медиа: ключ сохраняется в каталоге, наружу не уходит.
+async fn upload_media(
+    state: &SferaState,
     mime: String,
     data_base64: String,
 ) -> Result<social_upload::UploadResult, CommandError> {
@@ -628,6 +684,42 @@ async fn social_upload_media(
     social_library::remember_at(&state.keys_dir, &result, now)
         .map_err(|e| CommandError::backend(format!("library: {e}")))?;
     Ok(result)
+}
+
+#[tauri::command]
+async fn social_upload_media(
+    state: tauri::State<'_, SferaState>,
+    mime: String,
+    data_base64: String,
+) -> Result<social_upload::UploadResult, CommandError> {
+    upload_media(&state, mime, data_base64).await
+}
+
+/// Загрузить аватар и запомнить его манифест. В ответе только `AvatarRef`:
+/// file_key, URI и ключи шифрования профиля в JS не попадают.
+#[tauri::command]
+async fn social_upload_avatar(
+    state: tauri::State<'_, SferaState>,
+    mime: String,
+    data_base64: String,
+) -> Result<AvatarDto, CommandError> {
+    let result = upload_media(&state, mime, data_base64).await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    social_library::remember_avatar_at(&state.keys_dir, &result.blob_id, now)
+        .map_err(|e| CommandError::backend(format!("avatar: {e}")))?;
+    let blob_id = storage_api::BlobId::from_bytes(
+        hex::decode(&result.blob_id)
+            .map_err(|e| CommandError::input(format!("blob id: {e}")))?
+            .try_into()
+            .map_err(|_| CommandError::input("blob id must be 32 bytes"))?,
+    );
+    Ok(AvatarDto {
+        v: API_VERSION,
+        avatar: social_app::AvatarRef { blob_id, mime: result.mime, size: result.size },
+    })
 }
 
 /// Список своих файлов для галереи: без ключей и локальных путей.
@@ -799,6 +891,7 @@ pub fn handles(command: &str) -> bool {
             | "social_role_options"
             | "social_accept_contact_request"
             | "social_upload_media"
+            | "social_upload_avatar"
             | "social_library_items"
             | "social_library_forget"
             | "social_library_open"
@@ -840,6 +933,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_role_options,
         social_accept_contact_request,
         social_upload_media,
+        social_upload_avatar,
         social_library_items,
         social_library_forget,
         social_library_open,
@@ -919,6 +1013,51 @@ mod tests {
         assert_eq!(s.failed, 0);
         assert_eq!(s.due, 0);
         assert!(!s.has_transport);
+    }
+
+    #[tokio::test]
+    async fn avatar_upload_returns_ref_without_key_and_remembers_manifest() {
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalStore::new(dir.path().join("blobs")).unwrap();
+        let app = SferaApp::new(
+            Identity::from_seed(SEED).unwrap(),
+            Arc::new(store),
+            RetryPolicy::default(),
+            Quota::new(60, 10_000, 10, 0),
+        );
+        let st = SferaState::new(app, None).with_keys_dir(dir.path());
+        let dto = upload_media(
+            &st,
+            "image/png".into(),
+            base64::engine::general_purpose::STANDARD.encode(b"avatar bytes"),
+        ).await.unwrap();
+        social_library::remember_avatar_at(dir.path(), &dto.blob_id, 30).unwrap();
+        let stored = social_library::avatar_at(dir.path()).unwrap().unwrap();
+        assert_eq!(stored.blob_id, dto.blob_id);
+        let blob_id = storage_api::BlobId::from_bytes(
+            hex::decode(&dto.blob_id).unwrap().try_into().unwrap(),
+        );
+        let response = AvatarDto {
+            v: API_VERSION,
+            avatar: social_app::AvatarRef { blob_id, mime: dto.mime.clone(), size: dto.size },
+        };
+        let wire = serde_json::to_string(&response).unwrap();
+        assert!(!wire.contains(&dto.file_key_hex));
+        assert!(!wire.contains(&dto.uri));
+        assert_eq!(response.avatar.blob_id.to_hex(), dto.blob_id);
+    }
+
+    #[test]
+    fn profile_publication_dto_reports_delivery_counts() {
+        let dto = ProfilePublicationDto::from(social_app::ProfilePublication {
+            outcome: social_app::ProfileUpsertOutcome::Updated,
+            sealed: 2,
+            skipped: 1,
+        });
+        assert_eq!(dto.outcome, "updated");
+        assert_eq!(dto.sealed, 2);
+        assert_eq!(dto.skipped, 1);
     }
 
     #[test]

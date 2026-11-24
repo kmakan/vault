@@ -3472,6 +3472,7 @@ dependencies = [
  "social-ffi",
  "social-ffi-bridge",
  "social-ffi-extra",
+ "social-keys",
  "social-link",
  "social-sync",
  "storage-local",
@@ -3590,10 +3591,14 @@ dependencies = [
 name = "social-app"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "social-account",
  "social-audience",
+ "social-bridge",
  "social-contacts",
+ "social-delivery",
  "social-feed",
+ "social-link",
  "social-model",
  "social-post",
  "social-profile",
@@ -3616,6 +3621,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "social-contacts",
+ "social-delivery",
  "social-device",
  "social-history",
  "social-link",
@@ -3631,6 +3637,19 @@ dependencies = [
  "serde",
  "social-model",
  "social-rights",
+]
+
+[[package]]
+name = "social-delivery"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "social-audience",
+ "social-link",
+ "social-model",
+ "vault-core",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -3663,6 +3682,7 @@ dependencies = [
  "social-app",
  "social-contacts",
  "social-library",
+ "social-link",
  "social-manifest",
  "social-media-kind",
  "social-post",
@@ -3709,6 +3729,21 @@ dependencies = [
  "serde",
  "social-contacts",
  "social-model",
+]
+
+[[package]]
+name = "social-keys"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "ml-kem",
+ "serde",
+ "serde_json",
+ "social-delivery",
+ "social-model",
+ "vault-core",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -3797,7 +3832,10 @@ dependencies = [
 name = "social-profile"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "social-model",
  "storage-api",
 ]

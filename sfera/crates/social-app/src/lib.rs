@@ -13,9 +13,11 @@ use std::sync::Arc;
 
 use social_audience::AudienceKeys;
 use social_contacts::ContactBook;
+use social_delivery::SenderKeyMaterial;
 use social_feed::Feed;
 use social_post::{compose, PostError};
-use social_profile::{compose as compose_profile, ProfileBook, ProfileError};
+use social_profile::{ProfileBook, ProfileError};
+mod profile_publish;
 use social_sync::{ingest, DrainReport, Outbox, Quota, QuotaError, RetryPolicy};
 use storage_api::BlobStore;
 
@@ -26,13 +28,19 @@ pub use social_contacts::ContactRecord;
 pub use social_feed::PostId;
 pub use social_model::{Author, Fingerprint};
 pub use social_post::{MediaRef, PostAudience, SignedPost};
-pub use social_profile::{
-    AvatarRef, ProfileLink, SignedProfile,
-};
+pub use social_profile::{AvatarRef, ProfileLink, SignedProfile};
 pub use social_profile::UpsertOutcome as ProfileUpsertOutcome;
 pub use social_rights::{Access, Audience, Role};
 pub use social_sync::{OutboxItem, SyncReport};
 pub use storage_api::{StoreCaps, StoreKind};
+
+/// Итог публикации: книга обновлена, а рассылка видна по числам.
+#[derive(Clone, Debug)]
+pub struct ProfilePublication {
+    pub outcome: ProfileUpsertOutcome,
+    pub sealed: usize,
+    pub skipped: usize,
+}
 
 #[derive(Debug)]
 pub enum AppError {
@@ -70,6 +78,8 @@ pub struct SferaApp {
     outbox: Outbox,
     audiences: BTreeMap<String, AudienceKeys>,
     store: Arc<dyn BlobStore>,
+    peers: Vec<social_link::LinkedContact>,
+    encryption: Option<SenderKeyMaterial>,
 }
 
 impl std::fmt::Debug for SferaApp {
@@ -100,7 +110,19 @@ impl SferaApp {
             outbox: Outbox::new(retry, quota),
             audiences: BTreeMap::new(),
             store,
+            peers: Vec::new(),
+            encryption: None,
         }
+    }
+
+    /// Публичные ключи получателей из проверенного bundle связывания.
+    pub fn set_link_contacts(&mut self, peers: Vec<social_link::LinkedContact>) {
+        self.peers = peers;
+    }
+
+    /// Свой ключ шифрования Sfera. Приватный ключ мессенджера сюда не копируется.
+    pub fn set_encryption_identity(&mut self, sender: SenderKeyMaterial) {
+        self.encryption = Some(sender);
     }
 
     pub fn identity(&self) -> &Identity {
@@ -113,6 +135,14 @@ impl SferaApp {
 
     pub fn profiles(&self) -> &ProfileBook {
         &self.profiles
+    }
+
+    pub(crate) fn profiles_mut(&mut self) -> &mut ProfileBook {
+        &mut self.profiles
+    }
+
+    pub(crate) fn outbox_mut(&mut self) -> &mut Outbox {
+        &mut self.outbox
     }
 
     pub fn contacts(&self) -> &ContactBook {
@@ -224,6 +254,7 @@ impl SferaApp {
     }
 
     /// Опубликовать свой профиль: подпись в `social-profile`, обновление книги.
+    /// Адресная рассылка и манифест — композиция в `social-bridge`.
     pub fn set_my_profile(
         &mut self,
         ts: u64,
@@ -232,19 +263,14 @@ impl SferaApp {
         avatar: Option<AvatarRef>,
         links: Vec<ProfileLink>,
         now: u64,
-    ) -> Result<ProfileUpsertOutcome, AppError> {
-        let signed = compose_profile(
-            self.identity.signing_seed(),
-            ts,
-            display_name,
-            bio,
-            avatar,
-            links,
-        )?;
-        let id = self.identity.fingerprint().as_str().to_string();
-        self.outbox
-            .enqueue(id, signed.profile.bio.len() as u64, now)?;
-        Ok(self.profiles.upsert(signed)?)
+        avatar_manifest: Option<serde_json::Value>,
+    ) -> Result<ProfilePublication, AppError> {
+        let sender = self.encryption.clone();
+        let peers = self.peers.clone();
+        profile_publish::set_my_profile(
+            self, ts, display_name, bio, avatar, links, now,
+            avatar_manifest, &peers, sender.as_ref(),
+        )
     }
 
     /// Принять чужой профиль; «новее побеждает» решает `social-profile`.

@@ -169,10 +169,15 @@ pub fn unwrap_audience_key(
 ///
 /// `PartialEq` не выводится: `HybridHeader` из `vault-core` его не реализует,
 /// а сравнивать конверты целиком незачем — адресат и адрес проверяются полями.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SealedEnvelope {
+    /// Версия адресного конверта.
+    pub v: u8,
     /// Кому адресован конверт (X25519-отпечаток получателя).
     pub to: Fingerprint,
+    /// Публичный X25519 отправителя: нужен получателю для hybrid KDF.
+    /// Это не секрет; приватный ключ в конверт не входит.
+    pub from_x25519: String,
     /// Адрес получателя в книге отправителя: подсказка для доставки и для
     /// случая, когда отпечаток не совпал (алиас, смена адреса).
     pub address: String,
@@ -181,6 +186,9 @@ pub struct SealedEnvelope {
     /// Гибридный заголовок: `kemct` и метаданные PQ.
     pub header: HybridHeader,
 }
+
+/// Версия wire-формы адресного конверта.
+pub const ENVELOPE_VERSION: u8 = 1;
 
 /// Запечатать `plaintext` для получателя.
 pub fn seal_payload(
@@ -196,9 +204,17 @@ pub fn seal_payload(
         &recipient.pq_ek_b64,
     )
     .map_err(|e| DeliveryError::Wrap(e.to_string()))?;
+    let private_bytes: [u8; 32] = hex::decode(&sender.x25519_private_hex)
+        .map_err(|e| DeliveryError::Wrap(e.to_string()))?
+        .try_into()
+        .map_err(|_| DeliveryError::Wrap("sender X25519 key must be 32 bytes".to_string()))?;
+    let private = x25519_dalek::StaticSecret::from(private_bytes);
+    let from_x25519 = hex::encode(x25519_dalek::PublicKey::from(&private).as_bytes());
 
     Ok(SealedEnvelope {
+        v: ENVELOPE_VERSION,
         to: recipient.fp.clone(),
+        from_x25519,
         address: recipient.address.clone(),
         wire,
         header,
