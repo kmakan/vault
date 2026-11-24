@@ -10,8 +10,69 @@
 //! Никаких прав в UI.
 
 use serde::{Deserialize, Serialize};
-use social_model::Fingerprint;
+use social_model::post as signing;
+use social_model::{Author, Fingerprint};
 use social_rights::{permissions, PermissionSet, Role, RoleOverrides};
+
+/// Ошибка сборки идентичности: seed не превратился в валидный ключ подписи.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdentityError {
+    BadSeed(String),
+}
+
+impl std::fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadSeed(m) => write!(f, "bad identity: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for IdentityError {}
+
+/// Локальная идентичность приложения: seed приватного ключа и производный
+/// автор. Вынесена из композиционного корня (бюджет ADR-006 §9.5): корень
+/// только реэкспортирует её — `social-ffi → social-app`, не в обход.
+/// Seed не попадает в `Debug`.
+#[derive(Clone)]
+pub struct Identity {
+    seed_hex: String,
+    author: Author,
+}
+
+impl Identity {
+    /// Собрать идентичность из 32-байтного seed (hex).
+    pub fn from_seed(seed_hex: impl Into<String>) -> Result<Self, IdentityError> {
+        let seed_hex = seed_hex.into();
+        let pub_key = signing::public_key_hex(&seed_hex).map_err(IdentityError::BadSeed)?;
+        let author = Author::from_public_key_hex(&pub_key).map_err(IdentityError::BadSeed)?;
+        Ok(Self { seed_hex, author })
+    }
+
+    pub fn author(&self) -> &Author {
+        &self.author
+    }
+
+    pub fn fingerprint(&self) -> &Fingerprint {
+        &self.author.fp
+    }
+
+    /// Seed нужен корню для подписи поста/профиля (`social_post::compose`,
+    /// `social_profile::compose`). Публичный доступ только внутри приложения:
+    /// в FFI, `Debug` и сериализацию он не попадает.
+    pub fn signing_seed(&self) -> &str {
+        &self.seed_hex
+    }
+}
+
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Identity")
+            .field("fp", &self.author.fp)
+            .field("seed_hex", &"<redacted>")
+            .finish()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -135,5 +196,36 @@ mod tests {
             let p = role.permission_set();
             assert!(!p.can_request_chat);
         }
+    }
+
+    const SEED: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn identity_derives_author_from_seed() {
+        let id = Identity::from_seed(SEED).unwrap();
+        assert_eq!(id.signing_seed(), SEED);
+        // Отпечаток выводится из публичного ключа, а не задаётся снаружи.
+        assert_eq!(
+            id.fingerprint().as_str(),
+            Fingerprint::from_public_key_hex(&signing::public_key_hex(SEED).unwrap())
+                .unwrap()
+                .as_str()
+        );
+    }
+
+    #[test]
+    fn identity_rejects_bad_seed() {
+        assert!(matches!(
+            Identity::from_seed("not-hex"),
+            Err(IdentityError::BadSeed(_))
+        ));
+    }
+
+    #[test]
+    fn identity_debug_redacts_seed() {
+        let id = Identity::from_seed(SEED).unwrap();
+        let rendered = format!("{id:?}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(!rendered.contains(SEED));
     }
 }

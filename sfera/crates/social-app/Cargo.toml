@@ -8,6 +8,7 @@ description = "Vault Sfera: композиционный корень — тол
 
 [dependencies]
 social-model = { path = "../social-model" }
+social-account = { path = "../social-account" }
 social-rights = { path = "../social-rights" }
 social-contacts = { path = "../social-contacts" }
 social-audience = { path = "../social-audience" }

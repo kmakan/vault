@@ -14,13 +14,13 @@ use std::sync::Arc;
 use social_audience::AudienceKeys;
 use social_contacts::ContactBook;
 use social_feed::Feed;
-use social_model::post as signing;
 use social_post::{compose, PostError};
 use social_profile::{compose as compose_profile, ProfileBook, ProfileError};
 use social_sync::{ingest, DrainReport, Outbox, Quota, QuotaError, RetryPolicy};
 use storage_api::BlobStore;
 
 // Типы домена реэкспортируются корнем: social-ffi → social-app, не в обход.
+pub use social_account::Identity;
 pub use social_audience::MembershipChange;
 pub use social_contacts::ContactRecord;
 pub use social_feed::PostId;
@@ -34,44 +34,8 @@ pub use social_rights::{Access, Audience, Role};
 pub use social_sync::{OutboxItem, SyncReport};
 pub use storage_api::{StoreCaps, StoreKind};
 
-/// Локальная идентичность приложения: seed приватного ключа и производный
-/// автор. Seed не попадает в `Debug`.
-#[derive(Clone)]
-pub struct Identity {
-    seed_hex: String,
-    author: Author,
-}
-
-impl Identity {
-    /// Собрать идентичность из 32-байтного seed (hex).
-    pub fn from_seed(seed_hex: impl Into<String>) -> Result<Self, AppError> {
-        let seed_hex = seed_hex.into();
-        let pub_key = signing::public_key_hex(&seed_hex).map_err(AppError::BadAuthor)?;
-        let author = Author::from_public_key_hex(&pub_key).map_err(AppError::BadAuthor)?;
-        Ok(Self { seed_hex, author })
-    }
-
-    pub fn author(&self) -> &Author {
-        &self.author
-    }
-
-    pub fn fingerprint(&self) -> &Fingerprint {
-        &self.author.fp
-    }
-}
-
-impl std::fmt::Debug for Identity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Identity")
-            .field("fp", &self.author.fp)
-            .field("seed_hex", &"<redacted>")
-            .finish()
-    }
-}
-
 #[derive(Debug)]
 pub enum AppError {
-    BadAuthor(String),
     Post(PostError),
     Profile(ProfileError),
     Quota(QuotaError),
@@ -82,7 +46,6 @@ pub enum AppError {
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BadAuthor(m) => write!(f, "bad identity: {m}"),
             Self::Post(e) => write!(f, "post: {e}"),
             Self::Profile(e) => write!(f, "profile: {e}"),
             Self::Quota(e) => write!(f, "quota: {e}"),
@@ -235,7 +198,7 @@ impl SferaApp {
         media: Vec<social_post::MediaRef>,
         now: u64,
     ) -> Result<SignedPost, AppError> {
-        let post = compose(&self.identity.seed_hex, ts, body, audience, media)?;
+        let post = compose(self.identity.signing_seed(), ts, body, audience, media)?;
         let id = PostId::from_post(&post.post)
             .map_err(|e| AppError::Canonical(e.to_string()))?
             .to_hex();
@@ -271,7 +234,7 @@ impl SferaApp {
         now: u64,
     ) -> Result<ProfileUpsertOutcome, AppError> {
         let signed = compose_profile(
-            &self.identity.seed_hex,
+            self.identity.signing_seed(),
             ts,
             display_name,
             bio,
