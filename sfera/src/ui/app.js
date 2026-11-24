@@ -347,8 +347,22 @@ export function createAppState({
     },
 
     // Просмотр своего файла: расшифровка и ключ — в Rust, здесь только
-    // показ уже готовых байтов.
+    // показ уже готовых байтов. Аудио/видео не читаем целиком: WebView сам
+    // запросит Range у адреса, который отдал Rust.
     async openFile(blobId) {
+      const item = state.library.find((i) => i.blob_id === blobId);
+      if (item && (item.kind === 'Audio' || item.kind === 'Video')) {
+        const stream = await bridge.libraryStream(blobId);
+        if (!stream) throw new Error('file not found');
+        state.preview = {
+          blob_id: stream.blob_id,
+          mime: stream.mime,
+          size: stream.size,
+          kind: item.kind,
+        };
+        state.previewUrl = stream.url;
+        return state.preview;
+      }
       const content = await bridge.libraryOpen(blobId);
       if (!content) throw new Error('file not found');
       state.preview = content;

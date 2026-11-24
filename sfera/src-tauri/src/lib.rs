@@ -87,6 +87,49 @@ fn shell_commands_handler<R: tauri::Runtime>(
     tauri::generate_handler![social_link_status, social_link_accept]
 }
 
+/// Один Range-ответ протокола в HTTP. Код, MIME и Content-Range приходят из
+/// `social-ffi`; оболочка только укладывает их в `http::Response`.
+fn media_http_response(res: social_ffi::MediaResponse) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response, StatusCode};
+    let status = StatusCode::from_u16(res.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, res.mime)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, res.bytes.len());
+    if let Some(range) = res.content_range {
+        builder = builder.header(header::CONTENT_RANGE, range);
+    }
+    builder
+        .body(res.bytes)
+        .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// Потоковый протокол: WebView сам просит следующий кусок через `Range`.
+/// Ответ готовится вне потока UI, ключи остаются в `social-library`.
+fn register_media_scheme<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+) -> tauri::Builder<R> {
+    builder.register_asynchronous_uri_scheme_protocol(
+        social_ffi::MEDIA_SCHEME,
+        |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            let range = request
+                .headers()
+                .get(tauri::http::header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<SferaState>();
+                let blob_id = path.trim_start_matches('/');
+                let res = social_ffi::serve_range(&state, blob_id, range.as_deref()).await;
+                responder.respond(media_http_response(res));
+            });
+        },
+    )
+}
+
 fn invalid(msg: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, msg.into())
 }
@@ -162,7 +205,7 @@ fn dispatch<R: tauri::Runtime>(invoke: tauri::ipc::Invoke<R>) -> bool {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    register_media_scheme(tauri::Builder::default())
         .setup(|app| {
             let state = build_state(app.handle())
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -177,6 +220,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_response_keeps_range_and_content_type() {
+        let res = media_http_response(social_ffi::MediaResponse {
+            status: 206,
+            mime: "video/mp4".into(),
+            content_range: Some("bytes 5-19/25".into()),
+            bytes: vec![1, 2, 3],
+        });
+        assert_eq!(res.status(), tauri::http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(res.headers()[tauri::http::header::CONTENT_TYPE], "video/mp4");
+        assert_eq!(res.headers()[tauri::http::header::CONTENT_RANGE], "bytes 5-19/25");
+        assert_eq!(res.headers()[tauri::http::header::ACCEPT_RANGES], "bytes");
+        assert_eq!(res.body(), &[1, 2, 3]);
+    }
 
     #[test]
     fn seed_is_created_once_and_reused() {

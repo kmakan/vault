@@ -12,6 +12,8 @@ let sphereMembers = ['aa:bb'];
 let myProfile = { profile: { display_name: 'Ann', bio: '', links: [] }, sig: 'x' };
 let contactRole = 'friend';
 let roleRequest = null;
+let streamCalls = [];
+let openCalls = [];
 
 const bridge = {
   apiVersion: async () => 7,
@@ -56,9 +58,20 @@ const bridge = {
   }),
   libraryItems: async () => [],
   libraryForget: async () => true,
-  libraryOpen: async (blobId) => ({
-    v: 7, blob_id: blobId, mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA',
-  }),
+  libraryOpen: async (blobId) => {
+    openCalls.push(blobId);
+    return {
+      v: 7, blob_id: blobId, mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA',
+    };
+  },
+  libraryStream: async (blobId) => {
+    streamCalls.push(blobId);
+    const mime = blobId === 'blob-3' ? 'video/mp4' : 'audio/ogg';
+    return {
+      v: 7, blob_id: blobId, mime, size: 9,
+      url: `sfera-media://localhost/${blobId}`,
+    };
+  },
   libraryThumb: async (blobId) => ({
     v: 7, blob_id: blobId, mime: 'image/jpeg', kind: 'Image', size: 3, data_base64: 'AAA',
   }),
@@ -120,17 +133,19 @@ check(doc.kind === 'Document' && s.previewUrl === null, 'documents have no inlin
 await api.forgetFile('blob-2');
 check(s.preview === null && s.previewUrl === null, 'forgetting open file closes preview');
 
-bridge.libraryOpen = async (blobId) => ({
-  v: 7, blob_id: blobId, mime: 'video/mp4', kind: 'Video', size: 9, data_base64: 'AAA',
-});
-await api.openFile('blob-3');
-check(s.previewUrl === 'data:video/mp4;base64,AAA', 'video plays inline');
+s.library = [
+  { blob_id: 'blob-3', kind: 'Video', mime: 'video/mp4' },
+  { blob_id: 'blob-4', kind: 'Audio', mime: 'audio/ogg' },
+];
+const beforeStream = openCalls.length;
+const video = await api.openFile('blob-3');
+check(video.kind === 'Video', 'video kind comes from the catalog');
+check(s.previewUrl === 'sfera-media://localhost/blob-3', 'video streams from Rust URL');
 api.closePreview();
-bridge.libraryOpen = async (blobId) => ({
-  v: 7, blob_id: blobId, mime: 'audio/ogg', kind: 'Audio', size: 9, data_base64: 'AAA',
-});
-await api.openFile('blob-4');
-check(s.previewUrl === 'data:audio/ogg;base64,AAA', 'audio plays inline');
+const audio = await api.openFile('blob-4');
+check(s.previewUrl === 'sfera-media://localhost/blob-4', 'audio streams from Rust URL');
+check(streamCalls.join(',') === 'blob-3,blob-4', 'stream command used for media');
+check(openCalls.length === beforeStream, 'audio/video are not read as whole base64');
 api.closePreview();
 
 s.library = [{ blob_id: 'b1', thumb_blob_id: 't1' }];

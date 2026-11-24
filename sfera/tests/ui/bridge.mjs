@@ -25,6 +25,9 @@ const bridge = createBridge(async (name, args) => {
   if (name === COMMANDS.libraryOpen) {
     return { v: 1, blob_id: 'aa', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA' };
   }
+  if (name === COMMANDS.libraryStream) {
+    return { v: 1, blob_id: 'aa', mime: 'video/mp4', size: 9, url: 'sfera-media://localhost/aa' };
+  }
   if (name === COMMANDS.libraryThumb) {
     return { v: 1, blob_id: 'aa', mime: 'image/jpeg', kind: 'Image', size: 3, data_base64: 'AAA' };
   }
@@ -67,6 +70,8 @@ const content = await bridge.libraryOpen('aa');
 check(content.kind === 'Image' && content.data_base64 === 'AAA', 'library content from Rust');
 const thumb = await bridge.libraryThumb('aa');
 check(thumb.mime === 'image/jpeg', 'thumbnail from Rust');
+const stream = await bridge.libraryStream('aa');
+check(stream.url === 'sfera-media://localhost/aa' && stream.size === 9, 'stream URL from Rust');
 const members = await bridge.audienceMembers('sphere_close');
 check(members.epoch === 2 && members.members.length === 1, 'audience members from Rust');
 const changed = await bridge.setAudienceMembers({ v: 1, id: 'sphere_close', members: ['aa:bb'] });
@@ -81,18 +86,19 @@ const roles = await bridge.roleOptions();
 check(roles[0].value === 'friend' && roles[0].profile === 'full', 'role presets from Rust');
 await bridge.setContactRole({ v: 1, fp: 'aa:bb', role: 'friend' });
 
-check(calls.length === 22, `expected 22 invoke calls, got ${calls.length}`);
+check(calls.length === 23, `expected 23 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
 check(calls[14].args.blobId === 'aa', 'library open arg');
 check(calls[15].args.blobId === 'aa', 'library thumb arg');
-check(calls[16].args.id === 'sphere_close', 'audience members arg');
-check(calls[17].args.req.id === 'sphere_close', 'set members arg');
-check(calls[18].args.req.display_name === 'Ann', 'profile request passed unchanged');
-check(calls[19].args.now === 1000, 'sync status time passed through');
-check(calls[20].name === COMMANDS.roleOptions, 'role options command');
-check(calls[21].args.req.role === 'friend' && calls[21].args.req.fp === 'aa:bb', 'role request passed unchanged');
+check(calls[16].args.blobId === 'aa', 'library stream arg');
+check(calls[17].args.id === 'sphere_close', 'audience members arg');
+check(calls[18].args.req.id === 'sphere_close', 'set members arg');
+check(calls[19].args.req.display_name === 'Ann', 'profile request passed unchanged');
+check(calls[20].args.now === 1000, 'sync status time passed through');
+check(calls[21].name === COMMANDS.roleOptions, 'role options command');
+check(calls[22].args.req.role === 'friend' && calls[22].args.req.fp === 'aa:bb', 'role request passed unchanged');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;

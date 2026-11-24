@@ -18,6 +18,13 @@ use social_app::{
     SferaApp, SignedPost, StoreCaps, SyncReport,
 };
 
+mod stream;
+
+pub use stream::{
+    media_url, parse_http_range, resolve_range, serve_range, stream_info, valid_blob_id,
+    MediaResponse, RangeSpec, MEDIA_SCHEME,
+};
+
 /// Версия wire-контракта команд. Поднимать при ломающем изменении DTO.
 pub const API_VERSION: u8 = 1;
 
@@ -77,6 +84,12 @@ impl SferaState {
     pub fn with_keys_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.keys_dir = dir.into();
         self
+    }
+
+    /// Каталог ключей нужен потоковому HTTP-протоколу: URL содержит только
+    /// blob_id, ключ и локальный путь наружу не уходят.
+    pub fn keys_dir(&self) -> &std::path::Path {
+        &self.keys_dir
     }
 
     /// Хендл хранилища для async-команд: копируем Arc и не держим mutex
@@ -188,6 +201,17 @@ pub struct LibraryRangeDto {
     pub start: u64,
     pub end: u64,
     pub data_base64: String,
+}
+
+/// Адрес потокового просмотра. `url` собирает Rust с правильным для платформы
+/// origin; JS только подставляет его в `<video>/<audio>`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StreamDto {
+    pub v: u8,
+    pub blob_id: String,
+    pub mime: String,
+    pub size: u64,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -659,6 +683,25 @@ async fn social_library_open_range(
     library_open_range(&state, req).await
 }
 
+/// Потоковый адрес своего файла без чтения самого файла. `None` — записи нет
+/// в каталоге; `mime` и размер приходят из заголовка VAULTBLOB1.
+#[tauri::command]
+async fn social_library_stream(
+    state: tauri::State<'_, SferaState>,
+    blob_id: String,
+) -> Result<Option<StreamDto>, CommandError> {
+    let Some((mime, size)) = stream_info(&state, &blob_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(StreamDto {
+        v: API_VERSION,
+        url: media_url(&blob_id),
+        blob_id,
+        mime,
+        size,
+    }))
+}
+
 /// Прочитать и расшифровать миниатюру своего файла. `None` — миниатюры нет
 /// (не изображение или файл загружен до её появления).
 #[tauri::command]
@@ -760,6 +803,7 @@ pub fn handles(command: &str) -> bool {
             | "social_library_forget"
             | "social_library_open"
             | "social_library_open_range"
+            | "social_library_stream"
             | "social_library_thumb"
             | "social_publish_with_media"
             | "social_create_audience"
@@ -800,6 +844,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_library_forget,
         social_library_open,
         social_library_open_range,
+        social_library_stream,
         social_library_thumb,
         social_publish_with_media,
         social_create_audience,
