@@ -61,6 +61,8 @@ pub trait DeliveryPort: Send + Sync {
 pub struct SferaState {
     app: Mutex<SferaApp>,
     delivery: Option<Arc<dyn DeliveryPort>>,
+    /// Манифесты только принятых и проверенных профилей; ключ не уходит в JS.
+    received_avatars: Mutex<std::collections::HashMap<String, social_library::AvatarManifest>>,
     /// Каталог локальных ключей и метаданных (media_library.json).
     keys_dir: std::path::PathBuf,
 }
@@ -70,6 +72,7 @@ impl SferaState {
         Self {
             app: Mutex::new(app),
             delivery,
+            received_avatars: Mutex::new(std::collections::HashMap::new()),
             keys_dir: std::env::var("SFERA_KEYS_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| {
@@ -84,6 +87,13 @@ impl SferaState {
     pub fn with_keys_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.keys_dir = dir.into();
         self
+    }
+
+    /// Приватные ключи Sfera для приёма конверта: только внутрь Rust-команды,
+    /// в DTO/JS не возвращаются.
+    pub fn encryption(&self) -> Result<social_keys::EncryptionIdentity, CommandError> {
+        social_keys::load_at(&self.keys_dir)
+            .map_err(|e| CommandError::backend(format!("encryption: {e}")))
     }
 
     /// Контакты нового проверенного bundle: меняем сразу, не требуя перезапуска.
@@ -537,6 +547,28 @@ fn social_profile(state: tauri::State<'_, SferaState>, fp: String) -> Result<Opt
     })
 }
 
+/// Принять адресный профиль: ключи читаются из app data и не покидают Rust.
+#[tauri::command]
+fn social_receive_profile(
+    state: tauri::State<'_, SferaState>,
+    envelope: social_delivery::SealedEnvelope,
+) -> Result<OutcomeDto, CommandError> {
+    let encryption = state.encryption()?;
+    let (outcome, profile_id, manifest) = state.call(|app| {
+        let received = app.receive_profile_envelope(
+            &envelope,
+            encryption.x25519_private_hex(),
+            encryption.pq_seed_hex(),
+        )?;
+        Ok((received.outcome, received.profile_id, received.avatar_manifest))
+    })?;
+    if let Some(manifest) = manifest {
+        state.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))?
+            .insert(profile_id, manifest);
+    }
+    Ok(outcome.into())
+}
+
 /// Единственное решение о доступе — в `social-rights`; FFI только передаёт.
 #[tauri::command]
 fn social_access(state: tauri::State<'_, SferaState>, req: AccessRequest) -> Result<Option<serde_json::Value>, CommandError> {
@@ -808,6 +840,24 @@ async fn social_library_thumb(
     Ok(opened.map(content_dto))
 }
 
+/// Открыть ЧУЖОЙ аватар по стабильному ID автора. Манифест и его ключ были
+/// приняты проверенным E2E-конвертом и остаются внутри Rust.
+#[tauri::command]
+async fn social_open_received_avatar(
+    state: tauri::State<'_, SferaState>,
+    profile_id: String,
+) -> Result<LibraryContentDto, CommandError> {
+    let manifest = state.received_avatars.lock()
+        .map_err(|_| CommandError::backend("received avatars lock"))?
+        .get(&profile_id).cloned()
+        .ok_or_else(|| CommandError::input("profile has no received avatar"))?;
+    let store = state.store_handle()?;
+    let opened = social_library::open_avatar_with_optional_store(Some(store.as_ref()), &manifest)
+        .await
+        .map_err(|e| CommandError::backend(format!("avatar: {e}")))?;
+    Ok(content_dto(opened))
+}
+
 /// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
 /// живут в social-contacts; FFI только передаёт готовую форму (ADR-006 §4.1).
 #[tauri::command]
@@ -884,6 +934,7 @@ pub fn handles(command: &str) -> bool {
             | "social_audiences"
             | "social_mark_read"
             | "social_set_my_profile"
+            | "social_receive_profile"
             | "social_profile"
             | "social_access"
             | "social_put_contact"
@@ -898,6 +949,7 @@ pub fn handles(command: &str) -> bool {
             | "social_library_open_range"
             | "social_library_stream"
             | "social_library_thumb"
+            | "social_open_received_avatar"
             | "social_publish_with_media"
             | "social_create_audience"
             | "social_set_audience_members"
@@ -926,6 +978,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_audiences,
         social_mark_read,
         social_set_my_profile,
+        social_receive_profile,
         social_profile,
         social_access,
         social_put_contact,
@@ -940,6 +993,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_library_open_range,
         social_library_stream,
         social_library_thumb,
+        social_open_received_avatar,
         social_publish_with_media,
         social_create_audience,
         social_set_audience_members,

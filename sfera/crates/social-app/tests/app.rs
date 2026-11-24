@@ -130,13 +130,17 @@ fn profile_is_sealed_per_contact_with_avatar_and_updates_are_not_duplicates() {
         pq_ek: bob.pq_ek_b64().to_string(),
         address: "bob@example.org".into(),
     }]);
-    let manifest = serde_json::json!({"blob_id":"ab","file_key_hex":"cd"});
+    let manifest = serde_json::json!({
+        "blob_id":"ab", "content_id":"content", "file_key_hex":"11".repeat(32),
+        "nonce_prefix_hex":"22".repeat(4), "mime":"image/png", "size":3,
+        "store_id":"local", "uri":"/tmp/avatar", "set_at":100,
+    });
 
     let first = app.set_my_profile(100, "Аня", "био", None, vec![], 10, Some(manifest.clone())).unwrap();
     assert_eq!(first.sealed, 1);
     assert_eq!(first.skipped, 0);
     assert_eq!(app.outbox().len(), 1);
-    let item = app.outbox().due(10)[0];
+    let item = app.outbox().due(10)[0].clone();
     assert_eq!(item.to.as_deref(), Some("bob@example.org"));
     let envelope: social_delivery::SealedEnvelope = serde_json::from_str(item.envelope.as_deref().unwrap()).unwrap();
     let plain = social_delivery::open_payload(
@@ -146,6 +150,16 @@ fn profile_is_sealed_per_contact_with_avatar_and_updates_are_not_duplicates() {
     assert_eq!(body["profile"]["profile"]["display_name"], "Аня");
     assert_eq!(body["avatar_manifest"], manifest);
     assert!(!plain.contains(alice.x25519_private_hex()));
+
+    let received = app.receive_profile_envelope(
+        &envelope, bob.x25519_private_hex(), bob.pq_seed_hex(),
+    ).unwrap();
+    assert_eq!(received.outcome, social_profile::UpsertOutcome::Duplicate);
+    assert_eq!(received.avatar_manifest.as_ref().map(|m| m.file_key_hex.as_str()), Some("11".repeat(32).as_str()));
+    let wrong = social_keys::EncryptionIdentity::generate([99; 32]).unwrap();
+    assert!(app.receive_profile_envelope(
+        &envelope, wrong.x25519_private_hex(), wrong.pq_seed_hex(),
+    ).is_err());
 
     // Повтор той же версии идемпотентен, новая версия доезжает отдельным id.
     app.set_my_profile(100, "Аня", "био", None, vec![], 11, Some(manifest.clone())).unwrap();

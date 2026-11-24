@@ -353,6 +353,32 @@ pub fn envelope_json(
     serde_json::to_string(&value).map_err(|e| ProfileError::Canonical(e.to_string()))
 }
 
+/// Разобрать содержимое адресного конверта. Манифест валидируется в тип,
+/// а не остаётся непрозрачным JSON с произвольным ключом.
+pub fn parse_envelope_json(
+    plaintext: &str,
+) -> Result<(SignedProfile, Option<social_library::AvatarManifest>), ProfileError> {
+    let value: serde_json::Value = serde_json::from_str(plaintext)
+        .map_err(|e| ProfileError::Canonical(format!("envelope json: {e}")))?;
+    let signed: SignedProfile = serde_json::from_value(value.get("profile").cloned().ok_or_else(|| {
+        ProfileError::Canonical("envelope has no profile".into())
+    })?)
+    .map_err(|e| ProfileError::Canonical(format!("envelope profile: {e}")))?;
+    if !verify_profile(&signed) {
+        return Err(ProfileError::InvalidSignature);
+    }
+    let manifest: Option<social_library::AvatarManifest> = value.get("avatar_manifest").cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| ProfileError::Canonical(format!("avatar manifest: {e}")))?;
+    if let (Some(avatar), Some(manifest)) = (signed.profile.avatar.as_ref(), manifest.as_ref()) {
+        if manifest.blob_id != avatar.blob_id.to_hex() {
+            return Err(ProfileError::Canonical("avatar manifest does not match profile".into()));
+        }
+    }
+    Ok((signed, manifest))
+}
+
 /// Идентификатор одной версии публикации. Стабильный `profile_id` отвечает
 /// на «какой профиль», а outbox требует также «какая версия»: иначе обновление
 /// имени или аватара навсегда выглядело бы дубликатом первой отправки.
@@ -392,6 +418,24 @@ mod tests {
         assert_eq!(value["avatar_manifest"], manifest);
         let without: serde_json::Value = serde_json::from_str(&envelope_json(&signed, None).unwrap()).unwrap();
         assert!(without.get("avatar_manifest").is_none());
+    }
+
+    #[test]
+    fn envelope_parse_verifies_signature_and_keeps_manifest() {
+        let signed = compose(SEED, 100, "Анна", "", None, vec![]).unwrap();
+        let manifest = serde_json::json!({
+            "blob_id": signed.profile.avatar.as_ref().map_or("ab".into(), |a| a.blob_id.to_hex()),
+            "content_id": "content", "file_key_hex": "11".repeat(32),
+            "nonce_prefix_hex": "22".repeat(4), "mime": "image/png", "size": 3,
+            "store_id": "local", "uri": "/tmp/avatar", "set_at": 1,
+        });
+        let plaintext = envelope_json(&signed, Some(&manifest)).unwrap();
+        let (parsed, parsed_manifest) = parse_envelope_json(&plaintext).unwrap();
+        assert_eq!(parsed, signed);
+        assert_eq!(parsed_manifest.map(|m| m.file_key_hex), Some("11".repeat(32)));
+        let tampered = plaintext.replace("Анна", "Ева");
+        assert_eq!(parse_envelope_json(&tampered).unwrap_err(), ProfileError::InvalidSignature);
+        assert!(parse_envelope_json("{}").is_err());
     }
 
     #[test]

@@ -720,9 +720,105 @@ pub fn forget_avatar_at(keys_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Прочитать ЧУЖОЙ аватар по манифесту из принятого E2E-конверта.
+/// Локальный каталог своих файлов не используется: ключ и локатор принадлежат
+/// отправителю профиля. `BlobStore` должен уметь прочитать указанный locator;
+/// для локального файла манифеста используется отдельная функция ниже.
+pub async fn open_avatar_with_store(
+    store: &dyn BlobStore,
+    manifest: &AvatarManifest,
+) -> Result<Opened> {
+    if manifest.size > MAX_OPEN_BYTES {
+        return Err(anyhow!("avatar is too large to open in UI"));
+    }
+    let key: [u8; 32] = hex::decode(&manifest.file_key_hex)
+        .context("avatar key is not hex")?
+        .try_into()
+        .map_err(|_| anyhow!("avatar key must be 32 bytes"))?;
+    let locator = Locator {
+        store_id: manifest.store_id.clone(),
+        uri: manifest.uri.clone(),
+        blob_id: BlobId::from_str(&manifest.blob_id).context("bad avatar blob id")?,
+    };
+    let mut reader = store.get(&locator, None).await.context("read avatar")?;
+    let mut cipher = Vec::new();
+    reader.read_to_end(&mut cipher).await.context("read avatar body")?;
+    let bytes = social_media::decrypt_blob(&cipher, &key).context("decrypt avatar")?;
+    Ok(Opened {
+        blob_id: manifest.blob_id.clone(),
+        mime: manifest.mime.clone(),
+        kind: social_media_kind::classify(&manifest.mime),
+        size: bytes.len() as u64,
+        bytes,
+    })
+}
+
+/// Открыть полученный аватар из локального Locator без каталога и без
+/// превращения его в «свой» файл. Путь остаётся внутри Rust.
+pub fn open_avatar_locally(manifest: &AvatarManifest) -> Result<Opened> {
+    if manifest.store_id != "local" && manifest.store_id != "device" {
+        return Err(anyhow!("avatar locator is not local"));
+    }
+    if manifest.size > MAX_OPEN_BYTES {
+        return Err(anyhow!("avatar is too large to open in UI"));
+    }
+    let key: [u8; 32] = hex::decode(&manifest.file_key_hex)
+        .context("avatar key is not hex")?
+        .try_into()
+        .map_err(|_| anyhow!("avatar key must be 32 bytes"))?;
+    let cipher = std::fs::read(&manifest.uri).context("read local avatar")?;
+    let bytes = social_media::decrypt_blob(&cipher, &key).context("decrypt avatar")?;
+    Ok(Opened {
+        blob_id: manifest.blob_id.clone(),
+        mime: manifest.mime.clone(),
+        kind: social_media_kind::classify(&manifest.mime),
+        size: bytes.len() as u64,
+        bytes,
+    })
+}
+
+/// Прочитать полученный аватар по манифесту. Если локатор сетевой, читаем
+/// через переданный `BlobStore`; локальный файл — напрямую внутри Rust.
+pub async fn open_avatar_with_optional_store(
+    store: Option<&dyn BlobStore>,
+    manifest: &AvatarManifest,
+) -> Result<Opened> {
+    if manifest.store_id == "local" || manifest.store_id == "device" {
+        return open_avatar_locally(manifest);
+    }
+    let store = store.ok_or_else(|| anyhow!("avatar store is not connected"))?;
+    open_avatar_with_store(store, manifest).await
+}
+
 #[cfg(test)]
 mod avatar_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn received_avatar_opens_from_manifest_without_library_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = storage_local::LocalStore::new(dir.path()).unwrap();
+        let uploaded = social_upload::upload_encrypted(&store, "image/png", b"received avatar")
+            .await
+            .unwrap();
+        let manifest = AvatarManifest {
+            blob_id: uploaded.blob_id,
+            content_id: uploaded.content_id,
+            file_key_hex: uploaded.file_key_hex,
+            nonce_prefix_hex: uploaded.nonce_prefix_hex,
+            mime: uploaded.mime,
+            size: uploaded.size,
+            store_id: uploaded.store_id,
+            uri: uploaded.uri,
+            thumb: None,
+            set_at: 1,
+        };
+        let opened = open_avatar_with_optional_store(Some(&store), &manifest).await.unwrap();
+        assert_eq!(opened.bytes, b"received avatar");
+        assert_eq!(opened.kind, MediaKind::Image);
+        let local = open_avatar_locally(&manifest).unwrap();
+        assert_eq!(local.bytes, opened.bytes);
+    }
 
     fn uploaded(id: &str, mime: &str) -> social_upload::UploadResult {
         social_upload::UploadResult {

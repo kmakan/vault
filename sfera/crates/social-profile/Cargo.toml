@@ -8,6 +8,7 @@ description = "Vault Sfera: профиль, аватар, ссылки — по�
 
 [dependencies]
 social-model = { path = "../social-model" }
+social-library = { path = "../social-library" }
 storage-api = { path = "../storage-api" }
 serde = { version = "1", features = ["derive"] }
 # profile_id: SHA-256 от публичного ключа автора (домен отделён от подписи).

@@ -22,6 +22,8 @@ export const COMMANDS = Object.freeze({
   publishPost: 'social_publish_post',
   profile: 'social_profile',
   setMyProfile: 'social_set_my_profile',
+  receiveProfile: 'social_receive_profile',
+  openReceivedAvatar: 'social_open_received_avatar',
   storeCaps: 'social_store_caps',
   companion: 'social_companion_action',
   plans: 'social_plans_from_server',
@@ -37,6 +39,7 @@ export const COMMANDS = Object.freeze({
   libraryStream: 'social_library_stream',
   libraryThumb: 'social_library_thumb',
   syncStatus: 'social_sync_status',
+  syncOutbox: 'social_sync_outbox',
 });
 
 export function createBridge(invoke) {
@@ -111,6 +114,16 @@ export function createBridge(invoke) {
       return invoke(COMMANDS.setMyProfile, { req });
     },
 
+    // Входной E2E-конверт и ключи разбирает только Rust.
+    receiveProfile(envelope) {
+      return invoke(COMMANDS.receiveProfile, { envelope });
+    },
+
+    // Чужой аватар открывается по profile_id; ключ не покидает Rust.
+    openReceivedAvatar(profileId) {
+      return invoke(COMMANDS.openReceivedAvatar, { profileId });
+    },
+
     storeCaps() {
       return invoke(COMMANDS.storeCaps);
     },
@@ -182,6 +195,11 @@ export function createBridge(invoke) {
     // Очередь и факт подключения транспорта — только числа от Rust.
     syncStatus(now) {
       return invoke(COMMANDS.syncStatus, { now });
+    },
+
+    // Запуск отправки явный: факт ответа сервера фиксирует outbox в Rust.
+    syncOutbox(now) {
+      return invoke(COMMANDS.syncOutbox, { now });
     },
   };
 }

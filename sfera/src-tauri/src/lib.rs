@@ -20,6 +20,8 @@ use social_sync::{Quota, RetryPolicy};
 use storage_local::LocalStore;
 use tauri::Manager;
 
+mod smtp;
+
 const IDENTITY_FILE: &str = "identity.json";
 /// Принятый bundle связывания (ADR-009 §4). Только публичные данные.
 const LINK_FILE: &str = "sfera_link.json";
@@ -200,10 +202,14 @@ fn build_state<R: tauri::Runtime>(
     rand::rngs::OsRng.fill_bytes(&mut entropy);
     let encryption = social_keys::load_or_create_at(&data_dir, entropy)?;
     core.set_encryption_identity(encryption.sender_material());
+    // Единый app-data каталог: приватные ключи шифрования и каталог медиа.
+    social_keys::save_at(&data_dir.join("keys"), &encryption)?;
     if let Some(bundle) = read_link(&data_dir.join(LINK_FILE))? {
         core.set_link_contacts(bundle.payload.contacts);
     }
-    Ok(SferaState::new(core, None).with_keys_dir(data_dir.join("keys")))
+    let delivery = smtp::SmtpConfig::from_env()?
+        .map(|config| Arc::new(smtp::SmtpDelivery::new(config)) as Arc<dyn social_ffi::DeliveryPort>);
+    Ok(SferaState::new(core, delivery).with_keys_dir(data_dir.join("keys")))
 }
 
 /// Один `invoke_handler` на приложение: Tauri допускает только один, поэтому

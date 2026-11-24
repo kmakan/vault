@@ -15,6 +15,7 @@ social-audience = { path = "../social-audience" }
 social-post = { path = "../social-post" }
 social-feed = { path = "../social-feed" }
 social-profile = { path = "../social-profile" }
+social-library = { path = "../social-library" }
 social-sync = { path = "../social-sync" }
 social-bridge = { path = "../social-bridge" }
 social-delivery = { path = "../social-delivery" }

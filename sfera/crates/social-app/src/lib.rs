@@ -18,6 +18,7 @@ use social_feed::Feed;
 use social_post::{compose, PostError};
 use social_profile::{ProfileBook, ProfileError};
 mod profile_publish;
+mod profile_receive;
 use social_sync::{ingest, DrainReport, Outbox, Quota, QuotaError, RetryPolicy};
 use storage_api::BlobStore;
 
@@ -276,6 +277,18 @@ impl SferaApp {
     /// Принять чужой профиль; «новее побеждает» решает `social-profile`.
     pub fn receive_profile(&mut self, signed: SignedProfile) -> Result<ProfileUpsertOutcome, AppError> {
         Ok(self.profiles.upsert(signed)?)
+    }
+
+    /// Принять адресный конверт своими приватными ключами Sfera.
+    pub fn receive_profile_envelope(
+        &mut self,
+        envelope: &social_delivery::SealedEnvelope,
+        recipient_x25519_private_hex: &str,
+        recipient_pq_seed_hex: &str,
+    ) -> Result<profile_receive::ReceivedProfile, AppError> {
+        profile_receive::receive_profile_envelope(
+            self, envelope, recipient_x25519_private_hex, recipient_pq_seed_hex,
+        )
     }
 
     /// Профиль по отпечатку (для показа контактам).

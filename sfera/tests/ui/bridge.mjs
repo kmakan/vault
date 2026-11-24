@@ -39,6 +39,11 @@ const bridge = createBridge(async (name, args) => {
   }
   if (name === COMMANDS.setAudienceMembers) return { v: 1, changed: true };
   if (name === COMMANDS.setMyProfile) return { v: 1, outcome: 'inserted' };
+  if (name === COMMANDS.receiveProfile) return { v: 1, outcome: 'updated' };
+  if (name === COMMANDS.openReceivedAvatar) {
+    return { v: 1, blob_id: 'aa', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA' };
+  }
+  if (name === COMMANDS.syncOutbox) return { v: 1, inserted: 1, duplicates: 0, rejected: 0 };
   if (name === COMMANDS.syncStatus) return { v: 1, pending: 2, failed: 0, due: 0, has_transport: false };
   if (name === COMMANDS.roleOptions) {
     return [{ value: 'friend', can_view_media: true, can_react: true, can_view_history: false, can_request_chat: true, profile: 'full' }];
@@ -85,13 +90,18 @@ const saved = await bridge.setMyProfile({
   v: 1, ts: 1, display_name: 'Ann', bio: '', avatar: null, links: [], now: 1,
 });
 check(saved.outcome === 'inserted', 'profile save outcome');
+const envelope = { v: 1, from_x25519: 'aa' };
+check((await bridge.receiveProfile(envelope)).outcome === 'updated', 'received profile outcome');
+const received = await bridge.openReceivedAvatar('profile-author');
+check(received.data_base64 === 'AAA', 'received avatar from manifest');
+check((await bridge.syncOutbox(1000)).inserted === 1, 'delivery report from Rust');
 const sync = await bridge.syncStatus(1000);
 check(sync.pending === 2 && sync.has_transport === false, 'sync status from Rust');
 const roles = await bridge.roleOptions();
 check(roles[0].value === 'friend' && roles[0].profile === 'full', 'role presets from Rust');
 await bridge.setContactRole({ v: 1, fp: 'aa:bb', role: 'friend' });
 
-check(calls.length === 24, `expected 24 invoke calls, got ${calls.length}`);
+check(calls.length === 27, `expected 27 invoke calls, got ${calls.length}`);
 check(calls.every((c) => typeof c.name === 'string'), 'command names');
 check(calls[9].args.deepLinkHandled === true, 'companion arg');
 check(calls[13].args.role === 'viewer', 'org role arg');
@@ -102,9 +112,12 @@ check(calls[17].args.blobId === 'aa', 'library stream arg');
 check(calls[18].args.id === 'sphere_close', 'audience members arg');
 check(calls[19].args.req.id === 'sphere_close', 'set members arg');
 check(calls[20].args.req.display_name === 'Ann', 'profile request passed unchanged');
-check(calls[21].args.now === 1000, 'sync status time passed through');
-check(calls[22].name === COMMANDS.roleOptions, 'role options command');
-check(calls[23].args.req.role === 'friend' && calls[23].args.req.fp === 'aa:bb', 'role request passed unchanged');
+check(calls[21].args.envelope === envelope, 'sealed envelope passed unchanged');
+check(calls[22].args.profileId === 'profile-author', 'only profile id is passed for received avatar');
+check(calls[23].args.now === 1000, 'sync outbox time passed through');
+check(calls[24].args.now === 1000, 'sync status time passed through');
+check(calls[25].name === COMMANDS.roleOptions, 'role options command');
+check(calls[26].args.req.role === 'friend' && calls[26].args.req.fp === 'aa:bb', 'role request passed unchanged');
 check(calls[6].args.req === req, 'publish request passed unchanged');
 
 let threw = false;
