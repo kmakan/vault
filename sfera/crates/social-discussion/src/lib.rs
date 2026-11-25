@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
 use social_model::{post as signing, Author, Fingerprint, FORMAT_VERSION};
-use social_post::{MediaRef, PostAudience};
+use social_post::{MediaRef, PostAudience, SignedPost};
 
 pub const COMMENT_KIND: &str = "social_comment";
 pub const REACTION_KIND: &str = "social_reaction";
@@ -24,6 +24,29 @@ pub const ENVELOPE_DOMAIN: &[u8] = b"sfera-discussion-envelope:v1\0";
 pub enum DiscussionPayload {
     SocialComment(SignedComment),
     SocialReaction(SignedReaction),
+    /// Участник → владельцу поста. Владелец проверяет свою книгу и исходный
+    /// пост, затем выпускает подтверждение для исходной аудитории.
+    CommentSubmission { comment: SignedComment, post: SignedPost },
+    ReactionSubmission { reaction: SignedReaction, post: SignedPost },
+    CommentAttestation(CommentAttestation),
+    ReactionAttestation(ReactionAttestation),
+}
+
+/// Подтверждение подписано владельцем поста отдельным доменом. Нельзя
+/// переиспользовать подпись автора комментария или подпись самого поста.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CommentAttestation {
+    pub comment: SignedComment,
+    pub post: SignedPost,
+    pub ts: u64,
+    pub sig: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReactionAttestation {
+    pub reaction: SignedReaction,
+    pub post: SignedPost,
+    pub ts: u64,
+    pub sig: String,
 }
 
 pub fn envelope_json(payload: &DiscussionPayload) -> Result<String, DiscussionError> {
@@ -36,18 +59,99 @@ pub fn parse_envelope_json(plaintext: &str) -> Result<DiscussionPayload, Discuss
     let valid = match &payload {
         DiscussionPayload::SocialComment(signed) => verify_comment(signed),
         DiscussionPayload::SocialReaction(signed) => verify_reaction(signed),
+        DiscussionPayload::CommentSubmission { comment, post } => {
+            verify_comment(comment) && valid_submission_post(post, &comment.comment.target)
+        }
+        DiscussionPayload::ReactionSubmission { reaction, post } => {
+            verify_reaction(reaction) && valid_submission_post(post, &reaction.reaction.target)
+        }
+        DiscussionPayload::CommentAttestation(attested) => verify_comment_attestation(attested),
+        DiscussionPayload::ReactionAttestation(attested) => verify_reaction_attestation(attested),
     };
     if !valid { return Err(DiscussionError::InvalidSignature); }
     Ok(payload)
+}
+
+fn valid_submission_post(post: &SignedPost, target: &DiscussionTarget) -> bool {
+    social_post::verify_post(post)
+        && post.post.author.fp.same(&target.post_author)
+        && post.post.audience == target.audience
+        && PostRef::from_post(&post.post).is_ok_and(|id| id == target.post_id)
+}
+
+pub const COMMENT_ATTESTATION_DOMAIN: &[u8] = b"sfera-comment-attestation:v1\0";
+pub const REACTION_ATTESTATION_DOMAIN: &[u8] = b"sfera-reaction-attestation:v1\0";
+
+#[derive(serde::Serialize)]
+struct AttestationBody<'a, T> { event: &'a T, post: &'a SignedPost, ts: u64 }
+
+pub fn attest_comment(
+    seed_hex: &str, comment: SignedComment, post: SignedPost, ts: u64,
+) -> Result<CommentAttestation, DiscussionError> {
+    if !verify_comment(&comment) || !valid_submission_post(&post, &comment.comment.target) {
+        return Err(DiscussionError::InvalidSignature);
+    }
+    let body = AttestationBody { event: &comment, post: &post, ts };
+    let sig = signing::sign_with_domain(COMMENT_ATTESTATION_DOMAIN, seed_hex, &body)
+        .map_err(DiscussionError::Sign)?;
+    Ok(CommentAttestation { comment, post, ts, sig })
+}
+
+pub fn attest_reaction(
+    seed_hex: &str, reaction: SignedReaction, post: SignedPost, ts: u64,
+) -> Result<ReactionAttestation, DiscussionError> {
+    if !verify_reaction(&reaction) || !valid_submission_post(&post, &reaction.reaction.target) {
+        return Err(DiscussionError::InvalidSignature);
+    }
+    let body = AttestationBody { event: &reaction, post: &post, ts };
+    let sig = signing::sign_with_domain(REACTION_ATTESTATION_DOMAIN, seed_hex, &body)
+        .map_err(DiscussionError::Sign)?;
+    Ok(ReactionAttestation { reaction, post, ts, sig })
+}
+
+pub fn verify_comment_attestation(attested: &CommentAttestation) -> bool {
+    valid_submission_post(&attested.post, &attested.comment.comment.target)
+        && verify_comment(&attested.comment)
+        && signing::verify_with_domain(
+            COMMENT_ATTESTATION_DOMAIN,
+            &AttestationBody { event: &attested.comment, post: &attested.post, ts: attested.ts },
+            &attested.post.post.author, &attested.sig,
+        )
+}
+
+pub fn verify_reaction_attestation(attested: &ReactionAttestation) -> bool {
+    valid_submission_post(&attested.post, &attested.reaction.reaction.target)
+        && verify_reaction(&attested.reaction)
+        && signing::verify_with_domain(
+            REACTION_ATTESTATION_DOMAIN,
+            &AttestationBody { event: &attested.reaction, post: &attested.post, ts: attested.ts },
+            &attested.post.post.author, &attested.sig,
+        )
 }
 
 pub fn publication_id(payload: &DiscussionPayload, recipient: &Fingerprint) -> Result<String, DiscussionError> {
     let canonical = match payload {
         DiscussionPayload::SocialComment(signed) => social_model::canonical::canonical_bytes(&signed.comment),
         DiscussionPayload::SocialReaction(signed) => social_model::canonical::canonical_bytes(&signed.reaction),
+        DiscussionPayload::CommentSubmission { comment, .. } => social_model::canonical::canonical_bytes(comment),
+        DiscussionPayload::ReactionSubmission { reaction, .. } => social_model::canonical::canonical_bytes(reaction),
+        DiscussionPayload::CommentAttestation(attested) => social_model::canonical::canonical_bytes(attested),
+        DiscussionPayload::ReactionAttestation(attested) => social_model::canonical::canonical_bytes(attested),
     }.map_err(DiscussionError::Canonical)?;
     let mut hasher = Sha256::new();
     hasher.update(ENVELOPE_DOMAIN);
+    // Разные назначения одного исходного события не должны схлопываться в
+    // один outbox item (submission владельцу ≠ attestation аудитории).
+    // Явный стабильный домен назначения, а не сериализация discriminant:
+    // wire-ID не должен меняться от внутреннего представления Rust enum.
+    hasher.update(match payload {
+        DiscussionPayload::SocialComment(_) => b"social-comment".as_slice(),
+        DiscussionPayload::SocialReaction(_) => b"social-reaction".as_slice(),
+        DiscussionPayload::CommentSubmission { .. } => b"comment-submission".as_slice(),
+        DiscussionPayload::ReactionSubmission { .. } => b"reaction-submission".as_slice(),
+        DiscussionPayload::CommentAttestation(_) => b"comment-attestation".as_slice(),
+        DiscussionPayload::ReactionAttestation(_) => b"reaction-attestation".as_slice(),
+    });
     hasher.update(canonical);
     hasher.update(recipient.as_str().as_bytes());
     Ok(hex::encode(hasher.finalize()))
@@ -171,6 +275,9 @@ pub enum DiscussionError {
     ParticipationDenied,
     UnknownPost,
     UnknownParent,
+    DeliveryUnavailable(String),
+    NotPostAuthor,
+    AttestationMismatch,
 }
 
 impl fmt::Display for DiscussionError {
@@ -191,6 +298,9 @@ impl fmt::Display for DiscussionError {
             Self::ParticipationDenied => f.write_str("discussion is not permitted for this role"),
             Self::UnknownPost => f.write_str("discussion post is not available"),
             Self::UnknownParent => f.write_str("parent comment is not available"),
+            Self::DeliveryUnavailable(m) => write!(f, "discussion delivery unavailable: {m}"),
+            Self::NotPostAuthor => f.write_str("only the original post author may attest a discussion"),
+            Self::AttestationMismatch => f.write_str("attested post does not match the local post"),
         }
     }
 }

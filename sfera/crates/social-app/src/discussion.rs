@@ -9,16 +9,6 @@ use social_discussion::{
 };
 use social_model::Fingerprint;
 use social_post::SignedPost;
-use social_rights::Audience;
-
-fn permitted(audience: &Audience, record: &social_contacts::ContactRecord) -> bool {
-    match audience {
-        Audience::AllContacts => true,
-        Audience::Sphere { id } => record.spheres.iter().any(|sphere| sphere == id),
-        Audience::Selected { fps } => fps.iter().any(|candidate| candidate.same(&record.fp)),
-        Audience::AllExcept { fps } => !fps.iter().any(|candidate| candidate.same(&record.fp)),
-    }
-}
 
 pub fn recipients(
     post: &SignedPost,
@@ -29,8 +19,10 @@ pub fn recipients(
     // Книга автора поста ограничивает исходную аудиторию; peers дают ключи
     // собеседников участника. Их пересечение не раскрывает чужую адресную книгу.
     let candidates = author_contacts.contacts().filter(|record| {
-        permitted(&post.post.audience.spec, record)
-            && participant_access(post, author_contacts, &record.fp).is_ok()
+        social_rights::evaluate(
+            &record.fp, record.state, record.role, &record.overrides,
+            &post.post.audience.spec, &record.spheres,
+        ).delivered
     });
     let mut recipients = Vec::new();
     for record in candidates {
@@ -43,6 +35,49 @@ pub fn recipients(
     recipients
 }
 
+#[derive(Debug, Default)]
+pub struct SealReport {
+    pub entries: Vec<(String, String, String)>,
+    /// Fingerprint получателей, которым адресный конверт не построен.
+    /// Это не ошибка всей рассылки: автору поста ключ обязателен, а частичная
+    /// недоступность остальных получателей не должна исчезать молча.
+    pub skipped: Vec<String>,
+}
+
+pub fn seal_to(
+    recipients: &[social_link::LinkedContact],
+    sender: &social_delivery::SenderKeyMaterial,
+    payload: &social_discussion::DiscussionPayload,
+) -> Result<SealReport, DiscussionError> {
+    let plaintext = social_discussion::envelope_json(payload)?;
+    let batch = social_bridge::seal_for_contacts(&plaintext, sender, recipients);
+    let mut report = SealReport::default();
+    for item in batch.sealed {
+        let id = social_discussion::publication_id(payload, &item.to)?;
+        let wire = serde_json::to_string(&item.envelope)
+            .map_err(|e| DiscussionError::Canonical(e.to_string()))?;
+        report.entries.push((id, item.address, wire));
+    }
+    report.skipped = batch.skipped.into_iter().map(|fp| fp.as_str().to_string()).collect();
+    Ok(report)
+}
+
+pub fn seal_submission_to_author(
+    post: &SignedPost,
+    peers: &[social_link::LinkedContact],
+    sender: &social_delivery::SenderKeyMaterial,
+    payload: &social_discussion::DiscussionPayload,
+) -> Result<SealReport, DiscussionError> {
+    let Some(author) = peers.iter().find(|peer| peer.fp.same(&post.post.author.fp)) else {
+        return Err(DiscussionError::DeliveryUnavailable("post author is not linked".into()));
+    };
+    let report = seal_to(std::slice::from_ref(author), sender, payload)?;
+    if report.entries.len() != 1 || author.address.trim().is_empty() {
+        return Err(DiscussionError::DeliveryUnavailable("post author has no complete delivery material".into()));
+    }
+    Ok(report)
+}
+#[cfg(test)]
 pub fn seal(
     post: &SignedPost,
     author_contacts: &social_contacts::ContactBook,
@@ -50,38 +85,7 @@ pub fn seal(
     sender: &social_delivery::SenderKeyMaterial,
     payload: &social_discussion::DiscussionPayload,
 ) -> Result<Vec<(String, String, String)>, DiscussionError> {
-    let plaintext = social_discussion::envelope_json(payload)?;
-    let batch = social_bridge::seal_for_contacts(&plaintext, sender, &recipients(post, author_contacts, peers));
-    let mut outbox = Vec::new();
-    for item in batch.sealed {
-        let id = social_discussion::publication_id(payload, &item.to)?;
-        let wire = serde_json::to_string(&item.envelope)
-            .map_err(|e| DiscussionError::Canonical(e.to_string()))?;
-        outbox.push((id, item.address, wire));
-    }
-    Ok(outbox)
-}
-
-pub fn receive_envelope(
-    app: &mut crate::SferaApp,
-    envelope: &social_delivery::SealedEnvelope,
-    x25519_private: &str,
-    pq_seed: &str,
-) -> Result<EventOutcome, DiscussionError> {
-    let plaintext = social_delivery::open_payload(envelope, x25519_private, &envelope.from_x25519, pq_seed)
-        .map_err(|e| DiscussionError::Canonical(e.to_string()))?;
-    match social_discussion::parse_envelope_json(&plaintext)? {
-        social_discussion::DiscussionPayload::SocialComment(signed) => {
-            let id = signed.comment.target.post_id.to_hex().parse()
-                .map_err(|_| DiscussionError::UnknownPost)?;
-            app.receive_comment(&id, signed).map_err(|e| DiscussionError::Canonical(e.to_string()))
-        }
-        social_discussion::DiscussionPayload::SocialReaction(signed) => {
-            let id = signed.reaction.target.post_id.to_hex().parse()
-                .map_err(|_| DiscussionError::UnknownPost)?;
-            app.receive_reaction(&id, signed).map_err(|e| DiscussionError::Canonical(e.to_string()))
-        }
-    }
+    Ok(seal_to(&recipients(post, author_contacts, peers), sender, payload)?.entries)
 }
 
 #[cfg(test)]
@@ -90,8 +94,7 @@ mod tests {
     use social_discussion::compose_comment;
     use social_model::post::public_key_hex;
     use social_post::PostAudience;
-    use social_rights::Role;
-
+    use social_rights::{Audience, Role};
     fn fp(seed: &str) -> Fingerprint {
         Fingerprint::from_public_key_hex(&public_key_hex(seed).unwrap()).unwrap()
     }
@@ -166,13 +169,39 @@ pub fn target(post: &SignedPost) -> Result<DiscussionTarget, DiscussionError> {
     })
 }
 
-fn participant_access(
+pub(crate) fn participant_access(
     post: &SignedPost,
     author_contacts: &social_contacts::ContactBook,
     actor: &Fingerprint,
 ) -> Result<(), DiscussionError> {
+    participant_access_for(post, author_contacts, actor, false)
+}
+
+/// Для локального действия запись самого пользователя не требуется: в
+/// обычной книге её нет. Владелец поста при submission повторно проверит
+/// фактическую роль автора своей авторитетной книгой.
+pub(crate) fn local_participant_access(
+    post: &SignedPost,
+    author_contacts: &social_contacts::ContactBook,
+    actor: &Fingerprint,
+) -> Result<(), DiscussionError> {
+    participant_access_for(post, author_contacts, actor, true)
+}
+
+fn participant_access_for(
+    post: &SignedPost,
+    author_contacts: &social_contacts::ContactBook,
+    actor: &Fingerprint,
+    local_actor: bool,
+) -> Result<(), DiscussionError> {
     if post.post.author.fp.same(actor) { return Ok(()); }
     let Some(record) = author_contacts.get(actor) else {
+        if local_actor {
+            // Пост уже находится в ленте, а подпись события создаётся локальным
+            // ключом. Право участия подтверждается у владельца поста, а не
+            // выдуманной self-записью в книге отправителя.
+            return Ok(());
+        }
         return Err(DiscussionError::NotInAudience);
     };
     let access = social_rights::evaluate(

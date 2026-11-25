@@ -52,6 +52,7 @@ pub enum AppError {
     Quota(QuotaError),
     Canonical(String),
     UnknownAudience(String),
+    Feed(String),
 }
 
 impl std::fmt::Display for AppError {
@@ -63,6 +64,7 @@ impl std::fmt::Display for AppError {
             Self::Quota(e) => write!(f, "quota: {e}"),
             Self::Canonical(m) => write!(f, "canonical form failed: {m}"),
             Self::UnknownAudience(id) => write!(f, "unknown audience: {id}"),
+            Self::Feed(e) => write!(f, "feed: {e}"),
         }
     }
 }
@@ -73,6 +75,7 @@ impl From<PostError> for AppError { fn from(e: PostError) -> Self { Self::Post(e
 impl From<ProfileError> for AppError { fn from(e: ProfileError) -> Self { Self::Profile(e) } }
 impl From<social_discussion::DiscussionError> for AppError { fn from(e: social_discussion::DiscussionError) -> Self { Self::Discussion(e) } }
 impl From<QuotaError> for AppError { fn from(e: QuotaError) -> Self { Self::Quota(e) } }
+impl From<social_feed::FeedError> for AppError { fn from(e: social_feed::FeedError) -> Self { Self::Feed(e.to_string()) } }
 
 /// Сборка приложения. Ничего не шифрует и не решает — только держит порты.
 pub struct SferaApp {
@@ -148,8 +151,8 @@ impl SferaApp {
         &self.discussion
     }
 
-    /// Комментарий к видимому посту. Получатели и конверты строятся в Rust;
-    /// без ключей остаётся локальный маркер, который транспорт отклонит.
+    /// Комментарий к чужому посту сначала идёт его владельцу. Локальная
+    /// книга комментатора не используется для «выдачи» полной аудитории.
     pub fn comment_on_post(
         &mut self,
         id: &PostId,
@@ -160,26 +163,22 @@ impl SferaApp {
         now: u64,
     ) -> Result<social_discussion::SignedComment, AppError> {
         let post = self.feed.get(id).ok_or(social_discussion::DiscussionError::UnknownPost)?.post.clone();
+        discussion::local_participant_access(&post, &self.contacts, self.identity.fingerprint())?;
         let target = discussion::target(&post)?;
         let comment_id = social_discussion::new_comment_id()?;
         let signed = social_discussion::compose_comment(
             self.identity.signing_seed(), &comment_id, target,
             parent_id, ts, body, media,
         )?;
-        self.discussion.insert_comment(signed.clone())?;
-        let payload = social_discussion::DiscussionPayload::SocialComment(signed.clone());
-        let entries = match self.encryption.as_ref() {
-            Some(sender) => discussion::seal(&post, &self.contacts, &self.peers, sender, &payload)?,
-            None => Vec::new(),
-        };
-        if entries.is_empty() {
-            let len = social_model::canonical::canonical_bytes(&signed.comment).map_err(AppError::Canonical)?.len() as u64;
-            self.outbox.enqueue(format!("comment:{}", signed.comment.id), len, now)?;
+        let own_post = post.post.author.fp.same(self.identity.fingerprint());
+        let payload = if own_post {
+            social_discussion::DiscussionPayload::SocialComment(signed.clone())
         } else {
-            for (id, address, wire) in entries {
-                self.outbox.enqueue_envelope(id, address, wire, false, now)?;
-            }
-        }
+            social_discussion::DiscussionPayload::CommentSubmission { comment: signed.clone(), post: post.clone() }
+        };
+        let entries = self.seal_discussion(&post, &payload)?;
+        self.discussion.insert_comment(signed.clone())?;
+        self.enqueue_discussion(entries, now)?;
         Ok(signed)
     }
 
@@ -191,26 +190,129 @@ impl SferaApp {
         now: u64,
     ) -> Result<social_discussion::SignedReaction, AppError> {
         let post = self.feed.get(id).ok_or(social_discussion::DiscussionError::UnknownPost)?.post.clone();
+        discussion::local_participant_access(&post, &self.contacts, self.identity.fingerprint())?;
         let target = discussion::target(&post)?;
         let version = self.discussion.next_reaction_version(&target, self.identity.fingerprint(), emoji);
         let signed = social_discussion::compose_reaction(
             self.identity.signing_seed(), target, emoji, version, removed,
         )?;
-        self.discussion.insert_reaction(signed.clone())?;
-        let payload = social_discussion::DiscussionPayload::SocialReaction(signed.clone());
-        let entries = match self.encryption.as_ref() {
-            Some(sender) => discussion::seal(&post, &self.contacts, &self.peers, sender, &payload)?,
-            None => Vec::new(),
-        };
-        if entries.is_empty() {
-            let len = social_model::canonical::canonical_bytes(&signed.reaction).map_err(AppError::Canonical)?.len() as u64;
-            self.outbox.enqueue(format!("reaction:{}:{}:{version}", id.to_hex(), emoji), len, now)?;
+        let own_post = post.post.author.fp.same(self.identity.fingerprint());
+        let payload = if own_post {
+            social_discussion::DiscussionPayload::SocialReaction(signed.clone())
         } else {
-            for (id, address, wire) in entries {
-                self.outbox.enqueue_envelope(id, address, wire, false, now)?;
-            }
-        }
+            social_discussion::DiscussionPayload::ReactionSubmission { reaction: signed.clone(), post: post.clone() }
+        };
+        let entries = self.seal_discussion(&post, &payload)?;
+        self.discussion.insert_reaction(signed.clone())?;
+        self.enqueue_discussion(entries, now)?;
         Ok(signed)
+    }
+
+    fn seal_discussion(
+        &self, post: &SignedPost, payload: &social_discussion::DiscussionPayload,
+    ) -> Result<Vec<(String, String, String)>, AppError> {
+        let own_post = post.post.author.fp.same(self.identity.fingerprint());
+        let Some(sender) = self.encryption.as_ref() else {
+            if own_post { return Ok(Vec::new()); }
+            return Err(social_discussion::DiscussionError::DeliveryUnavailable(
+                "sender encryption identity is unavailable".into()).into());
+        };
+        let report = if own_post {
+            discussion::seal_to(&discussion::recipients(post, &self.contacts, &self.peers), sender, payload)?
+        } else {
+            discussion::seal_submission_to_author(post, &self.peers, sender, payload)?
+        };
+        if !report.skipped.is_empty() {
+            // До отдельного DTO состояния доставки недоступность хотя бы не
+            // теряется в логе; адрес и содержимое конверта сюда не попадают.
+            eprintln!("sfera: discussion recipients without delivery material: {}", report.skipped.len());
+        }
+        Ok(report.entries.into_iter().filter(|(_, address, _)| !address.trim().is_empty()).collect())
+    }
+
+    fn enqueue_discussion(&mut self, entries: Vec<(String, String, String)>, now: u64) -> Result<(), AppError> {
+        for (id, address, wire) in entries {
+            self.outbox.enqueue_envelope(id, address, wire, false, now)?;
+        }
+        Ok(())
+    }
+
+    fn receive_submission(
+        &mut self, post: SignedPost, actor: &social_model::Fingerprint, ts: u64,
+        comment: Option<social_discussion::SignedComment>,
+        reaction: Option<social_discussion::SignedReaction>,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        if !post.post.author.fp.same(self.identity.fingerprint()) {
+            return Err(social_discussion::DiscussionError::NotPostAuthor.into());
+        }
+        let id = PostId::from_post(&post.post)?;
+        let known = self.feed.get(&id).ok_or(social_discussion::DiscussionError::UnknownPost)?;
+        if known.post != post { return Err(social_discussion::DiscussionError::AttestationMismatch.into()); }
+        discussion::participant_access(&post, &self.contacts, actor)?;
+        let (outcome, payload) = if let Some(signed) = comment {
+            let outcome = self.discussion.insert_comment(signed.clone())?;
+            let attested = social_discussion::attest_comment(self.identity.signing_seed(), signed, post, ts)?;
+            (outcome, social_discussion::DiscussionPayload::CommentAttestation(attested))
+        } else if let Some(signed) = reaction {
+            let outcome = self.discussion.insert_reaction(signed.clone())?;
+            let attested = social_discussion::attest_reaction(self.identity.signing_seed(), signed, post, ts)?;
+            (outcome, social_discussion::DiscussionPayload::ReactionAttestation(attested))
+        } else {
+            return Err(social_discussion::DiscussionError::BadId("empty discussion submission".into()).into());
+        };
+        if outcome != social_discussion::EventOutcome::Duplicate {
+            let entries = self.seal_discussion(&self.feed.get(&id).expect("checked post").post.clone(), &payload)?;
+            self.enqueue_discussion(entries, ts)?;
+        }
+        Ok(outcome)
+    }
+
+    fn receive_attested_comment(
+        &mut self, attested: social_discussion::CommentAttestation,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        let id = PostId::from_post(&attested.post.post)?;
+        let post = self.feed.get(&id).ok_or(social_discussion::DiscussionError::UnknownPost)?;
+        if post.post != attested.post { return Err(social_discussion::DiscussionError::AttestationMismatch.into()); }
+        // Подпись владельца поста уже проверена parse_envelope_json. Права
+        // специально не переоцениваются неполной книгой этого получателя.
+        Ok(self.discussion.insert_comment(attested.comment)?)
+    }
+
+    fn receive_attested_reaction(
+        &mut self, attested: social_discussion::ReactionAttestation,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        let id = PostId::from_post(&attested.post.post)?;
+        let post = self.feed.get(&id).ok_or(social_discussion::DiscussionError::UnknownPost)?;
+        if post.post != attested.post { return Err(social_discussion::DiscussionError::AttestationMismatch.into()); }
+        Ok(self.discussion.insert_reaction(attested.reaction)?)
+    }
+
+    pub fn receive_discussion_payload(
+        &mut self, payload: social_discussion::DiscussionPayload, now: u64,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        use social_discussion::DiscussionPayload as Payload;
+        match payload {
+            Payload::SocialComment(signed) => {
+                let id = signed.comment.target.post_id.to_hex().parse()
+                    .map_err(|_| social_discussion::DiscussionError::UnknownPost)?;
+                self.receive_comment(&id, signed)
+            }
+            Payload::SocialReaction(signed) => {
+                let id = signed.reaction.target.post_id.to_hex().parse()
+                    .map_err(|_| social_discussion::DiscussionError::UnknownPost)?;
+                self.receive_reaction(&id, signed)
+            }
+            Payload::CommentSubmission { comment, post } => {
+                let actor = comment.comment.author.fp.clone();
+                self.receive_submission(post, &actor, now, Some(comment), None)
+            }
+            Payload::ReactionSubmission { reaction, post } => {
+                let actor = reaction.reaction.author.fp.clone();
+                self.receive_submission(post, &actor, now, None, Some(reaction))
+            }
+            Payload::CommentAttestation(attested) => self.receive_attested_comment(attested),
+            Payload::ReactionAttestation(attested) => self.receive_attested_reaction(attested),
+        }
     }
 
     pub fn receive_discussion_envelope(
@@ -219,7 +321,10 @@ impl SferaApp {
         x25519_private: &str,
         pq_seed: &str,
     ) -> Result<social_discussion::EventOutcome, AppError> {
-        Ok(discussion::receive_envelope(self, envelope, x25519_private, pq_seed)?)
+        let plaintext = social_delivery::open_payload(envelope, x25519_private, &envelope.from_x25519, pq_seed)
+            .map_err(|e| AppError::Canonical(e.to_string()))?;
+        let payload = social_discussion::parse_envelope_json(&plaintext)?;
+        self.receive_discussion_payload(payload, 0)
     }
 
     pub fn receive_comment(

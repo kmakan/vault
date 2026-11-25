@@ -1,24 +1,61 @@
 use social_discussion::*;
 use social_model::Author;
-use social_post::{PostAudience, PostV1};
+use social_post::{PostAudience, PostV1, SignedPost};
 use social_rights::Audience;
 
 const A: &str = "0100000000000000000000000000000000000000000000000000000000000000";
 const B: &str = "0200000000000000000000000000000000000000000000000000000000000000";
 
 fn target() -> DiscussionTarget {
+    target_post().1
+}
+
+fn target_post() -> (SignedPost, DiscussionTarget) {
     let author = Author::from_public_key_hex(&social_model::post::public_key_hex(A).unwrap()).unwrap();
-    let post = PostV1::new(author.clone(), 10, "post", PostAudience {
+    let post = PostV1::new(author, 10, "post", PostAudience {
         id: "sphere:family".into(), epoch: 2, spec: Audience::AllContacts,
     }, vec![]).unwrap();
-    DiscussionTarget {
-        post_id: PostRef::from_post(&post).unwrap(), post_author: author.fp,
-        audience: post.audience,
-    }
+    let target = DiscussionTarget {
+        post_id: PostRef::from_post(&post).unwrap(), post_author: post.author.fp.clone(),
+        audience: post.audience.clone(),
+    };
+    (social_post::sign_post(A, &post).unwrap(), target)
 }
 
 fn comment(id: &str, body: &str) -> SignedComment {
     compose_comment(B, id, target(), None, 20, body, vec![]).unwrap()
+}
+
+#[test]
+fn attestation_requires_post_owner_and_covers_event() {
+    let (post, _) = target_post();
+    let signed = comment(&"11".repeat(32), "Подтверждённый");
+    let valid = attest_comment(A, signed.clone(), post.clone(), 30).unwrap();
+    assert!(verify_comment_attestation(&valid));
+    let mut tampered = valid.clone();
+    tampered.comment.comment.body = "Подмена".into();
+    assert!(!verify_comment_attestation(&tampered));
+    let forged = attest_comment(B, signed, post, 30).unwrap();
+    assert!(!verify_comment_attestation(&forged), "ключ комментатора не подтверждает чужой пост");
+}
+
+#[test]
+fn reaction_attestation_uses_its_own_domain() {
+    let (post, _) = target_post();
+    let reaction = compose_reaction(B, target(), "❤️", 1, false).unwrap();
+    let valid = attest_reaction(A, reaction, post, 30).unwrap();
+    assert!(verify_reaction_attestation(&valid));
+    assert_ne!(publication_id(&DiscussionPayload::ReactionSubmission {
+        reaction: valid.reaction.clone(), post: valid.post.clone(),
+    }, &valid.reaction.reaction.author.fp).unwrap(),
+        publication_id(&DiscussionPayload::ReactionAttestation(valid.clone()),
+            &valid.reaction.reaction.author.fp).unwrap());
+    let mut wrong_domain = valid;
+    wrong_domain.sig = social_model::post::sign_with_domain(
+        COMMENT_ATTESTATION_DOMAIN, A,
+        &serde_json::json!({"event": wrong_domain.reaction, "post": wrong_domain.post, "ts": 30}),
+    ).unwrap();
+    assert!(!verify_reaction_attestation(&wrong_domain));
 }
 
 #[test]

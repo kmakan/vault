@@ -156,24 +156,19 @@ impl SferaState {
                 encryption.pq_seed_hex(),
             ).map_err(|e| CommandError::input(e))?;
             if let Ok(payload) = social_discussion::parse_envelope_json(&plaintext) {
-                let outcome = match payload {
-                    social_discussion::DiscussionPayload::SocialComment(signed) => {
-                        let id = signed.comment.target.post_id.to_hex().parse()
-                            .map_err(|_| CommandError::input("unknown discussion post"))?;
-                        app.receive_comment(&id, signed)?
-                    }
-                    social_discussion::DiscussionPayload::SocialReaction(signed) => {
-                        let id = signed.reaction.target.post_id.to_hex().parse()
-                            .map_err(|_| CommandError::input("unknown discussion post"))?;
-                        app.receive_reaction(&id, signed)?
-                    }
-                };
+                let outcome = app.receive_discussion_payload(payload, 0)?;
                 return Ok(("discussion".to_string(), outcome, String::new(), None));
             }
             let received = app.receive_profile_envelope(
                 envelope, encryption.x25519_private_hex(), encryption.pq_seed_hex(),
             )?;
-            Ok(("profile".to_string(), social_discussion::EventOutcome::Inserted,
+            let outcome = match received.outcome {
+                social_app::ProfileUpsertOutcome::Inserted => social_discussion::EventOutcome::Inserted,
+                social_app::ProfileUpsertOutcome::Updated => social_discussion::EventOutcome::Updated,
+                social_app::ProfileUpsertOutcome::Duplicate => social_discussion::EventOutcome::Duplicate,
+                social_app::ProfileUpsertOutcome::Stale => social_discussion::EventOutcome::Stale,
+            };
+            Ok(("profile".to_string(), outcome,
                 received.profile_id, received.avatar_manifest))
         })?;
         if let Some(manifest) = manifest {
@@ -1023,9 +1018,8 @@ fn social_discussion(
     let target = post_id.to_hex().parse::<social_discussion::PostRef>()
         .map_err(|e| CommandError::input(e.to_string()))?;
     state.call(|app| {
-        let mut comments = app.discussion().comments_for(&target);
+        let comments = app.discussion().comments_for(&target);
         let mut reactions = app.discussion().reactions_for(&target);
-        comments.sort_by(|a, b| a.comment.id.cmp(&b.comment.id));
         reactions.sort_by(|a, b| a.reaction.author.fp.as_str().cmp(b.reaction.author.fp.as_str())
             .then_with(|| a.reaction.emoji.cmp(&b.reaction.emoji)));
         let mut grouped: Vec<serde_json::Value> = Vec::new();

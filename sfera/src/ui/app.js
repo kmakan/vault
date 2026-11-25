@@ -289,6 +289,10 @@ export function createAppState({
       const report = await bridge.receiveInbox();
       state.receiveReport = report;
       await Promise.all((state.contacts ?? []).map((c) => loadContactProfile(c.fp)));
+      await load('feed', () => bridge.feed());
+      await loadThumbs();
+      await loadSync();
+      await loadAllDiscussions();
       return report;
     },
 
