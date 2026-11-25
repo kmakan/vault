@@ -3345,6 +3345,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "social-discussion"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "social-model",
+ "social-post",
+ "social-rights",
+]
+
+[[package]]
 name = "social-feed"
 version = "0.1.0"
 dependencies = [

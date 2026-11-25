@@ -39,6 +39,7 @@ members = [
     "crates/social-delivery",
     "crates/social-keys",
     "crates/social-post",
+    "crates/social-discussion",
     "crates/social-feed",
     "crates/social-sync",
     "crates/social-transport",
