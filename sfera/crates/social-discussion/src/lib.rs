@@ -17,6 +17,41 @@ pub const REACTION_KIND: &str = "social_reaction";
 pub const COMMENT_DOMAIN: &[u8] = b"sfera-comment:v1\0";
 pub const REACTION_DOMAIN: &[u8] = b"sfera-reaction:v1\0";
 pub const MAX_COMMENT_CHARS: usize = 4_000;
+pub const ENVELOPE_DOMAIN: &[u8] = b"sfera-discussion-envelope:v1\0";
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "event", rename_all = "snake_case")]
+pub enum DiscussionPayload {
+    SocialComment(SignedComment),
+    SocialReaction(SignedReaction),
+}
+
+pub fn envelope_json(payload: &DiscussionPayload) -> Result<String, DiscussionError> {
+    serde_json::to_string(payload).map_err(|e| DiscussionError::Canonical(e.to_string()))
+}
+
+pub fn parse_envelope_json(plaintext: &str) -> Result<DiscussionPayload, DiscussionError> {
+    let payload: DiscussionPayload = serde_json::from_str(plaintext)
+        .map_err(|e| DiscussionError::Canonical(format!("discussion envelope: {e}")))?;
+    let valid = match &payload {
+        DiscussionPayload::SocialComment(signed) => verify_comment(signed),
+        DiscussionPayload::SocialReaction(signed) => verify_reaction(signed),
+    };
+    if !valid { return Err(DiscussionError::InvalidSignature); }
+    Ok(payload)
+}
+
+pub fn publication_id(payload: &DiscussionPayload, recipient: &Fingerprint) -> Result<String, DiscussionError> {
+    let canonical = match payload {
+        DiscussionPayload::SocialComment(signed) => social_model::canonical::canonical_bytes(&signed.comment),
+        DiscussionPayload::SocialReaction(signed) => social_model::canonical::canonical_bytes(&signed.reaction),
+    }.map_err(DiscussionError::Canonical)?;
+    let mut hasher = Sha256::new();
+    hasher.update(ENVELOPE_DOMAIN);
+    hasher.update(canonical);
+    hasher.update(recipient.as_str().as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
 
 /// Хеш подписанной формы поста. Не зависит от `social-feed`: событие можно
 /// проверить и отправить до прибытия самого поста (pending).

@@ -143,8 +143,47 @@ impl SferaState {
             .map_err(|e| CommandError::backend(format!("encryption: {e}")))
     }
 
-    /// Тот же приём, что и Tauri-команда: транспорт не получает приватные
-    /// ключи и не может подменить DTO или манифест.
+    /// Общий inbox: открыть конверт один раз и маршрутизировать по типу
+    /// проверенного payload, а не пытаться принять комментарий как профиль.
+    pub fn receive_envelope(
+        &self,
+        envelope: &social_delivery::SealedEnvelope,
+    ) -> Result<OutcomeDto, CommandError> {
+        let encryption = self.encryption()?;
+        let (kind, outcome, profile_id, manifest) = self.call(|app| {
+            let plaintext = social_delivery::open_payload(
+                envelope, encryption.x25519_private_hex(), &envelope.from_x25519,
+                encryption.pq_seed_hex(),
+            ).map_err(|e| CommandError::input(e))?;
+            if let Ok(payload) = social_discussion::parse_envelope_json(&plaintext) {
+                let outcome = match payload {
+                    social_discussion::DiscussionPayload::SocialComment(signed) => {
+                        let id = signed.comment.target.post_id.to_hex().parse()
+                            .map_err(|_| CommandError::input("unknown discussion post"))?;
+                        app.receive_comment(&id, signed)?
+                    }
+                    social_discussion::DiscussionPayload::SocialReaction(signed) => {
+                        let id = signed.reaction.target.post_id.to_hex().parse()
+                            .map_err(|_| CommandError::input("unknown discussion post"))?;
+                        app.receive_reaction(&id, signed)?
+                    }
+                };
+                return Ok(("discussion".to_string(), outcome, String::new(), None));
+            }
+            let received = app.receive_profile_envelope(
+                envelope, encryption.x25519_private_hex(), encryption.pq_seed_hex(),
+            )?;
+            Ok(("profile".to_string(), social_discussion::EventOutcome::Inserted,
+                received.profile_id, received.avatar_manifest))
+        })?;
+        if let Some(manifest) = manifest {
+            self.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))?
+                .insert(profile_id, manifest);
+        }
+        self.mutate(|_| Ok(OutcomeDto { v: API_VERSION, kind: Some(kind), outcome: format!("{outcome:?}").to_lowercase() }))
+    }
+
+    /// Обратная совместимость внешнего порта профиля.
     pub fn receive_profile_envelope(
         &self,
         envelope: &social_delivery::SealedEnvelope,
@@ -393,12 +432,12 @@ pub struct AudienceMembersDto {
 pub struct ChangedDto { pub v: u8, pub changed: bool }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OutcomeDto { pub v: u8, pub outcome: String }
+pub struct OutcomeDto { pub v: u8, pub outcome: String, #[serde(default, skip_serializing_if = "Option::is_none")] pub kind: Option<String> }
 
 impl From<social_app::ProfileUpsertOutcome> for OutcomeDto {
     fn from(o: social_app::ProfileUpsertOutcome) -> Self {
         let outcome = profile_outcome_name(o);
-        Self { v: API_VERSION, outcome: outcome.into() }
+        Self { v: API_VERSION, outcome: outcome.into(), kind: None }
     }
 }
 
@@ -1230,6 +1269,54 @@ mod tests {
         assert_eq!(s.failed, 0);
         assert_eq!(s.due, 0);
         assert!(!s.has_transport);
+    }
+
+    #[test]
+    fn discussion_goes_from_sealed_outbox_to_inbox_without_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let recipient = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
+        social_keys::save_at(&dir.path().join("keys"), &recipient).unwrap();
+        let store = Arc::new(LocalStore::new(dir.path().join("blobs")).unwrap());
+        let app = SferaApp::new(Identity::from_seed(SEED).unwrap(), store,
+            RetryPolicy::default(), Quota::new(60, 10_000, 10, 0));
+        let st = SferaState::new(app, None).with_keys_dir(dir.path().join("keys"));
+        let post = st.call(|app| Ok(app.publish_post(1, "post", PostAudience {
+            id: "family".into(), epoch: 1, spec: Audience::AllContacts,
+        }, vec![], 1)?)).unwrap();
+        let _id = social_app::PostId::from_post(&post.post).unwrap();
+        st.call(|app| Ok(app.receive_posts([post.clone()], 1))).unwrap();
+        st.call(|app| {
+            let fp = social_model::Fingerprint::from_public_key_hex(
+                &social_model::post::public_key_hex(&"02".repeat(32)).unwrap()).unwrap();
+            app.put_contact(ContactRecord::contact(fp, social_app::Role::Friend, vec![], true));
+            Ok(())
+        }).unwrap();
+        let comment = social_discussion::compose_comment(
+            &"02".repeat(32), &"44".repeat(32),
+            social_discussion::DiscussionTarget {
+                post_id: social_discussion::PostRef::from_post(&post.post).unwrap(),
+                post_author: post.post.author.fp.clone(), audience: post.post.audience.clone(),
+            }, None, 2, "СЕКРЕТНЫЙ_ОТВЕТ", vec![],
+        ).unwrap();
+        let plaintext = social_discussion::envelope_json(
+            &social_discussion::DiscussionPayload::SocialComment(comment)).unwrap();
+        let sender = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
+        let envelope = social_delivery::seal_payload(&plaintext, &sender.sender_material(),
+            &social_delivery::RecipientKeyMaterial {
+                fp: recipient.fingerprint().unwrap(),
+                x25519_public_hex: recipient.x25519_public_hex().into(),
+                pq_ek_b64: recipient.pq_ek_b64().into(), address: "peer@example.org".into(),
+            }).unwrap();
+        assert!(!serde_json::to_string(&envelope).unwrap().contains("СЕКРЕТНЫЙ_ОТВЕТ"));
+        let result = st.receive_envelope(&envelope).unwrap();
+        assert_eq!(result.kind.as_deref(), Some("discussion"));
+        assert_eq!(result.outcome, "inserted");
+        st.call(|app| {
+            let target = social_discussion::PostRef::from_post(&post.post).unwrap();
+            assert_eq!(app.discussion().comments_for(&target).len(), 1);
+            assert_eq!(app.discussion().comments_for(&target)[0].comment.body, "СЕКРЕТНЫЙ_ОТВЕТ");
+            Ok(())
+        }).unwrap();
     }
 
     #[test]

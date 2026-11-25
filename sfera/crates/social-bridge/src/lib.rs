@@ -196,6 +196,16 @@ pub fn seal_profile_for_contacts(
     sender: &SenderKeyMaterial,
     contacts: &[social_link::LinkedContact],
 ) -> EnvelopeBatch {
+    seal_for_contacts(profile_json, sender, contacts)
+}
+
+/// Общий E2E-путь: тип payload уже проверен доменом до вызова, здесь только
+/// адресные конверты для разрешённой книги получателей.
+pub fn seal_for_contacts(
+    plaintext: &str,
+    sender: &SenderKeyMaterial,
+    contacts: &[social_link::LinkedContact],
+) -> EnvelopeBatch {
     let mut batch = EnvelopeBatch::default();
     for contact in contacts {
         let material = RecipientKeyMaterial::from_linked(contact);
@@ -203,7 +213,7 @@ pub fn seal_profile_for_contacts(
             batch.skipped.push(contact.fp.clone());
             continue;
         }
-        match seal_payload(profile_json, sender, &material) {
+        match seal_payload(plaintext, sender, &material) {
             Ok(envelope) => batch.sealed.push(ProfileEnvelope {
                 to: contact.fp.clone(),
                 address: contact.address.clone(),

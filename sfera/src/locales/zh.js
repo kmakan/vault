@@ -29,7 +29,7 @@ export default {
   reactions: '回应',
   addComment: '发表评论',
   commentPlaceholder: '回应这篇帖子…',
-  commentHint: '目前仅保存在此设备。向原帖受众进行端到端加密投递是下一协议阶段。',
+  commentHint: '已知密钥时，事件会加密并进入队列。只有同步完成后才算已送达。',
   commentEmpty: '还没有评论。你可以开始对话。',
   reply: '回复',
   contacts_request: '添加联系人',

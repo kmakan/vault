@@ -207,7 +207,7 @@ fn fetch_with_stream<S: ReadWrite>(
         )?;
         match envelope_from_peek(&body_lines.concat())
             .map_err(|e| e.to_string())
-            .and_then(|envelope| state.receive_profile_envelope(&envelope).map(|_| ()).map_err(|e| e.message))
+            .and_then(|envelope| state.receive_envelope(&envelope).map(|_| ()).map_err(|e| e.message))
         {
             Ok(()) => {
                 if seen.insert(id) {

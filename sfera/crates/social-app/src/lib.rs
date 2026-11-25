@@ -148,8 +148,8 @@ impl SferaApp {
         &self.discussion
     }
 
-    /// Комментарий к видимому посту. Исходная аудитория берётся из самого
-    /// поста, а не из UI; шифрование для неё — следующий порт доставки.
+    /// Комментарий к видимому посту. Получатели и конверты строятся в Rust;
+    /// без ключей остаётся локальный маркер, который транспорт отклонит.
     pub fn comment_on_post(
         &mut self,
         id: &PostId,
@@ -167,8 +167,19 @@ impl SferaApp {
             parent_id, ts, body, media,
         )?;
         self.discussion.insert_comment(signed.clone())?;
-        let len = social_model::canonical::canonical_bytes(&signed.comment).map_err(AppError::Canonical)?.len() as u64;
-        self.outbox.enqueue(format!("comment:{}", signed.comment.id), len, now)?;
+        let payload = social_discussion::DiscussionPayload::SocialComment(signed.clone());
+        let entries = match self.encryption.as_ref() {
+            Some(sender) => discussion::seal(&post, &self.contacts, &self.peers, sender, &payload)?,
+            None => Vec::new(),
+        };
+        if entries.is_empty() {
+            let len = social_model::canonical::canonical_bytes(&signed.comment).map_err(AppError::Canonical)?.len() as u64;
+            self.outbox.enqueue(format!("comment:{}", signed.comment.id), len, now)?;
+        } else {
+            for (id, address, wire) in entries {
+                self.outbox.enqueue_envelope(id, address, wire, false, now)?;
+            }
+        }
         Ok(signed)
     }
 
@@ -186,9 +197,29 @@ impl SferaApp {
             self.identity.signing_seed(), target, emoji, version, removed,
         )?;
         self.discussion.insert_reaction(signed.clone())?;
-        let len = social_model::canonical::canonical_bytes(&signed.reaction).map_err(AppError::Canonical)?.len() as u64;
-        self.outbox.enqueue(format!("reaction:{}:{}:{version}", id.to_hex(), emoji), len, now)?;
+        let payload = social_discussion::DiscussionPayload::SocialReaction(signed.clone());
+        let entries = match self.encryption.as_ref() {
+            Some(sender) => discussion::seal(&post, &self.contacts, &self.peers, sender, &payload)?,
+            None => Vec::new(),
+        };
+        if entries.is_empty() {
+            let len = social_model::canonical::canonical_bytes(&signed.reaction).map_err(AppError::Canonical)?.len() as u64;
+            self.outbox.enqueue(format!("reaction:{}:{}:{version}", id.to_hex(), emoji), len, now)?;
+        } else {
+            for (id, address, wire) in entries {
+                self.outbox.enqueue_envelope(id, address, wire, false, now)?;
+            }
+        }
         Ok(signed)
+    }
+
+    pub fn receive_discussion_envelope(
+        &mut self,
+        envelope: &social_delivery::SealedEnvelope,
+        x25519_private: &str,
+        pq_seed: &str,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        Ok(discussion::receive_envelope(self, envelope, x25519_private, pq_seed)?)
     }
 
     pub fn receive_comment(

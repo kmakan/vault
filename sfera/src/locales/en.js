@@ -29,7 +29,7 @@ export default {
   reactions: 'Reactions',
   addComment: 'Comment',
   commentPlaceholder: 'Reply to this post…',
-  commentHint: 'Stored on this device for now. E2E delivery to the original audience is the next protocol stage.',
+  commentHint: 'With known keys, the event is encrypted and queued. It is delivered only after synchronization completes.',
   commentEmpty: 'No comments yet. Start the conversation.',
   reply: 'Reply',
   contacts_request: 'Add contact',
