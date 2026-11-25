@@ -19,6 +19,7 @@ social-library = { path = "../social-library" }
 social-sync = { path = "../social-sync" }
 social-bridge = { path = "../social-bridge" }
 social-delivery = { path = "../social-delivery" }
+social-discussion = { path = "../social-discussion" }
 social-link = { path = "../social-link" }
 storage-api = { path = "../storage-api" }
 serde_json = "1"

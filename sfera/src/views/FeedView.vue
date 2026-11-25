@@ -1,6 +1,7 @@
 <script setup>
 // Лента: только отрисовка записей, которые собрал `social-feed`.
 import { computed, ref, watch } from 'vue';
+import PostDiscussion from '../components/PostDiscussion.vue';
 
 const props = defineProps({ state: Object, api: Object });
 
@@ -131,6 +132,7 @@ function when(ts) {
           <span>{{ kindLabel(m.mime) }} · {{ m.size }} B</span>
         </button>
       </div>
+      <PostDiscussion :post="entry" :state="state" :api="api" />
     </article>
   </section>
 </template>

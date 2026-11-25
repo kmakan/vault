@@ -198,6 +198,12 @@ impl CommentV1 {
     }
 }
 
+pub fn new_comment_id() -> Result<String, DiscussionError> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| DiscussionError::Canonical(format!("comment id entropy: {e}")))?;
+    Ok(hex::encode(bytes))
+}
+
 pub fn sign_comment(seed_hex: &str, comment: &CommentV1) -> Result<SignedComment, DiscussionError> {
     comment.validate()?;
     let sig = signing::sign_with_domain(COMMENT_DOMAIN, seed_hex, comment).map_err(DiscussionError::Sign)?;
@@ -317,6 +323,20 @@ impl DiscussionBook {
         }
         self.reactions.insert(key, signed);
         Ok(EventOutcome::Updated)
+    }
+
+    pub fn next_reaction_version(
+        &self,
+        target: &DiscussionTarget,
+        author: &Fingerprint,
+        emoji: &str,
+    ) -> u64 {
+        self.reactions.values()
+            .filter(|r| r.reaction.target.post_id == target.post_id
+                && r.reaction.author.fp.same(author)
+                && (r.reaction.emoji == emoji || r.reaction.removed_emoji.as_deref() == Some(emoji)))
+            .map(|r| r.reaction.version)
+            .max().unwrap_or(0).saturating_add(1)
     }
 
     pub fn comments_for(&self, post_id: &PostRef) -> Vec<&SignedComment> {

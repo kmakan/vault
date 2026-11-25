@@ -93,7 +93,11 @@ impl SferaState {
     /// Восстановить принятую книгу после загрузки app data и до первой команды.
     /// Пустого файла нет — это первый запуск, а не потеря книги.
     pub fn load_received_profiles(self) -> Result<Self, CommandError> {
-        let avatars = self.call(|app| persistence::load_at(&self.keys_dir, app).map_err(CommandError::from))?;
+        let avatars = self.call(|app| {
+            let avatars = persistence::load_at(&self.keys_dir, app).map_err(CommandError::from)?;
+            persistence::load_discussion_at(&self.keys_dir, app).map_err(CommandError::from)?;
+            Ok(avatars)
+        })?;
         *self.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))? = avatars;
         Ok(self)
     }
@@ -109,7 +113,8 @@ impl SferaState {
         }
         let avatars = self.received_avatars.lock()
             .map_err(|_| CommandError::backend("received avatars lock"))?;
-        persistence::save_at(&self.keys_dir, app.profiles().snapshot(), &avatars)
+        persistence::save_at(&self.keys_dir, app.profiles().snapshot(), app.feed_snapshot(), &avatars,
+            app.discussion().snapshot_comments(), app.discussion().snapshot_reactions())
             .map_err(CommandError::from)
     }
 
@@ -480,7 +485,7 @@ fn social_identity(state: tauri::State<'_, SferaState>) -> Result<IdentityDto, C
 #[tauri::command]
 fn social_publish_post(state: tauri::State<'_, SferaState>, req: PublishPostRequest) -> Result<PostDto, CommandError> {
     check(req.v)?;
-    state.call(|app| {
+    state.mutate(|app| {
         let post = app.publish_post(req.ts, req.body, req.audience, req.media, req.now)?;
         let id = social_app::PostId::from_post(&post.post)
             .map_err(|e| CommandError::input(e))?
@@ -493,7 +498,7 @@ fn social_publish_post(state: tauri::State<'_, SferaState>, req: PublishPostRequ
 #[tauri::command]
 fn social_receive_posts(state: tauri::State<'_, SferaState>, req: ReceivePostsRequest) -> Result<ReportDto, CommandError> {
     check(req.v)?;
-    state.call(|app| Ok(app.receive_posts(req.posts, req.received_at).into()))
+    state.mutate(|app| Ok(app.receive_posts(req.posts, req.received_at).into()))
 }
 
 /// Снимок ленты для UI. Порядок и дедуп посчитаны в `social-feed`.
@@ -909,6 +914,100 @@ async fn social_open_received_avatar(
     Ok(content_dto(opened))
 }
 
+/// Создание комментария: целевая аудитория берётся из поста в Rust.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommentRequest {
+    pub v: u8,
+    pub post_id: String,
+    pub parent_id: Option<String>,
+    pub ts: u64,
+    pub body: String,
+    #[serde(default)]
+    pub media: Vec<MediaRef>,
+    pub now: u64,
+}
+
+#[tauri::command]
+fn social_comment_on_post(
+    state: tauri::State<'_, SferaState>, req: CommentRequest,
+) -> Result<social_discussion::SignedComment, CommandError> {
+    check(req.v)?;
+    let post_id: social_app::PostId = req.post_id.parse().map_err(CommandError::input)?;
+    state.mutate(|app| Ok(app.comment_on_post(
+        &post_id, req.parent_id, req.ts, &req.body, req.media, req.now,
+    )?))
+}
+
+#[tauri::command]
+fn social_receive_comment(
+    state: tauri::State<'_, SferaState>, post_id: String,
+    comment: social_discussion::SignedComment,
+) -> Result<String, CommandError> {
+    let post_id: social_app::PostId = post_id.parse().map_err(CommandError::input)?;
+    state.mutate(|app| Ok(format!("{:?}", app.receive_comment(&post_id, comment)?).to_lowercase()))
+}
+
+/// Реакция: следующую версию вычисляет Rust по сохранённым событиям.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReactionRequest {
+    pub v: u8,
+    pub post_id: String,
+    pub emoji: String,
+    #[serde(default)]
+    pub removed: bool,
+    pub now: u64,
+}
+
+#[tauri::command]
+fn social_react_to_post(
+    state: tauri::State<'_, SferaState>, req: ReactionRequest,
+) -> Result<social_discussion::SignedReaction, CommandError> {
+    check(req.v)?;
+    let post_id: social_app::PostId = req.post_id.parse().map_err(CommandError::input)?;
+    state.mutate(|app| Ok(app.react_to_post(&post_id, &req.emoji, req.removed, req.now)?))
+}
+
+#[tauri::command]
+fn social_receive_reaction(
+    state: tauri::State<'_, SferaState>, post_id: String,
+    reaction: social_discussion::SignedReaction,
+) -> Result<String, CommandError> {
+    let post_id: social_app::PostId = post_id.parse().map_err(CommandError::input)?;
+    state.mutate(|app| Ok(format!("{:?}", app.receive_reaction(&post_id, reaction)?).to_lowercase()))
+}
+
+#[tauri::command]
+fn social_discussion(
+    state: tauri::State<'_, SferaState>, post_id: String,
+) -> Result<serde_json::Value, CommandError> {
+    let post_id: social_app::PostId = post_id.parse().map_err(CommandError::input)?;
+    let target = post_id.to_hex().parse::<social_discussion::PostRef>()
+        .map_err(|e| CommandError::input(e.to_string()))?;
+    state.call(|app| {
+        let mut comments = app.discussion().comments_for(&target);
+        let mut reactions = app.discussion().reactions_for(&target);
+        comments.sort_by(|a, b| a.comment.id.cmp(&b.comment.id));
+        reactions.sort_by(|a, b| a.reaction.author.fp.as_str().cmp(b.reaction.author.fp.as_str())
+            .then_with(|| a.reaction.emoji.cmp(&b.reaction.emoji)));
+        let mut grouped: Vec<serde_json::Value> = Vec::new();
+        for reaction in reactions {
+            let author = reaction.reaction.author.fp.as_str().to_string();
+            let emoji = reaction.reaction.emoji.clone();
+            if let Some(group) = grouped.iter_mut().find(|g| g["emoji"] == emoji) {
+                group["count"] = serde_json::json!(group["count"].as_u64().unwrap_or(0) + 1);
+                group["authors"].as_array_mut().expect("reaction authors").push(serde_json::json!(author));
+            } else {
+                grouped.push(serde_json::json!({"emoji": emoji, "count": 1, "authors": [author]}));
+            }
+        }
+        grouped.sort_by(|a, b| a["emoji"].as_str().unwrap_or("").cmp(b["emoji"].as_str().unwrap_or("")));
+        Ok(serde_json::json!({
+            "v": API_VERSION, "post_id": post_id.to_hex(),
+            "comments": comments, "reactions": grouped,
+        }))
+    })
+}
+
 /// Принять приглашение/заявку: дедуп по (from,to,nonce) и переход состояния
 /// живут в social-contacts; FFI только передаёт готовую форму (ADR-006 §4.1).
 #[tauri::command]
@@ -979,6 +1078,11 @@ pub fn handles(command: &str) -> bool {
         "social_api_version"
             | "social_identity"
             | "social_publish_post"
+            | "social_comment_on_post"
+            | "social_receive_comment"
+            | "social_react_to_post"
+            | "social_receive_reaction"
+            | "social_discussion"
             | "social_receive_posts"
             | "social_feed"
             | "social_contacts"
@@ -1023,6 +1127,11 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_api_version,
         social_identity,
         social_publish_post,
+        social_comment_on_post,
+        social_receive_comment,
+        social_react_to_post,
+        social_receive_reaction,
+        social_discussion,
         social_receive_posts,
         social_feed,
         social_contacts,
@@ -1124,6 +1233,34 @@ mod tests {
     }
 
     #[test]
+    fn feed_and_discussion_survive_state_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(LocalStore::new(dir.path().join("blobs")).unwrap());
+        let app = SferaApp::new(Identity::from_seed(SEED).unwrap(), store.clone(),
+            RetryPolicy::default(), Quota::new(60, 10_000, 10, 0));
+        let st = SferaState::new(app, None).with_keys_dir(dir.path());
+        let post = st.call(|app| Ok(app.publish_post(10, "Сохранённый пост", PostAudience {
+            id: "family".into(), epoch: 1, spec: Audience::AllContacts,
+        }, vec![], 10)?)).unwrap();
+        let id = social_app::PostId::from_post(&post.post).unwrap();
+        st.call(|app| Ok(app.receive_posts([post.clone()], 10))).unwrap();
+        st.call(|app| Ok(app.comment_on_post(&id, None, 20, "Сохранённый ответ", vec![], 20)?)).unwrap();
+        st.call(|app| Ok(app.react_to_post(&id, "❤️", false, 20)?)).unwrap();
+        st.call(|app| st.persist_received_profiles(app)).unwrap();
+
+        let restored = SferaState::new(SferaApp::new(Identity::from_seed(SEED).unwrap(), store,
+            RetryPolicy::default(), Quota::new(60, 10_000, 10, 0)), None)
+            .with_keys_dir(dir.path()).load_received_profiles().unwrap();
+        restored.call(|app| {
+            assert_eq!(app.feed_snapshot().len(), 1);
+            let target = social_discussion::PostRef::from_post(&post.post).unwrap();
+            assert_eq!(app.discussion().comments_for(&target).len(), 1);
+            assert_eq!(app.discussion().reactions_for(&target).len(), 1);
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
     fn received_book_survives_new_state_and_profile_dto_has_avatar_id() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(LocalStore::new(dir.path().join("blobs")).unwrap());
@@ -1149,7 +1286,7 @@ mod tests {
             ).unwrap(),
         ).unwrap();
         st.call(|app| { app.receive_profile(signed.clone())?; Ok(()) }).unwrap();
-        persistence::save_at(dir.path(), vec![signed.clone()], &HashMap::from([(social_profile::profile_id(&signed), manifest)])).unwrap();
+        persistence::save_at(dir.path(), vec![signed.clone()], vec![], &HashMap::from([(social_profile::profile_id(&signed), manifest)]), vec![], vec![]).unwrap();
         assert!(dir.path().join(persistence::FILE).exists());
 
         let restored = SferaState::new(

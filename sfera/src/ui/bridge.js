@@ -20,6 +20,11 @@ export const COMMANDS = Object.freeze({
   audienceMembers: 'social_audience_members',
   acceptInvite: 'social_accept_contact_request',
   publishPost: 'social_publish_post',
+  commentOnPost: 'social_comment_on_post',
+  receiveComment: 'social_receive_comment',
+  reactToPost: 'social_react_to_post',
+  receiveReaction: 'social_receive_reaction',
+  discussion: 'social_discussion',
   profile: 'social_profile',
   setMyProfile: 'social_set_my_profile',
   receiveProfile: 'social_receive_profile',
@@ -104,6 +109,27 @@ export function createBridge(invoke) {
 
     publishPost(req) {
       return invoke(COMMANDS.publishPost, { req });
+    },
+
+    // Исходную аудиторию и права вычисляет Rust; UI передаёт только действие.
+    commentOnPost(req) {
+      return invoke(COMMANDS.commentOnPost, { req });
+    },
+
+    receiveComment(postId, comment) {
+      return invoke(COMMANDS.receiveComment, { postId, comment });
+    },
+
+    reactToPost(req) {
+      return invoke(COMMANDS.reactToPost, { req });
+    },
+
+    receiveReaction(postId, reaction) {
+      return invoke(COMMANDS.receiveReaction, { postId, reaction });
+    },
+
+    discussion(postId) {
+      return invoke(COMMANDS.discussion, { postId });
     },
 
     profile(fp) {

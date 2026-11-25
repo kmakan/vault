@@ -89,6 +89,11 @@ const bridge = {
   mediaKind: async (mime) => (mime.startsWith('image/') ? 'Image' : 'Document'),
   syncStatus: async () => ({ v: 7, pending: 2, failed: 0, due: 0, has_transport: false }),
   publishPost: async (req) => { calls.push(req); return { v: 7, id: 'p2', ts: req.ts }; },
+  discussion: async (postId) => ({
+    v: 7, post_id: postId, comments: [], reactions: [{ emoji: '❤️', count: 1, authors: [] }],
+  }),
+  commentOnPost: async (req) => { calls.push({ command: 'comment', ...req }); return { comment: { id: 'c1' } }; },
+  reactToPost: async (req) => { calls.push({ command: 'reaction', ...req }); return { reaction: { version: 1 } }; },
   companionAction: async (handled) => ({ install: !handled, target: 'vault://open' }),
 };
 
@@ -237,6 +242,12 @@ check(calls[0].ts === 1000 && calls[0].now === 1000, 'time comes from injected c
 check(calls[0].body === 'hello', 'body passed through');
 check(calls[0].audience === audience, 'audience passed through unchanged');
 check(calls[0].media.length === 0, 'empty media by default');
+check(s.discussions.p1.reactions[0].emoji === '❤️', 'discussion summary loaded from Rust');
+
+await api.commentOnPost('p1', 'Ответ');
+check(calls.at(-1).command === 'comment' && !('comment_id' in calls.at(-1)), 'comment id is assigned in Rust, not UI');
+await api.reactToPost('p1', '❤️');
+check(calls.at(-1).command === 'reaction' && !('version' in calls.at(-1)), 'reaction version is assigned in Rust, not UI');
 
 failFeed = true;
 const loaded = await api.loadFeed();

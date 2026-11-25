@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use social_app::{AppError, SferaApp};
+use social_app::{AppError, SferaApp, SignedPost};
 use social_library::AvatarManifest;
 use social_profile::SignedProfile;
+use social_discussion::{SignedComment, SignedReaction};
 
 pub const FILE: &str = "received_profiles.json";
 
@@ -19,7 +20,13 @@ struct Stored {
     v: u8,
     profiles: Vec<SignedProfile>,
     #[serde(default)]
+    posts: Vec<SignedPost>,
+    #[serde(default)]
     avatars: HashMap<String, AvatarManifest>,
+    #[serde(default)]
+    comments: Vec<SignedComment>,
+    #[serde(default)]
+    reactions: Vec<SignedReaction>,
 }
 
 fn path(keys_dir: &Path) -> PathBuf { keys_dir.join(FILE) }
@@ -49,6 +56,16 @@ fn read_at(keys_dir: &Path) -> Result<Option<Stored>, AppError> {
             return Err(AppError::Canonical("stored avatar manifest has no signed avatar".into()));
         }
     }
+    for comment in &stored.comments {
+        if !social_discussion::verify_comment(comment) {
+            return Err(AppError::Canonical("stored comment signature is invalid".into()));
+        }
+    }
+    for reaction in &stored.reactions {
+        if !social_discussion::verify_reaction(reaction) {
+            return Err(AppError::Canonical("stored reaction signature is invalid".into()));
+        }
+    }
     Ok(Some(stored))
 }
 
@@ -73,16 +90,27 @@ pub fn load_at(
     Ok(stored.avatars)
 }
 
+pub fn load_discussion_at(keys_dir: &Path, app: &mut SferaApp) -> Result<(), AppError> {
+    let Some(stored) = read_at(keys_dir)? else { return Ok(()); };
+    // Сначала посты: комментарий без известной цели не считается принятым.
+    app.restore_feed(stored.posts, 0)?;
+    app.restore_discussion(stored.comments, stored.reactions)
+}
+
 /// Записать снимок книги и манифестов. Сначала tmp+sync, затем rename.
 pub fn save_at(
     keys_dir: &Path,
     profiles: Vec<SignedProfile>,
+    posts: Vec<SignedPost>,
     avatars: &HashMap<String, AvatarManifest>,
+    comments: Vec<SignedComment>,
+    reactions: Vec<SignedReaction>,
 ) -> Result<(), AppError> {
     std::fs::create_dir_all(keys_dir).map_err(|e| AppError::Canonical(e.to_string()))?;
     let path = path(keys_dir);
     let tmp = path.with_extension("tmp");
-    let body = serde_json::to_vec(&Stored { v: 1, profiles, avatars: avatars.clone() })
+    let body = serde_json::to_vec(&Stored { v: 1, profiles, posts, avatars: avatars.clone(),
+        comments, reactions })
         .map_err(|e| AppError::Canonical(e.to_string()))?;
     let mut file = std::fs::File::create(&tmp).map_err(|e| AppError::Canonical(e.to_string()))?;
     #[cfg(unix)] {

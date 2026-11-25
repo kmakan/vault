@@ -19,6 +19,7 @@ use social_post::{compose, PostError};
 use social_profile::{ProfileBook, ProfileError};
 mod profile_publish;
 mod profile_receive;
+mod discussion;
 use social_sync::{ingest, DrainReport, Outbox, Quota, QuotaError, RetryPolicy};
 use storage_api::BlobStore;
 
@@ -47,6 +48,7 @@ pub struct ProfilePublication {
 pub enum AppError {
     Post(PostError),
     Profile(ProfileError),
+    Discussion(social_discussion::DiscussionError),
     Quota(QuotaError),
     Canonical(String),
     UnknownAudience(String),
@@ -57,6 +59,7 @@ impl std::fmt::Display for AppError {
         match self {
             Self::Post(e) => write!(f, "post: {e}"),
             Self::Profile(e) => write!(f, "profile: {e}"),
+            Self::Discussion(e) => write!(f, "discussion: {e}"),
             Self::Quota(e) => write!(f, "quota: {e}"),
             Self::Canonical(m) => write!(f, "canonical form failed: {m}"),
             Self::UnknownAudience(id) => write!(f, "unknown audience: {id}"),
@@ -68,6 +71,7 @@ impl std::error::Error for AppError {}
 
 impl From<PostError> for AppError { fn from(e: PostError) -> Self { Self::Post(e) } }
 impl From<ProfileError> for AppError { fn from(e: ProfileError) -> Self { Self::Profile(e) } }
+impl From<social_discussion::DiscussionError> for AppError { fn from(e: social_discussion::DiscussionError) -> Self { Self::Discussion(e) } }
 impl From<QuotaError> for AppError { fn from(e: QuotaError) -> Self { Self::Quota(e) } }
 
 /// Сборка приложения. Ничего не шифрует и не решает — только держит порты.
@@ -75,6 +79,7 @@ pub struct SferaApp {
     identity: Identity,
     feed: Feed,
     profiles: ProfileBook,
+    discussion: social_discussion::DiscussionBook,
     contacts: ContactBook,
     outbox: Outbox,
     audiences: BTreeMap<String, AudienceKeys>,
@@ -107,6 +112,7 @@ impl SferaApp {
             identity,
             feed: Feed::new(),
             profiles: ProfileBook::new(),
+            discussion: social_discussion::DiscussionBook::new(),
             contacts: ContactBook::new(),
             outbox: Outbox::new(retry, quota),
             audiences: BTreeMap::new(),
@@ -138,12 +144,109 @@ impl SferaApp {
         &self.profiles
     }
 
+    pub fn discussion(&self) -> &social_discussion::DiscussionBook {
+        &self.discussion
+    }
+
+    /// Комментарий к видимому посту. Исходная аудитория берётся из самого
+    /// поста, а не из UI; шифрование для неё — следующий порт доставки.
+    pub fn comment_on_post(
+        &mut self,
+        id: &PostId,
+        parent_id: Option<String>,
+        ts: u64,
+        body: &str,
+        media: Vec<social_post::MediaRef>,
+        now: u64,
+    ) -> Result<social_discussion::SignedComment, AppError> {
+        let post = self.feed.get(id).ok_or(social_discussion::DiscussionError::UnknownPost)?.post.clone();
+        let target = discussion::target(&post)?;
+        let comment_id = social_discussion::new_comment_id()?;
+        let signed = social_discussion::compose_comment(
+            self.identity.signing_seed(), &comment_id, target,
+            parent_id, ts, body, media,
+        )?;
+        self.discussion.insert_comment(signed.clone())?;
+        let len = social_model::canonical::canonical_bytes(&signed.comment).map_err(AppError::Canonical)?.len() as u64;
+        self.outbox.enqueue(format!("comment:{}", signed.comment.id), len, now)?;
+        Ok(signed)
+    }
+
+    pub fn react_to_post(
+        &mut self,
+        id: &PostId,
+        emoji: &str,
+        removed: bool,
+        now: u64,
+    ) -> Result<social_discussion::SignedReaction, AppError> {
+        let post = self.feed.get(id).ok_or(social_discussion::DiscussionError::UnknownPost)?.post.clone();
+        let target = discussion::target(&post)?;
+        let version = self.discussion.next_reaction_version(&target, self.identity.fingerprint(), emoji);
+        let signed = social_discussion::compose_reaction(
+            self.identity.signing_seed(), target, emoji, version, removed,
+        )?;
+        self.discussion.insert_reaction(signed.clone())?;
+        let len = social_model::canonical::canonical_bytes(&signed.reaction).map_err(AppError::Canonical)?.len() as u64;
+        self.outbox.enqueue(format!("reaction:{}:{}:{version}", id.to_hex(), emoji), len, now)?;
+        Ok(signed)
+    }
+
+    pub fn receive_comment(
+        &mut self,
+        post_id: &PostId,
+        signed: social_discussion::SignedComment,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        let post = self.feed.get(post_id).map(|e| &e.post);
+        Ok(discussion::receive_comment(&mut self.discussion, post, &self.contacts, signed)?)
+    }
+
+    pub fn receive_reaction(
+        &mut self,
+        post_id: &PostId,
+        signed: social_discussion::SignedReaction,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        let post = self.feed.get(post_id).map(|e| &e.post);
+        Ok(discussion::receive_reaction(&mut self.discussion, post, &self.contacts, signed)?)
+    }
+
     pub(crate) fn profiles_mut(&mut self) -> &mut ProfileBook {
         &mut self.profiles
     }
 
     pub(crate) fn outbox_mut(&mut self) -> &mut Outbox {
         &mut self.outbox
+    }
+
+    pub fn feed_snapshot(&self) -> Vec<SignedPost> {
+        self.feed.snapshot().into_iter().map(|entry| entry.post).collect()
+    }
+
+    pub fn restore_feed(&mut self, posts: Vec<SignedPost>, now: u64) -> Result<(), AppError> {
+        let report = self.receive_posts(posts, now);
+        if report.rejected > 0 {
+            return Err(AppError::Canonical("stored post is invalid".into()));
+        }
+        Ok(())
+    }
+
+    /// Восстановить локальную книгу после повторной проверки каждой подписи.
+    /// Права и привязку к известному посту проверяет тот же путь, что и сеть.
+    pub fn restore_discussion(
+        &mut self,
+        comments: Vec<social_discussion::SignedComment>,
+        reactions: Vec<social_discussion::SignedReaction>,
+    ) -> Result<(), AppError> {
+        for signed in comments {
+            let id: PostId = signed.comment.target.post_id.to_hex().parse()
+                .map_err(|_| social_discussion::DiscussionError::UnknownPost)?;
+            self.receive_comment(&id, signed)?;
+        }
+        for signed in reactions {
+            let id: PostId = signed.reaction.target.post_id.to_hex().parse()
+                .map_err(|_| social_discussion::DiscussionError::UnknownPost)?;
+            self.receive_reaction(&id, signed)?;
+        }
+        Ok(())
     }
 
     pub fn contacts(&self) -> &ContactBook {

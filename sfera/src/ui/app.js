@@ -37,6 +37,8 @@ export function createAppState({
     // Выбранный, но ещё не сохранённый аватар: ссылка на блоб без ключа.
     avatarDraft: null,
     feed: [],
+    // Обсуждение по id поста: готовые подписанные события из Rust.
+    discussions: {},
     contacts: [],
     // Принятые по IMAP профили по fingerprint; avatar — только data URL
     // из Rust, ключ и манифест в состоянии JS не появляются.
@@ -142,6 +144,22 @@ export function createAppState({
     }
   }
 
+  async function loadDiscussion(postId) {
+    if (!postId) return null;
+    try {
+      const dto = await bridge.discussion(postId);
+      state.discussions[postId] = dto;
+      return dto;
+    } catch (e) {
+      state.error = String(e?.message ?? e);
+      return null;
+    }
+  }
+
+  async function loadAllDiscussions() {
+    await Promise.all((state.feed ?? []).map((entry) => loadDiscussion(entry.id)));
+  }
+
   // Состав сферы: отпечатки и эпоха приходят из Rust, ключи не покидают ядро.
   async function fetchAudienceMembers(id) {
     try {
@@ -230,6 +248,7 @@ export function createAppState({
       }
       await Promise.all((state.audiences ?? []).map((a) => fetchAudienceMembers(a.id)));
       await Promise.all((state.contacts ?? []).map((c) => loadContactProfile(c.fp)));
+      await loadAllDiscussions();
       return state;
     },
 
@@ -237,10 +256,32 @@ export function createAppState({
       const feed = await load('feed', () => bridge.feed());
       await loadThumbs();
       await loadSync();
+      await loadAllDiscussions();
       return feed;
     },
     loadContacts: () => load('contacts', () => bridge.contacts()),
     loadContactProfile,
+    loadDiscussion,
+
+    async commentOnPost(postId, body, parentId = null) {
+      const now = clock();
+      // ID и версию события назначает Rust: UI не вычисляет протокол.
+      const signed = await bridge.commentOnPost({
+        v: state.apiVersion, post_id: postId,
+        parent_id: parentId, ts: now, body, media: [], now,
+      });
+      await loadDiscussion(postId);
+      return signed;
+    },
+
+    async reactToPost(postId, emoji, removed = false) {
+      const now = clock();
+      const signed = await bridge.reactToPost({
+        v: state.apiVersion, post_id: postId, emoji, removed, now,
+      });
+      await loadDiscussion(postId);
+      return signed;
+    },
 
     // Явный запрос пользователя, не фоновый цикл. Отчёт и профили читаются
     // только из Rust; внешняя доставка по-прежнему подтверждается отдельно.
