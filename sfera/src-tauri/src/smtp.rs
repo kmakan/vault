@@ -73,8 +73,9 @@ impl SmtpConfig {
     }
 }
 
-/// Доставить один готовый конверт. Тема — только неугадываемый outbox id,
-/// тело — уже зашифрованный JSON; адаптер его не читает и не меняет.
+/// Доставить один готовый конверт. Тема пустая — как в stealth-письмах
+/// мессенджера. Ни название приложения, ни тип события, ни outbox id не
+/// выносим в открытые заголовки; тело — уже зашифрованный JSON.
 pub fn send_envelope(config: &SmtpConfig, item: &social_app::OutboxItem) -> Result<bool, String> {
     let Some(to) = item.to.as_deref() else { return Ok(false) };
     let Some(payload) = item.envelope.as_deref() else { return Ok(false) };
@@ -85,7 +86,7 @@ pub fn send_envelope(config: &SmtpConfig, item: &social_app::OutboxItem) -> Resu
         .enable_all()
         .build()
         .map_err(|e| format!("SMTP runtime: {e}"))?;
-    let subject = format!("sfera-profile:{}", item.id);
+    let subject = "";
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         runtime.block_on(config.send(to, &subject, payload))
     }));
@@ -204,7 +205,9 @@ mod tests {
         assert!(send_envelope(&config, &item()).unwrap());
         let transcript = server.join().unwrap();
         assert!(transcript.contains("RCPT TO:<peer@example.org>"), "{transcript}");
-        assert!(transcript.contains("sfera-profile:publication-1"), "{transcript}");
+        assert!(transcript.contains("\r\nSubject: \r\n"), "{transcript}");
+        assert!(!transcript.contains("sfera-profile:"), "{transcript}");
+        assert!(!transcript.contains("publication-1"), "{transcript}");
         assert!(transcript.contains("{\"v\":1}"), "{transcript}");
         assert!(transcript.contains("AUTH"), "{transcript}");
     }

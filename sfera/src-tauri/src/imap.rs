@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use native_tls::TlsConnector;
 use social_ffi::SferaState;
 
-pub const SUBJECT_PREFIX: &str = "sfera-profile:";
+/// Приём ранних dev-писем, уже оставшихся в тестовых ящиках. Новые письма
+/// этот маркер не используют: классификация stealth идёт по телу.
+pub const LEGACY_SUBJECT_PREFIX: &str = "sfera-profile:";
 const CURSOR_FILE: &str = "imap-received.json";
 const FETCH_LIMIT: usize = 50;
 
@@ -148,17 +150,20 @@ fn header_value(headers: &str, name: &str) -> String {
 /// Разобрать PEEK-ответ без раскрытия содержимого в логах.
 /// JSON находится сразу после маркера `{length}` IMAP literal. Провайдер
 /// может вернуть text/plain напрямую или полное MIME-письмо с base64/QP.
-pub fn envelope_from_peek(response: &str) -> Result<social_delivery::SealedEnvelope, String> {
-    let body = response.split_once("}\r\n")
+fn envelope_prefix_from_peek(response: &str) -> Result<String, String> {
+    let (_, body) = response.split_once("}\r\n")
         .or_else(|| response.split_once("}\n"))
-        .map(|(_, body)| body)
-        .ok_or_else(|| "IMAP message has no literal body".to_string())?;
-    let json = body.lines()
+        .ok_or_else(|| "IMAP body prefix has no literal".to_string())?;
+    Ok(body.lines()
         .take_while(|line| !line.starts_with(')'))
-        .collect::<Vec<_>>().join("\n");
+        .collect::<Vec<_>>().join("\n"))
+}
+
+pub fn envelope_from_peek(response: &str) -> Result<social_delivery::SealedEnvelope, String> {
+    let body = envelope_prefix_from_peek(response)?;
     // RFC 5321: экранирование точки в начале строки относится к DATA SMTP,
     // а не к хранимому IMAP-сообщению; исходный JSON здесь не изменяем.
-    envelope_from_message(json.trim_end_matches(['\r', '\n']))
+    envelope_from_message(body.trim_end_matches(['\r', '\n']))
 }
 
 fn envelope_from_message(message: &str) -> Result<social_delivery::SealedEnvelope, String> {
@@ -218,7 +223,17 @@ fn parse_sealed_json(text: &str) -> Result<social_delivery::SealedEnvelope, Stri
     serde_json::from_str(&unwrapped).map_err(|e| format!("sealed envelope JSON: {e}"))
 }
 
-pub fn subject_is_sfera(subject: &str) -> bool { subject.starts_with(SUBJECT_PREFIX) }
+/// Внешний формат конверта не раскрывает содержимое. Маркер используется
+/// только как дешёвый предфильтр: дешифрование и проверка подписи остаются
+/// обязательными в social-app. Обычные письма с непустой темой не скачиваем;
+/// старый маркер допускаем лишь для совместимости с уже отправленными dev-письмами.
+pub fn body_may_be_sfera(body: &str) -> bool {
+    body.trim_start().starts_with("{\"v\":")
+}
+
+pub fn subject_is_legacy_sfera(subject: &str) -> bool {
+    subject.starts_with(LEGACY_SUBJECT_PREFIX)
+}
 
 trait ReadWrite: std::io::Read + std::io::Write {}
 impl<T: std::io::Read + std::io::Write> ReadWrite for T {}
@@ -262,7 +277,19 @@ fn fetch_with_stream<S: ReadWrite>(
             &mut transcript,
         )?;
         let subject = header_value(&header_lines.concat(), "Subject:");
-        if !subject_is_sfera(&subject) { continue; }
+        let legacy = subject_is_legacy_sfera(&subject);
+        if !subject.trim().is_empty() && !legacy { continue; }
+        if !legacy {
+            let tag = format!("p{index}");
+            let prefix_lines = command(
+                &mut reader, &tag,
+                &format!("UID FETCH {uid} (UID BODY.PEEK[TEXT]<0.32>)"),
+                &mut transcript,
+            )?;
+            if !body_may_be_sfera(&envelope_prefix_from_peek(&prefix_lines.concat())?) {
+                continue;
+            }
+        }
         report.candidates += 1;
         let tag = format!("b{index}");
         let body_lines = command(
@@ -362,10 +389,13 @@ mod tests {
     }
 
     #[test]
-    fn only_sfera_subject_is_candidate() {
-        assert!(subject_is_sfera("sfera-profile:abc"));
-        assert!(!subject_is_sfera("hello"));
-        assert!(!subject_is_sfera("Re: sfera-profile:abc"));
+    fn stealth_uses_body_prefix_and_legacy_subject_is_read_only_for_old_mail() {
+        assert!(body_may_be_sfera("{\"v\":1,\"mode\":\"pq1\"}"));
+        assert!(body_may_be_sfera("\r\n{\"v\":"));
+        assert!(!body_may_be_sfera("Обычное письмо"));
+        assert!(subject_is_legacy_sfera("sfera-profile:abc"));
+        assert!(!subject_is_legacy_sfera("hello"));
+        assert!(!subject_is_legacy_sfera("Re: sfera-profile:abc"));
     }
 
     #[test]
@@ -431,8 +461,11 @@ mod tests {
                 } else if upper.starts_with("UID SEARCH") {
                     socket.write_all(b"* SEARCH 1 2\r\n").unwrap();
                 } else if upper.contains("HEADER.FIELDS") {
-                    let subject = if command.contains(" 1 ") { "ordinary mail" } else { "sfera-profile:pub1" };
+                    let subject = if command.contains(" 1 ") { "ordinary mail" } else { "" };
                     socket.write_all(format!("* 1 FETCH (UID 1 BODY[HEADER.FIELDS (SUBJECT)] {{{}}}\r\nSubject: {}\r\n\r\n)\r\n", subject.len() + 11, subject).as_bytes()).unwrap();
+                } else if upper.contains("BODY.PEEK[TEXT]") {
+                    let prefix = if command.contains(" 1 ") { "Обычный текст" } else { "{\"v\":1,\"mode\":\"pq1\"" };
+                    socket.write_all(format!("* 1 FETCH (UID 1 BODY[TEXT]<0> {{{}}}\r\n{}\r\n)\r\n", prefix.len(), prefix).as_bytes()).unwrap();
                 } else if upper.contains("BODY.PEEK[]") {
                     socket.write_all(format!("* 2 FETCH (UID 2 BODY[] {{{}}}\r\n{}\r\n)\r\n", payload.len(), payload).as_bytes()).unwrap();
                 } else if upper.starts_with("LOGOUT") {
