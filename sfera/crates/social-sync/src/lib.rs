@@ -297,6 +297,11 @@ impl Outbox {
             .count()
     }
 
+    /// Число подтверждений транспортного порта, не прочтения получателем.
+    pub fn sent_count(&self) -> usize {
+        self.items.values().filter(|i| i.state == OutboxState::Sent).count()
+    }
+
     /// Созревшие к отправке: `Pending` и `next_attempt_at <= now`, по времени,
     /// затем по id (детерминированно).
     pub fn due(&self, now: u64) -> Vec<&OutboxItem> {

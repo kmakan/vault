@@ -146,6 +146,7 @@ fn drain_due_reports_sent_and_retried() {
     assert_eq!(ob.get("b").unwrap().state, OutboxState::Sent);
     assert_eq!(ob.get("c").unwrap().state, OutboxState::Pending);
     assert_eq!(ob.pending_count(), 1);
+    assert_eq!(ob.sent_count(), 2);
 }
 
 #[test]

@@ -175,14 +175,22 @@ impl SferaState {
         now: u64,
     ) -> Result<OutcomeDto, CommandError> {
         let encryption = self.encryption()?;
-        let (kind, outcome, profile_id, manifest) = self.call(|app| {
+        let (kind, event, outcome, profile_id, manifest) = self.call(|app| {
             let plaintext = social_delivery::open_payload(
                 envelope, encryption.x25519_private_hex(), &envelope.from_x25519,
                 encryption.pq_seed_hex(),
             ).map_err(|e| CommandError::input(e))?;
             if let Ok(payload) = social_discussion::parse_envelope_json(&plaintext) {
+                let event = match &payload {
+                    social_discussion::DiscussionPayload::SocialComment(_)
+                    | social_discussion::DiscussionPayload::CommentSubmission { .. }
+                    | social_discussion::DiscussionPayload::CommentAttestation(_) => "comment",
+                    social_discussion::DiscussionPayload::SocialReaction(_)
+                    | social_discussion::DiscussionPayload::ReactionSubmission { .. }
+                    | social_discussion::DiscussionPayload::ReactionAttestation(_) => "reaction",
+                };
                 let outcome = app.receive_discussion_payload(payload, now)?;
-                return Ok(("discussion".to_string(), outcome, String::new(), None));
+                return Ok(("discussion".to_string(), event.to_string(), outcome, String::new(), None));
             }
             let received = app.receive_profile_envelope(
                 envelope, encryption.x25519_private_hex(), encryption.pq_seed_hex(),
@@ -193,14 +201,17 @@ impl SferaState {
                 social_app::ProfileUpsertOutcome::Duplicate => social_discussion::EventOutcome::Duplicate,
                 social_app::ProfileUpsertOutcome::Stale => social_discussion::EventOutcome::Stale,
             };
-            Ok(("profile".to_string(), outcome,
+            Ok(("profile".to_string(), "profile".to_string(), outcome,
                 received.profile_id, received.avatar_manifest))
         })?;
         if let Some(manifest) = manifest {
             self.received_avatars.lock().map_err(|_| CommandError::backend("received avatars lock"))?
                 .insert(profile_id, manifest);
         }
-        self.mutate(|_| Ok(OutcomeDto { v: API_VERSION, kind: Some(kind), outcome: format!("{outcome:?}").to_lowercase() }))
+        self.mutate(|_| Ok(OutcomeDto {
+            v: API_VERSION, kind: Some(kind), event: Some(event),
+            outcome: format!("{outcome:?}").to_lowercase(),
+        }))
     }
 
     /// Обратная совместимость внешнего порта профиля.
@@ -452,12 +463,20 @@ pub struct AudienceMembersDto {
 pub struct ChangedDto { pub v: u8, pub changed: bool }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OutcomeDto { pub v: u8, pub outcome: String, #[serde(default, skip_serializing_if = "Option::is_none")] pub kind: Option<String> }
+pub struct OutcomeDto {
+    pub v: u8,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Подтип проверенного payload; нужен отчёту уведомлений, не UI-правилам.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+}
 
 impl From<social_app::ProfileUpsertOutcome> for OutcomeDto {
     fn from(o: social_app::ProfileUpsertOutcome) -> Self {
         let outcome = profile_outcome_name(o);
-        Self { v: API_VERSION, outcome: outcome.into(), kind: None }
+        Self { v: API_VERSION, outcome: outcome.into(), kind: None, event: None }
     }
 }
 
@@ -1088,6 +1107,7 @@ pub struct SyncStatusDto {
     pub v: u8,
     pub pending: usize,
     pub failed: usize,
+    pub sent: usize,
     pub due: usize,
     pub has_transport: bool,
 }
@@ -1098,6 +1118,7 @@ fn sync_status(app: &SferaApp, now: u64, has_transport: bool) -> SyncStatusDto {
         v: API_VERSION,
         pending: outbox.pending_count(),
         failed: outbox.failed_count(),
+        sent: outbox.sent_count(),
         due: outbox.due(now).len(),
         has_transport,
     }
@@ -1282,6 +1303,7 @@ mod tests {
         assert_eq!(s.v, API_VERSION);
         assert_eq!(s.pending, 0);
         assert_eq!(s.failed, 0);
+        assert_eq!(s.sent, 0);
         assert_eq!(s.due, 0);
         assert!(!s.has_transport);
     }

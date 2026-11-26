@@ -16,7 +16,17 @@ const inboxBusy = ref(false);
 const inboxStatus = ref('');
 const receivedSummary = computed(() => {
   const r = props.state.receiveReport;
-  return r ? props.api.t('contacts_receive_report', { n: r.accepted, rejected: r.rejected }) : '';
+  if (!r) return '';
+  const hasEvents = (r.profiles + r.comments + r.reactions) > 0;
+  return props.api.t(hasEvents ? 'contacts_receive_report' : 'contacts_receive_empty', {
+    profiles: r.profiles, comments: r.comments, reactions: r.reactions, rejected: r.rejected,
+  });
+});
+const deliverySummary = computed(() => {
+  const s = props.state.sync;
+  return s ? props.api.t('contacts_delivery_report', {
+    pending: s.pending, sent: s.sent, failed: s.failed,
+  }) : '';
 });
 
 async function receiveInbox() {
@@ -150,7 +160,8 @@ async function acceptInvite() {
       <button type="button" class="ghost" :disabled="inboxBusy" @click="receiveInbox">
         {{ inboxBusy ? api.t('contacts_receiving') : api.t('contacts_receive') }}
       </button>
-      <p v-if="inboxStatus" class="muted">{{ inboxStatus }}</p>
+      <p v-if="inboxStatus" class="muted" role="status">{{ inboxStatus }}</p>
+      <p v-if="inboxStatus && deliverySummary" class="muted">{{ deliverySummary }}</p>
       <p class="muted hint">{{ api.t('contacts_receive_hint') }}</p>
     </div>
 

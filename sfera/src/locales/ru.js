@@ -144,7 +144,9 @@ export default {
   contacts_invite_bad: 'Неверный код приглашения',
   contacts_receive: 'Проверить почту',
   contacts_receiving: 'Проверяем…',
-  contacts_receive_report: 'Принято профилей: {n}; отклонено: {rejected}',
+  contacts_receive_report: 'Принято: профили {profiles}, комментарии {comments}, реакции {reactions}; отклонено {rejected}',
+  contacts_receive_empty: 'Новых событий нет; отклонено {rejected}',
+  contacts_delivery_report: 'Очередь: ожидает {pending}, SMTP принял {sent}, ошибок {failed}',
   contacts_receive_fail: 'Не удалось проверить почту',
   contacts_receive_hint: 'Один запрос к ящику; обычные письма не читаются и не отмечаются прочитанными',
 

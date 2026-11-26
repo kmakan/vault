@@ -40,12 +40,15 @@ const bridge = createBridge(async (name, args) => {
   if (name === COMMANDS.setAudienceMembers) return { v: 1, changed: true };
   if (name === COMMANDS.setMyProfile) return { v: 1, outcome: 'inserted' };
   if (name === COMMANDS.receiveProfile) return { v: 1, outcome: 'updated' };
-  if (name === COMMANDS.receiveInbox) return { scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0 };
+  if (name === COMMANDS.receiveInbox) return {
+    scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0,
+    profiles: 0, comments: 1, reactions: 0,
+  };
   if (name === COMMANDS.openReceivedAvatar) {
     return { v: 1, blob_id: 'aa', mime: 'image/png', kind: 'Image', size: 3, data_base64: 'AAA' };
   }
   if (name === COMMANDS.syncOutbox) return { v: 1, inserted: 1, duplicates: 0, rejected: 0 };
-  if (name === COMMANDS.syncStatus) return { v: 1, pending: 2, failed: 0, due: 0, has_transport: false };
+  if (name === COMMANDS.syncStatus) return { v: 1, pending: 2, failed: 0, sent: 3, due: 0, has_transport: false };
   if (name === COMMANDS.roleOptions) {
     return [{ value: 'friend', can_view_media: true, can_react: true, can_view_history: false, can_request_chat: true, profile: 'full' }];
   }
@@ -93,12 +96,12 @@ const saved = await bridge.setMyProfile({
 check(saved.outcome === 'inserted', 'profile save outcome');
 const envelope = { v: 1, from_x25519: 'aa' };
 check((await bridge.receiveProfile(envelope)).outcome === 'updated', 'received profile outcome');
-check((await bridge.receiveInbox()).accepted === 1, 'IMAP receive report');
+check((await bridge.receiveInbox()).comments === 1, 'IMAP comment notification count');
 const received = await bridge.openReceivedAvatar('profile-author');
 check(received.data_base64 === 'AAA', 'received avatar from manifest');
 check((await bridge.syncOutbox(1000)).inserted === 1, 'delivery report from Rust');
 const sync = await bridge.syncStatus(1000);
-check(sync.pending === 2 && sync.has_transport === false, 'sync status from Rust');
+check(sync.pending === 2 && sync.sent === 3 && sync.has_transport === false, 'outbox status from Rust');
 const roles = await bridge.roleOptions();
 check(roles[0].value === 'friend' && roles[0].profile === 'full', 'role presets from Rust');
 await bridge.setContactRole({ v: 1, fp: 'aa:bb', role: 'friend' });

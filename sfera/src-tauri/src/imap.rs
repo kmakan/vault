@@ -53,6 +53,9 @@ pub struct ReceiveReport {
     pub accepted: usize,
     pub duplicates: usize,
     pub rejected: usize,
+    pub profiles: usize,
+    pub comments: usize,
+    pub reactions: usize,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -269,9 +272,17 @@ fn fetch_with_stream<S: ReadWrite>(
         )?;
         match envelope_from_peek(&body_lines.concat())
             .map_err(|e| e.to_string())
-            .and_then(|envelope| state.receive_envelope(&envelope).map(|_| ()).map_err(|e| e.message))
+            .and_then(|envelope| state.receive_envelope(&envelope).map_err(|e| e.message))
         {
-            Ok(()) => {
+            Ok(outcome) => {
+                if outcome.outcome == "inserted" || outcome.outcome == "updated" {
+                    match outcome.event.as_deref() {
+                        Some("profile") => report.profiles += 1,
+                        Some("comment") => report.comments += 1,
+                        Some("reaction") => report.reactions += 1,
+                        _ => {}
+                    }
+                }
                 if seen.insert(id) {
                     report.accepted += 1;
                 } else {
@@ -400,10 +411,11 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
+            let mut commands = Vec::new();
+            for _ in 0..2 {
             let (mut socket, _) = listener.accept().unwrap();
             socket.write_all(b"* OK localhost IMAP4rev1\r\n").unwrap();
             let mut reader = BufReader::new(socket.try_clone().unwrap());
-            let mut commands = Vec::new();
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).unwrap() == 0 { break; }
@@ -429,6 +441,7 @@ mod tests {
                 socket.write_all(format!("{tag} OK done\r\n").as_bytes()).unwrap();
                 if upper.starts_with("LOGOUT") { break; }
             }
+            }
             commands
         });
 
@@ -445,8 +458,18 @@ mod tests {
             email: "sfera@example.org".into(), password: "test-only".into(),
             server: "127.0.0.1".into(), port, allow_insecure: true,
         };
-        let report = receive_once(&config, dir.path(), &state).unwrap();
-        assert_eq!(report, ReceiveReport { scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0 });
+        let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let report = fetch_with_stream(stream, &config, dir.path(), &state).unwrap();
+        assert_eq!(report, ReceiveReport {
+            scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0,
+            profiles: 1, comments: 0, reactions: 0,
+        });
+        let repeated = fetch_with_stream(
+            std::net::TcpStream::connect(("127.0.0.1", port)).unwrap(),
+            &config, dir.path(), &state,
+        ).unwrap();
+        assert_eq!(repeated.accepted, 0);
+        assert_eq!(repeated.profiles + repeated.comments + repeated.reactions, 0);
         let commands = server.join().unwrap();
         assert!(commands.iter().filter(|c| c.contains("BODY.PEEK[]")).count() == 1);
         assert!(commands.iter().all(|c| !c.contains("RFC822") && !c.to_ascii_uppercase().contains("STORE")));

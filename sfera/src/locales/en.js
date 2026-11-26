@@ -143,7 +143,9 @@ export default {
   contacts_invite_bad: 'Invalid invitation code',
   contacts_receive: 'Check mail',
   contacts_receiving: 'Checking…',
-  contacts_receive_report: 'Profiles accepted: {n}; rejected: {rejected}',
+  contacts_receive_report: 'Accepted: profiles {profiles}, comments {comments}, reactions {reactions}; rejected {rejected}',
+  contacts_receive_empty: 'No new events; rejected {rejected}',
+  contacts_delivery_report: 'Outbox: pending {pending}, accepted by SMTP {sent}, failed {failed}',
   contacts_receive_fail: 'Could not check mail',
   contacts_receive_hint: 'One mailbox check; ordinary mail is not read or marked as seen',
 

@@ -62,12 +62,16 @@ fn wait_for(state: &SferaState, root: &Path, expected: &str) {
     for attempt in 1..=6 {
         let report = receive(state, root);
         let found = state.call(|app| Ok(app.discussion().snapshot_comments().iter().any(|item| item.comment.body == expected))).unwrap();
-        println!("IMAP attempt {attempt}: candidates={}, accepted={}, rejected={}, event={found}",
-            report.candidates, report.accepted, report.rejected);
+        println!("IMAP attempt {attempt}: candidates={}, accepted={}, rejected={}, comments={}, event={found}",
+            report.candidates, report.accepted, report.rejected, report.comments);
         if std::env::var_os("SFERA_LIVE_STARTED").is_none() {
             assert_eq!(report.rejected, 0, "конверт отклонён транспортным приёмником");
         }
-        if found { return; }
+        if found {
+            assert_eq!(report.comments, 1, "одно уведомление о новом комментарии");
+            assert_eq!(report.reactions, 0);
+            return;
+        }
         if attempt < 6 { std::thread::sleep(std::time::Duration::from_secs(10)); }
     }
     panic!("подтверждённое событие не получено через живой IMAP");

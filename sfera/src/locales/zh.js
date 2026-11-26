@@ -143,7 +143,9 @@ export default {
   contacts_invite_bad: '邀请码无效',
   contacts_receive: '检查邮件',
   contacts_receiving: '正在检查…',
-  contacts_receive_report: '已接受资料：{n}；已拒绝：{rejected}',
+  contacts_receive_report: '已接受：资料 {profiles}、评论 {comments}、回应 {reactions}；已拒绝 {rejected}',
+  contacts_receive_empty: '没有新事件；已拒绝 {rejected}',
+  contacts_delivery_report: '发送队列：等待 {pending}，SMTP 已接受 {sent}，失败 {failed}',
   contacts_receive_fail: '无法检查邮件',
   contacts_receive_hint: '仅检查一次邮箱；普通邮件不会被读取或标记为已读',
 
