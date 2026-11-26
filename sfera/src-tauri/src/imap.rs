@@ -142,9 +142,9 @@ fn header_value(headers: &str, name: &str) -> String {
     value
 }
 
-/// Разобрать заранее прочитанный PEEK-ответ без раскрытия содержимого в логах.
-/// JSON находится сразу после маркера `{length}` IMAP literal; заголовков
-/// RFC822 у BODY[TEXT] нет, поэтому пустую строку искать нельзя.
+/// Разобрать PEEK-ответ без раскрытия содержимого в логах.
+/// JSON находится сразу после маркера `{length}` IMAP literal. Провайдер
+/// может вернуть text/plain напрямую или полное MIME-письмо с base64/QP.
 pub fn envelope_from_peek(response: &str) -> Result<social_delivery::SealedEnvelope, String> {
     let body = response.split_once("}\r\n")
         .or_else(|| response.split_once("}\n"))
@@ -153,7 +153,66 @@ pub fn envelope_from_peek(response: &str) -> Result<social_delivery::SealedEnvel
     let json = body.lines()
         .take_while(|line| !line.starts_with(')'))
         .collect::<Vec<_>>().join("\n");
-    serde_json::from_str(json.trim()).map_err(|e| format!("sealed envelope JSON: {e}"))
+    // RFC 5321: экранирование точки в начале строки относится к DATA SMTP,
+    // а не к хранимому IMAP-сообщению; исходный JSON здесь не изменяем.
+    envelope_from_message(json.trim_end_matches(['\r', '\n']))
+}
+
+fn envelope_from_message(message: &str) -> Result<social_delivery::SealedEnvelope, String> {
+    if let Ok(envelope) = serde_json::from_str(message.trim()) {
+        return Ok(envelope);
+    }
+    fn text_part(part: &mailparse::ParsedMail<'_>) -> Result<Option<Vec<u8>>, mailparse::MailParseError> {
+        if part.subparts.is_empty() && part.ctype.mimetype.eq_ignore_ascii_case("text/plain") {
+            return part.get_body_raw().map(Some);
+        }
+        for child in &part.subparts {
+            if let Some(body) = text_part(child)? { return Ok(Some(body)); }
+        }
+        Ok(None)
+    }
+    let parsed = mailparse::parse_mail(message.as_bytes()).map_err(|e| format!("MIME: {e}"))?;
+    let bytes = text_part(&parsed).map_err(|e| format!("MIME body: {e}"))?
+        .ok_or_else(|| "MIME text/plain part is missing".to_string())?;
+    let json = String::from_utf8(bytes).map_err(|_| "MIME text is not UTF-8".to_string())?;
+    parse_sealed_json(&json)
+}
+
+/// Единственный JSON-объект в text/plain. Провайдеры могут разрезать
+/// длинные hex-поля на строки по 76 байт; другие переносы не выбрасываем.
+fn parse_sealed_json(text: &str) -> Result<social_delivery::SealedEnvelope, String> {
+    let start = text.find("{\r\n\"v\":")
+        .or_else(|| text.find("{\n\"v\":"))
+        .or_else(|| text.trim_start().strip_prefix("{\"v\":").map(|_| text.len() - text.trim_start().len()))
+        .ok_or_else(|| "sealed envelope object is missing".to_string())?;
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut end = None;
+    for (offset, c) in text[start..].char_indices() {
+        if quoted {
+            if escaped { escaped = false; }
+            else if c == '\\' { escaped = true; }
+            else if c == '"' { quoted = false; }
+        } else {
+            match c {
+                '"' => quoted = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.checked_sub(1).ok_or_else(|| "invalid JSON object".to_string())?;
+                    if depth == 0 { end = Some(start + offset + 1); break; }
+                }
+                _ => {}
+            }
+        }
+    }
+    let end = end.ok_or_else(|| "unterminated sealed envelope".to_string())?;
+    let object = &text[start..end];
+    if !text[end..].trim().is_empty() {
+        return Err("trailing content after sealed envelope".into());
+    }
+    let unwrapped = object.replace("\r\n", "").replace('\n', "");
+    serde_json::from_str(&unwrapped).map_err(|e| format!("sealed envelope JSON: {e}"))
 }
 
 pub fn subject_is_sfera(subject: &str) -> bool { subject.starts_with(SUBJECT_PREFIX) }
@@ -183,7 +242,10 @@ fn fetch_with_stream<S: ReadWrite>(
         }
     }
     command(&mut reader, "a3", "SELECT INBOX", &mut transcript)?;
-    let found = command(&mut reader, "a4", "UID SEARCH ALL", &mut transcript)?;
+    let search = std::env::var("SFERA_LIVE_STARTED").ok()
+        .map(|date| format!("UID SEARCH SINCE {date}"))
+        .unwrap_or_else(|| "UID SEARCH ALL".to_string());
+    let found = command(&mut reader, "a4", &search, &mut transcript)?;
     let uids = parse_uids(&found);
     let mut seen = load_cursor(data_dir)?;
     let mut report = ReceiveReport { scanned: uids.len(), ..Default::default() };
@@ -202,7 +264,7 @@ fn fetch_with_stream<S: ReadWrite>(
         let tag = format!("b{index}");
         let body_lines = command(
             &mut reader, &tag,
-            &format!("UID FETCH {uid} (UID BODY.PEEK[TEXT])"),
+            &format!("UID FETCH {uid} (UID BODY.PEEK[])"),
             &mut transcript,
         )?;
         match envelope_from_peek(&body_lines.concat())
@@ -217,6 +279,9 @@ fn fetch_with_stream<S: ReadWrite>(
                 }
             }
             Err(error) => {
+                if std::env::var_os("SFERA_TEST_DIAGNOSTICS").is_some() {
+                    eprintln!("Sfera candidate rejected: {error}");
+                }
                 #[cfg(test)]
                 {
                     eprintln!("IMAP candidate rejected: {error}");
@@ -251,6 +316,39 @@ pub fn receive_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gmail_mime_and_wrapped_json_are_decoded_before_envelope() {
+        let sender = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
+        let recipient = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
+        let envelope = social_delivery::seal_payload("test", &sender.sender_material(),
+            &social_delivery::RecipientKeyMaterial {
+                fp: recipient.fingerprint().unwrap(),
+                x25519_public_hex: recipient.x25519_public_hex().into(),
+                pq_ek_b64: recipient.pq_ek_b64().into(), address: "peer@example.org".into(),
+            }).unwrap();
+        let payload = serde_json::to_string(&envelope).unwrap();
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &payload);
+        let wrapped = encoded.as_bytes().chunks(12)
+            .map(|line| std::str::from_utf8(line).unwrap())
+            .collect::<Vec<_>>().join("\r\n");
+        let message = format!(
+            "From: peer@example.org\r\nSubject: sfera-profile:id\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n{wrapped}");
+        let response = format!("* 1 FETCH (UID 1 BODY[] {{{}}}\r\n{message}\r\n)\r\n", message.len());
+        let envelope = envelope_from_peek(&response).unwrap();
+        assert_eq!(envelope.v, 1);
+
+        // Gmail: 7bit text/plain, переносы прямо внутри длинной hex-строки.
+        let wrapped_json = payload.as_bytes().chunks(76)
+            .map(|line| std::str::from_utf8(line).unwrap())
+            .collect::<Vec<_>>().join("\r\n");
+        let message = format!(
+            "From: peer@example.org\r\nSubject: sfera-profile:id\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{wrapped_json}");
+        let response = format!("* 2 FETCH (UID 2 BODY[] {{{}}}\r\n{message}\r\n)\r\n", message.len());
+        let envelope = envelope_from_peek(&response).unwrap();
+        assert_eq!(envelope.v, 1);
+        assert!(envelope_from_peek("* 1 FETCH (UID 1 BODY[] {9}\r\nnot json\r\n)\r\n").is_err());
+    }
 
     #[test]
     fn only_sfera_subject_is_candidate() {
@@ -323,8 +421,8 @@ mod tests {
                 } else if upper.contains("HEADER.FIELDS") {
                     let subject = if command.contains(" 1 ") { "ordinary mail" } else { "sfera-profile:pub1" };
                     socket.write_all(format!("* 1 FETCH (UID 1 BODY[HEADER.FIELDS (SUBJECT)] {{{}}}\r\nSubject: {}\r\n\r\n)\r\n", subject.len() + 11, subject).as_bytes()).unwrap();
-                } else if upper.contains("BODY.PEEK[TEXT]") {
-                    socket.write_all(format!("* 2 FETCH (UID 2 BODY[TEXT] {{{}}}\r\n{}\r\n)\r\n", payload.len(), payload).as_bytes()).unwrap();
+                } else if upper.contains("BODY.PEEK[]") {
+                    socket.write_all(format!("* 2 FETCH (UID 2 BODY[] {{{}}}\r\n{}\r\n)\r\n", payload.len(), payload).as_bytes()).unwrap();
                 } else if upper.starts_with("LOGOUT") {
                     socket.write_all(b"* BYE\r\n").unwrap();
                 }
@@ -350,7 +448,7 @@ mod tests {
         let report = receive_once(&config, dir.path(), &state).unwrap();
         assert_eq!(report, ReceiveReport { scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0 });
         let commands = server.join().unwrap();
-        assert!(commands.iter().filter(|c| c.contains("BODY.PEEK[TEXT]")).count() == 1);
+        assert!(commands.iter().filter(|c| c.contains("BODY.PEEK[]")).count() == 1);
         assert!(commands.iter().all(|c| !c.contains("RFC822") && !c.to_ascii_uppercase().contains("STORE")));
         assert!(commands.iter().all(|c| c.contains("PEEK") || !c.contains("BODY")));
     }

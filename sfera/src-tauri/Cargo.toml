@@ -21,6 +21,11 @@ social-app = { path = "../crates/social-app" }
 social-link = { path = "../crates/social-link" }
 social-keys = { path = "../crates/social-keys" }
 social-ffi = { path = "../crates/social-ffi" }
+social-discussion = { path = "../crates/social-discussion" }
+social-contacts = { path = "../crates/social-contacts" }
+social-model = { path = "../crates/social-model" }
+social-rights = { path = "../crates/social-rights" }
+social-post = { path = "../crates/social-post" }
 social-ffi-bridge = { path = "../crates/social-ffi-bridge" }
 social-ffi-extra = { path = "../crates/social-ffi-extra" }
 social-sync = { path = "../crates/social-sync" }
@@ -29,9 +34,11 @@ vault-client = { path = "../../vault-client" }
 tokio = { version = "1", features = ["rt", "time"] }
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
 native-tls = "0.2"
+mailparse = "0.16"
 social-delivery = { path = "../crates/social-delivery" }
 rand = "0.8"
 hex = "0.4"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

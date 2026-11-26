@@ -119,7 +119,8 @@ impl SferaState {
     }
 
     /// Единственный путь к ядру: паника поймана, poisoned-lock — ошибка.
-    fn call<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
+    /// Используется и Tauri-командами, и CLI-приёмкой реального приложения.
+    pub fn call<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
         match catch_unwind(AssertUnwindSafe(|| {
             let mut app = self.app.lock().map_err(|_| CommandError::lock())?;
             f(&mut app)
@@ -127,6 +128,16 @@ impl SferaState {
             Ok(r) => r,
             Err(_) => Err(CommandError::panic()),
         }
+    }
+
+    /// Один и тот же drain для Tauri и CLI: статус меняется только после
+    /// подтверждения транспортного порта, никакого «успеха» по таймеру.
+    pub fn sync_outbox(&self, now: u64) -> Result<ReportDto, CommandError> {
+        let delivery = self.delivery.clone().ok_or_else(|| CommandError::new("transport", "no delivery port"))?;
+        self.call(move |app| {
+            let r = app.sync_outbox(now, |item| delivery.send(item));
+            Ok(ReportDto { v: API_VERSION, inserted: r.sent, duplicates: r.retried, rejected: r.failed })
+        })
     }
 
     fn mutate<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
@@ -149,6 +160,20 @@ impl SferaState {
         &self,
         envelope: &social_delivery::SealedEnvelope,
     ) -> Result<OutcomeDto, CommandError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| CommandError::backend("system clock is before Unix epoch"))?
+            .as_secs();
+        self.receive_envelope_at(envelope, now)
+    }
+
+    /// Тестовые/транспортные часы задаёт Rust, не payload и не JS. Реальный
+    /// IMAP использует `receive_envelope` и поэтому получает фактическое время.
+    pub fn receive_envelope_at(
+        &self,
+        envelope: &social_delivery::SealedEnvelope,
+        now: u64,
+    ) -> Result<OutcomeDto, CommandError> {
         let encryption = self.encryption()?;
         let (kind, outcome, profile_id, manifest) = self.call(|app| {
             let plaintext = social_delivery::open_payload(
@@ -156,7 +181,7 @@ impl SferaState {
                 encryption.pq_seed_hex(),
             ).map_err(|e| CommandError::input(e))?;
             if let Ok(payload) = social_discussion::parse_envelope_json(&plaintext) {
-                let outcome = app.receive_discussion_payload(payload, 0)?;
+                let outcome = app.receive_discussion_payload(payload, now)?;
                 return Ok(("discussion".to_string(), outcome, String::new(), None));
             }
             let received = app.receive_profile_envelope(
@@ -1090,11 +1115,7 @@ fn social_sync_status(
 /// Прогнать outbox через порт доставки. Без порта — типизированная ошибка.
 #[tauri::command]
 fn social_sync_outbox(state: tauri::State<'_, SferaState>, now: u64) -> Result<ReportDto, CommandError> {
-    let delivery = state.delivery.clone().ok_or_else(|| CommandError::new("transport", "no delivery port"))?;
-    state.call(move |app| {
-        let r = app.sync_outbox(now, |item| delivery.send(item));
-        Ok(ReportDto { v: API_VERSION, inserted: r.sent, duplicates: r.retried, rejected: r.failed })
-    })
+    state.sync_outbox(now)
 }
 
 #[tauri::command]
@@ -1271,8 +1292,10 @@ mod tests {
         let recipient = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
         social_keys::save_at(&dir.path().join("keys"), &recipient).unwrap();
         let store = Arc::new(LocalStore::new(dir.path().join("blobs")).unwrap());
-        let app = SferaApp::new(Identity::from_seed(SEED).unwrap(), store,
+        let mut app = SferaApp::new(Identity::from_seed(SEED).unwrap(), store,
             RetryPolicy::default(), Quota::new(60, 10_000, 10, 0));
+        app.set_encryption_identity(
+            social_keys::EncryptionIdentity::generate([11; 32]).unwrap().sender_material());
         let st = SferaState::new(app, None).with_keys_dir(dir.path().join("keys"));
         let post = st.call(|app| Ok(app.publish_post(1, "post", PostAudience {
             id: "family".into(), epoch: 1, spec: Audience::AllContacts,
@@ -1283,6 +1306,13 @@ mod tests {
             let fp = social_model::Fingerprint::from_public_key_hex(
                 &social_model::post::public_key_hex(&"02".repeat(32)).unwrap()).unwrap();
             app.put_contact(ContactRecord::contact(fp, social_app::Role::Friend, vec![], true));
+            let recipient_fp = social_model::Fingerprint::from_public_key_hex(
+                &social_model::post::public_key_hex(&"03".repeat(32)).unwrap()).unwrap();
+            app.put_contact(ContactRecord::contact(recipient_fp.clone(), social_app::Role::Acquaintance, vec![], true));
+            app.set_link_contacts(vec![social_link::LinkedContact {
+                fp: recipient_fp, pub_key: String::new(), label: String::new(),
+                x25519_pub: recipient.x25519_public_hex().into(), pq_ek: recipient.pq_ek_b64().into(), address: "readonly@example.org".into(),
+            }]);
             Ok(())
         }).unwrap();
         let comment = social_discussion::compose_comment(
@@ -1293,7 +1323,9 @@ mod tests {
             }, None, 2, "СЕКРЕТНЫЙ_ОТВЕТ", vec![],
         ).unwrap();
         let plaintext = social_discussion::envelope_json(
-            &social_discussion::DiscussionPayload::SocialComment(comment)).unwrap();
+            &social_discussion::DiscussionPayload::CommentSubmission {
+                comment, post: post.clone(),
+            }).unwrap();
         let sender = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
         let envelope = social_delivery::seal_payload(&plaintext, &sender.sender_material(),
             &social_delivery::RecipientKeyMaterial {
@@ -1302,9 +1334,24 @@ mod tests {
                 pq_ek_b64: recipient.pq_ek_b64().into(), address: "peer@example.org".into(),
             }).unwrap();
         assert!(!serde_json::to_string(&envelope).unwrap().contains("СЕКРЕТНЫЙ_ОТВЕТ"));
-        let result = st.receive_envelope(&envelope).unwrap();
+        let result = st.receive_envelope_at(&envelope, 1234).unwrap();
         assert_eq!(result.kind.as_deref(), Some("discussion"));
         assert_eq!(result.outcome, "inserted");
+        st.call(|app| {
+            let items = app.outbox().due(1234);
+            let items: Vec<_> = items.into_iter().filter(|item| item.to.is_some()).collect();
+            assert_eq!(items.len(), 1, "одно подтверждение read-only получателю");
+            let envelope: social_delivery::SealedEnvelope = serde_json::from_str(
+                items[0].envelope.as_deref().unwrap()).unwrap();
+            let plaintext = social_delivery::open_payload(
+                &envelope, recipient.x25519_private_hex(), &envelope.from_x25519,
+                recipient.pq_seed_hex()).unwrap();
+            let social_discussion::DiscussionPayload::CommentAttestation(attested) =
+                social_discussion::parse_envelope_json(&plaintext).unwrap()
+                else { panic!("ожидалось подтверждение владельца") };
+            assert_eq!(attested.ts, 1234);
+            Ok(())
+        }).unwrap();
         st.call(|app| {
             let target = social_discussion::PostRef::from_post(&post.post).unwrap();
             assert_eq!(app.discussion().comments_for(&target).len(), 1);

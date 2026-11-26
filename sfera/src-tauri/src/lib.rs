@@ -20,8 +20,15 @@ use social_sync::{Quota, RetryPolicy};
 use storage_local::LocalStore;
 use tauri::Manager;
 
-mod smtp;
-mod imap;
+pub mod smtp;
+pub mod imap;
+
+#[doc(hidden)]
+pub mod live_test_support {
+    pub use super::imap;
+    pub use super::smtp;
+}
+
 
 const IDENTITY_FILE: &str = "identity.json";
 /// Принятый bundle связывания (ADR-009 §4). Только публичные данные.
