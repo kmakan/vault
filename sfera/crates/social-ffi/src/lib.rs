@@ -37,10 +37,15 @@ pub struct CommandError {
 }
 
 impl CommandError {
+    pub fn is_retryable(&self) -> bool {
+        self.code == "retryable"
+    }
     fn new(code: &str, message: impl Into<String>) -> Self {
         Self { code: code.into(), message: message.into() }
     }
     fn version() -> Self { Self::new("version", "unsupported API version") }
+    /// Проверка тестового/живого харнесса через ту же типизированную ошибку.
+    pub fn for_harness(code: &str, message: impl Into<String>) -> Self { Self::new(code, message) }
     fn input(e: impl std::fmt::Display) -> Self { Self::new("input", e.to_string()) }
     fn backend(e: impl std::fmt::Display) -> Self { Self::new("backend", e.to_string()) }
     fn panic() -> Self { Self::new("panic", "command panicked; app state intact") }
@@ -118,6 +123,14 @@ impl SferaState {
             .map_err(CommandError::from)
     }
 
+    /// Быстрый отсев чужих конвертов: это не замена AEAD, а отказ от
+    /// бессмысленной PQ-дешифровки и повторного сканирования такого письма.
+    pub fn is_envelope_recipient(&self, envelope: &social_delivery::SealedEnvelope) -> bool {
+        social_keys::load_at(&self.keys_dir).ok()
+            .and_then(|keys| keys.fingerprint().ok())
+            .is_some_and(|fp| fp.same(&envelope.to))
+    }
+
     /// Единственный путь к ядру: паника поймана, poisoned-lock — ошибка.
     /// Используется и Tauri-командами, и CLI-приёмкой реального приложения.
     pub fn call<R>(&self, f: impl FnOnce(&mut SferaApp) -> Result<R, CommandError>) -> Result<R, CommandError> {
@@ -179,13 +192,26 @@ impl SferaState {
             let plaintext = social_delivery::open_payload(
                 envelope, encryption.x25519_private_hex(), &envelope.from_x25519,
                 encryption.pq_seed_hex(),
-            ).map_err(|e| CommandError::input(e))?;
+            ).map_err(|e| {
+                if social_delivery::is_retryable_delivery_error(&e) {
+                    CommandError::new("retryable", e.to_string())
+                } else {
+                    CommandError::input(e)
+                }
+            })?;
+            if let Ok(post) = social_delivery::parse_post_envelope_json(&plaintext) {
+                let outcome = app.receive_post_payload(post, now)?;
+                if outcome == social_discussion::EventOutcome::Inserted {
+                    self.persist_received_profiles(app)?;
+                }
+                return Ok(("post".to_string(), "post".to_string(), outcome, String::new(), None));
+            }
             if let Ok(payload) = social_discussion::parse_envelope_json(&plaintext) {
                 let event = match &payload {
                     social_discussion::DiscussionPayload::SocialComment(_)
                     | social_discussion::DiscussionPayload::CommentSubmission { .. }
-                    | social_discussion::DiscussionPayload::CommentAttestation(_)
-                    | social_discussion::DiscussionPayload::PeerDelegate(_) => "comment",
+                    | social_discussion::DiscussionPayload::CommentAttestation(_) => "comment",
+ social_discussion::DiscussionPayload::PeerDelegate(_) => "delegate",
                     social_discussion::DiscussionPayload::SocialReaction(_)
                     | social_discussion::DiscussionPayload::ReactionSubmission { .. }
                     | social_discussion::DiscussionPayload::ReactionAttestation(_) => "reaction",
@@ -564,11 +590,12 @@ fn social_identity(state: tauri::State<'_, SferaState>) -> Result<IdentityDto, C
 #[tauri::command]
 fn social_publish_post(state: tauri::State<'_, SferaState>, req: PublishPostRequest) -> Result<PostDto, CommandError> {
     check(req.v)?;
-    state.mutate(|app| {
+    state.call(|app| {
         let post = app.publish_post(req.ts, req.body, req.audience, req.media, req.now)?;
         let id = social_app::PostId::from_post(&post.post)
             .map_err(|e| CommandError::input(e))?
             .to_hex();
+        state.persist_received_profiles(app)?;
         Ok(PostDto { v: API_VERSION, id, ts: post.post.ts })
     })
 }

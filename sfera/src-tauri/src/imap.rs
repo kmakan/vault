@@ -55,9 +55,14 @@ pub struct ReceiveReport {
     pub accepted: usize,
     pub duplicates: usize,
     pub rejected: usize,
+    #[serde(default)]
+    pub diagnostic: Vec<String>,
     pub profiles: usize,
     pub comments: usize,
     pub reactions: usize,
+    #[serde(default)]
+    pub delegates: usize,
+    pub posts: usize,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -297,16 +302,25 @@ fn fetch_with_stream<S: ReadWrite>(
             &format!("UID FETCH {uid} (UID BODY.PEEK[])"),
             &mut transcript,
         )?;
-        match envelope_from_peek(&body_lines.concat())
+        let parsed = envelope_from_peek(&body_lines.concat())
             .map_err(|e| e.to_string())
-            .and_then(|envelope| state.receive_envelope(&envelope).map_err(|e| e.message))
-        {
-            Ok(outcome) => {
+            .and_then(|envelope| {
+                if !state.is_envelope_recipient(&envelope) {
+                    return Ok(Err("recipient fingerprint does not match".to_string()));
+                }
+                state.receive_envelope(&envelope).map(Ok).map_err(|e| {
+                    if e.code == "retryable" { e.code } else { e.message }
+                })
+            });
+        match parsed {
+            Ok(Ok(outcome)) => {
                 if outcome.outcome == "inserted" || outcome.outcome == "updated" {
                     match outcome.event.as_deref() {
                         Some("profile") => report.profiles += 1,
                         Some("comment") => report.comments += 1,
                         Some("reaction") => report.reactions += 1,
+                        Some("delegate") => report.delegates += 1,
+                        Some("post") => report.posts += 1,
                         _ => {}
                     }
                 }
@@ -316,17 +330,17 @@ fn fetch_with_stream<S: ReadWrite>(
                     report.duplicates += 1;
                 }
             }
-            Err(error) => {
-                if std::env::var_os("SFERA_TEST_DIAGNOSTICS").is_some() {
-                    eprintln!("Sfera candidate rejected: {error}");
+            Err(error) | Ok(Err(error)) => {
+                report.diagnostic.push(error.clone());
+                // Неполный PQ-конверт оставляем на следующий проход; остальные
+                // отказы необратимы для этого UID и не вызывают PQ бесконечно.
+                if error == "retryable" {
+                    report.rejected += 1;
+                } else if seen.insert(id) {
+                    report.rejected += 1;
+                } else {
+                    report.duplicates += 1;
                 }
-                #[cfg(test)]
-                {
-                    eprintln!("IMAP candidate rejected: {error}");
-                }
-                #[cfg(not(test))]
-                let _ = error;
-                report.rejected += 1;
             }
         }
     }
@@ -354,6 +368,10 @@ pub fn receive_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use social_app::{Identity, SferaApp};
+    use social_sync::{Quota, RetryPolicy};
+    use storage_local::LocalStore;
+    use std::sync::Arc;
 
     #[test]
     fn gmail_mime_and_wrapped_json_are_decoded_before_envelope() {
@@ -426,6 +444,25 @@ mod tests {
         let recipient = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
         let signed = social_profile::compose(SEED, 100, "Аня", "", None, vec![]).unwrap();
         let plaintext = social_profile::envelope_json(&signed, None).unwrap();
+        let author_seed = "0200000000000000000000000000000000000000000000000000000000000000";
+        let post = social_post::compose(author_seed, 101, "Секретный пост", social_post::PostAudience {
+            id: "imap-test".into(), epoch: 1, spec: social_rights::Audience::AllContacts,
+        }, vec![]).unwrap();
+        let post_plaintext = social_delivery::post_envelope_json(&post).unwrap();
+        let post_envelope = social_delivery::seal_payload(
+            &post_plaintext,
+            &sender.sender_material(),
+            &social_delivery::RecipientKeyMaterial {
+                fp: recipient.fingerprint().unwrap(),
+                x25519_public_hex: recipient.x25519_public_hex().into(),
+                pq_ek_b64: recipient.pq_ek_b64().into(),
+                address: "peer@example.org".into(),
+            },
+        ).unwrap();
+        let post_payload = serde_json::to_string(&post_envelope).unwrap();
+        let mut foreign_envelope = post_envelope.clone();
+        foreign_envelope.to = social_keys::EncryptionIdentity::generate([33; 32]).unwrap().fingerprint().unwrap();
+        let foreign_payload = serde_json::to_string(&foreign_envelope).unwrap();
         let envelope = social_delivery::seal_payload(
             &plaintext,
             &sender.sender_material(),
@@ -437,6 +474,7 @@ mod tests {
             },
         ).unwrap();
         let payload = serde_json::to_string(&envelope).unwrap();
+        assert!(envelope.to.same(&recipient.fingerprint().unwrap()));
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -457,9 +495,9 @@ mod tests {
                 } else if upper.starts_with("LOGIN") {
                     // Пароль не сохраняем в transcript assertions.
                 } else if upper.starts_with("SELECT") {
-                    socket.write_all(b"* 2 EXISTS\r\n").unwrap();
+                    socket.write_all(b"* 4 EXISTS\r\n").unwrap();
                 } else if upper.starts_with("UID SEARCH") {
-                    socket.write_all(b"* SEARCH 1 2\r\n").unwrap();
+                    socket.write_all(b"* SEARCH 1 2 3 4\r\n").unwrap();
                 } else if upper.contains("HEADER.FIELDS") {
                     let subject = if command.contains(" 1 ") { "ordinary mail" } else { "" };
                     socket.write_all(format!("* 1 FETCH (UID 1 BODY[HEADER.FIELDS (SUBJECT)] {{{}}}\r\nSubject: {}\r\n\r\n)\r\n", subject.len() + 11, subject).as_bytes()).unwrap();
@@ -467,7 +505,12 @@ mod tests {
                     let prefix = if command.contains(" 1 ") { "Обычный текст" } else { "{\"v\":1,\"mode\":\"pq1\"" };
                     socket.write_all(format!("* 1 FETCH (UID 1 BODY[TEXT]<0> {{{}}}\r\n{}\r\n)\r\n", prefix.len(), prefix).as_bytes()).unwrap();
                 } else if upper.contains("BODY.PEEK[]") {
-                    socket.write_all(format!("* 2 FETCH (UID 2 BODY[] {{{}}}\r\n{}\r\n)\r\n", payload.len(), payload).as_bytes()).unwrap();
+                    let (uid, body) = match () {
+                        _ if command.contains(" 2 ") => (2, payload.as_str()),
+                        _ if command.contains(" 3 ") => (3, post_payload.as_str()),
+                        _ => (4, foreign_payload.as_str()),
+                    };
+                    socket.write_all(format!("* {uid} FETCH (UID {uid} BODY[] {{{}}}\r\n{}\r\n)\r\n", body.len(), body).as_bytes()).unwrap();
                 } else if upper.starts_with("LOGOUT") {
                     socket.write_all(b"* BYE\r\n").unwrap();
                 }
@@ -494,17 +537,33 @@ mod tests {
         let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         let report = fetch_with_stream(stream, &config, dir.path(), &state).unwrap();
         assert_eq!(report, ReceiveReport {
-            scanned: 2, candidates: 1, accepted: 1, duplicates: 0, rejected: 0,
-            profiles: 1, comments: 0, reactions: 0,
+            scanned: 4, candidates: 3, accepted: 2, duplicates: 0, rejected: 1,
+            profiles: 1, comments: 0, reactions: 0, delegates: 0, posts: 1,
+            diagnostic: vec!["recipient fingerprint does not match".into()],
         });
+        state.call(|app| {
+            assert_eq!(app.feed_snapshot().len(), 1);
+            assert_eq!(app.feed_snapshot()[0].post.body, "Секретный пост");
+            Ok::<(), social_ffi::CommandError>(())
+        }).unwrap();
         let repeated = fetch_with_stream(
             std::net::TcpStream::connect(("127.0.0.1", port)).unwrap(),
             &config, dir.path(), &state,
         ).unwrap();
         assert_eq!(repeated.accepted, 0);
-        assert_eq!(repeated.profiles + repeated.comments + repeated.reactions, 0);
+        assert_eq!(repeated.profiles + repeated.comments + repeated.reactions + repeated.posts, 0);
+        let reloaded = SferaApp::new(Identity::from_seed(SEED).unwrap(),
+            Arc::new(LocalStore::new(dir.path().join("new-blobs")).unwrap()),
+            RetryPolicy::default(), Quota::new(60, 1_000_000, 10, 0));
+        let reloaded = SferaState::new(reloaded, None)
+            .with_keys_dir(dir.path().join("keys")).load_received_profiles().unwrap();
+        reloaded.call(|app| {
+            assert_eq!(app.feed_snapshot().len(), 1);
+            assert_eq!(app.feed_snapshot()[0].post.body, "Секретный пост");
+            Ok::<(), social_ffi::CommandError>(())
+        }).unwrap();
         let commands = server.join().unwrap();
-        assert!(commands.iter().filter(|c| c.contains("BODY.PEEK[]")).count() == 1);
+        assert!(commands.iter().filter(|c| c.contains("BODY.PEEK[]")).count() == 3);
         assert!(commands.iter().all(|c| !c.contains("RFC822") && !c.to_ascii_uppercase().contains("STORE")));
         assert!(commands.iter().all(|c| c.contains("PEEK") || !c.contains("BODY")));
     }

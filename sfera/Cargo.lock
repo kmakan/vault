@@ -3329,9 +3329,13 @@ dependencies = [
  "hex",
  "rand 0.8.8",
  "serde",
+ "serde_json",
+ "sha2",
  "social-audience",
  "social-link",
  "social-model",
+ "social-post",
+ "social-rights",
  "vault-core",
  "x25519-dalek",
 ]

@@ -219,9 +219,27 @@ pub fn receive_comment(
     author_contacts: &social_contacts::ContactBook,
     signed: SignedComment,
 ) -> Result<EventOutcome, DiscussionError> {
+    receive_comment_for(book, known_post, author_contacts, signed, false)
+}
+
+/// Восстановление из локального снимка: собственное событие проверяется тем же
+/// локальным правилом, что и при создании (своей записи в книге контактов нет),
+/// чужое — строгой проверкой аудитории. Иначе после рестарта собственный
+/// комментарий к чужому посту отвергался бы как «автор вне аудитории».
+pub(crate) fn receive_comment_for(
+    book: &mut DiscussionBook,
+    known_post: Option<&SignedPost>,
+    author_contacts: &social_contacts::ContactBook,
+    signed: SignedComment,
+    local_actor: bool,
+) -> Result<EventOutcome, DiscussionError> {
     let post = known_post.ok_or(DiscussionError::UnknownPost)?;
     if target(post)? != signed.comment.target { return Err(DiscussionError::UnknownPost); }
-    participant_access(post, author_contacts, &signed.comment.author.fp)?;
+    if local_actor {
+        local_participant_access(post, author_contacts, &signed.comment.author.fp)?;
+    } else {
+        participant_access(post, author_contacts, &signed.comment.author.fp)?;
+    }
     book.insert_comment(signed)
 }
 
@@ -231,8 +249,22 @@ pub fn receive_reaction(
     author_contacts: &social_contacts::ContactBook,
     signed: SignedReaction,
 ) -> Result<EventOutcome, DiscussionError> {
+    receive_reaction_for(book, known_post, author_contacts, signed, false)
+}
+
+pub(crate) fn receive_reaction_for(
+    book: &mut DiscussionBook,
+    known_post: Option<&SignedPost>,
+    author_contacts: &social_contacts::ContactBook,
+    signed: SignedReaction,
+    local_actor: bool,
+) -> Result<EventOutcome, DiscussionError> {
     let post = known_post.ok_or(DiscussionError::UnknownPost)?;
     if target(post)? != signed.reaction.target { return Err(DiscussionError::UnknownPost); }
-    participant_access(post, author_contacts, &signed.reaction.author.fp)?;
+    if local_actor {
+        local_participant_access(post, author_contacts, &signed.reaction.author.fp)?;
+    } else {
+        participant_access(post, author_contacts, &signed.reaction.author.fp)?;
+    }
     book.insert_reaction(signed)
 }

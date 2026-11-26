@@ -52,17 +52,53 @@ fn published_post_goes_to_outbox_then_into_feed() {
     let post = app
         .publish_post(100, "привет", audience("aud_all"), vec![], 50)
         .unwrap();
-    assert_eq!(app.outbox().len(), 1, "пост поставлен в очередь");
-    assert_eq!(app.outbox().pending_count(), 1);
-    assert!(app.feed().is_empty(), "публикация НЕ вставляет в ленту сама");
+    assert_eq!(app.outbox().len(), 0, "без адресных ключей рассылки нет");
+    assert_eq!(app.feed().len(), 1, "свой пост виден сразу, даже офлайн");
 
     let report = app.receive_posts(vec![post.clone()], 101);
-    assert_eq!(report.inserted, 1);
+    assert_eq!(report.inserted, 0);
     assert_eq!(app.feed().len(), 1);
     let id = PostId::from_post(&post.post).unwrap();
     assert!(app.feed().contains(&id));
     assert!(app.mark_read(&id));
     assert!(!app.mark_read(&id), "повтор не меняет read-state");
+}
+
+#[test]
+fn addressed_post_is_encrypted_to_audience_and_feed_precedes_discussion() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut author = app(Quota::new(60, 10_000, 10, 0), &dir.path().join("author"));
+    let bob = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
+    let outsider = social_keys::EncryptionIdentity::generate([33; 32]).unwrap();
+    author.set_encryption_identity(social_keys::EncryptionIdentity::generate([11; 32]).unwrap().sender_material());
+    let fp = social_model::Fingerprint::from_public_key_hex(
+        &social_model::post::public_key_hex(SEED2).unwrap()).unwrap();
+    author.put_contact(ContactRecord::contact(fp.clone(), Role::Friend, vec![], true));
+    author.set_link_contacts(vec![social_link::LinkedContact {
+        fp, pub_key: social_model::post::public_key_hex(SEED2).unwrap(),
+        label: "Боб".into(), x25519_pub: bob.x25519_public_hex().into(),
+        pq_ek: bob.pq_ek_b64().into(), address: "bob@example.org".into(),
+    }]);
+    let post = author.publish_post(100, "СЕКРЕТНЫЙ_ПОСТ", audience("family"), vec![], 50).unwrap();
+    let items = author.outbox().due(50);
+    assert_eq!(items.len(), 1, "ровно один разрешённый получатель");
+    assert_eq!(items[0].to.as_deref(), Some("bob@example.org"));
+    let wire = items[0].envelope.as_deref().unwrap();
+    assert!(!wire.contains("СЕКРЕТНЫЙ_ПОСТ"));
+    let envelope: social_delivery::SealedEnvelope = serde_json::from_str(wire).unwrap();
+    assert!(social_delivery::open_payload(&envelope, outsider.x25519_private_hex(),
+        &envelope.from_x25519, outsider.pq_seed_hex()).is_err());
+
+    let plaintext = social_delivery::open_payload(&envelope, bob.x25519_private_hex(),
+        &envelope.from_x25519, bob.pq_seed_hex()).unwrap();
+    let received = social_delivery::parse_post_envelope_json(&plaintext).unwrap();
+    assert_eq!(received, post);
+    let mut reader = app(Quota::new(60, 10_000, 10, 0), &dir.path().join("reader"));
+    assert_eq!(reader.receive_post_payload(received.clone(), 51).unwrap(),
+        social_discussion::EventOutcome::Inserted);
+    assert_eq!(reader.receive_post_payload(received, 51).unwrap(),
+        social_discussion::EventOutcome::Duplicate);
+    assert_eq!(reader.feed().len(), 1);
 }
 
 #[test]
@@ -78,9 +114,29 @@ fn incoming_posts_are_deduped_and_invalid_rejected() {
     evil.post.body = "подмена".into();
 
     let report = app.receive_posts(vec![good.clone(), good, evil], 200);
-    assert_eq!(report.inserted, 1);
-    assert_eq!(report.duplicates, 1);
+    assert_eq!(report.inserted, 0);
+    assert_eq!(report.duplicates, 2);
     assert_eq!(report.rejected, 1, "подписанный конверт с правкой отвергнут");
+}
+
+#[test]
+fn quota_failure_does_not_publish_local_post_or_partial_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(Quota::new(60, 50, 10, 0), &dir.path().join("author"));
+    let bob = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
+    app.set_encryption_identity(social_keys::EncryptionIdentity::generate([11; 32]).unwrap().sender_material());
+    let fp = social_model::Fingerprint::from_public_key_hex(
+        &social_model::post::public_key_hex(SEED2).unwrap()).unwrap();
+    app.put_contact(ContactRecord::contact(fp.clone(), Role::Friend, vec![], true));
+    app.set_link_contacts(vec![social_link::LinkedContact {
+        fp, pub_key: social_model::post::public_key_hex(SEED2).unwrap(),
+        label: String::new(), x25519_pub: bob.x25519_public_hex().into(),
+        pq_ek: bob.pq_ek_b64().into(), address: "bob@example.org".into(),
+    }]);
+    assert!(matches!(app.publish_post(100, "не опубликован", audience("family"), vec![], 50),
+        Err(AppError::Quota(_))));
+    assert!(app.feed().is_empty());
+    assert_eq!(app.outbox().len(), 0);
 }
 
 #[test]
@@ -232,9 +288,10 @@ fn quota_failure_does_not_publish_half_post() {
     // Квота на 1 отправку: второй пост не должен ни попасть в очередь, ни
     // вернуться как «опубликованный».
     let mut app = app(Quota::new(60, 10_000, 1, 0), dir.path());
-    assert!(app.publish_post(1, "первый", audience("aud_all"), vec![], 0).is_ok());
+    let first = app.set_my_profile(1, "Первый", "", None, vec![], 0, None).unwrap();
+    assert_eq!(first.sealed, 0);
     assert!(matches!(
-        app.publish_post(2, "второй", audience("aud_all"), vec![], 0),
+        app.set_my_profile(2, "Второй", "", None, vec![], 0, None),
         Err(AppError::Quota(QuotaError::ItemsExceeded { .. }))
     ));
     assert_eq!(app.outbox().len(), 1);
@@ -244,10 +301,8 @@ fn quota_failure_does_not_publish_half_post() {
 fn outbox_drain_is_transport_agnostic() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(Quota::new(60, 10_000, 10, 0), dir.path());
-    let a = app
-        .publish_post(1, "a", audience("aud_all"), vec![], 0)
-        .unwrap();
-    app.publish_post(2, "b", audience("aud_all"), vec![], 0).unwrap();
+    app.set_my_profile(1, "a", "", None, vec![], 0, None).unwrap();
+    app.set_my_profile(2, "b", "", None, vec![], 0, None).unwrap();
     let ids: Vec<_> = app.outbox().due(0).iter().map(|i| i.id.clone()).collect();
     let first = ids[0].clone();
 
@@ -259,7 +314,9 @@ fn outbox_drain_is_transport_agnostic() {
     let sent = app.outbox().get(&first).unwrap();
     assert_eq!(sent.state, social_sync::OutboxState::Sent);
     assert_eq!(sent.attempts, 0, "отправленный элемент без неудачных попыток");
-    let retried = app.outbox().get(&PostId::from_post(&a.post).unwrap().to_hex()).unwrap();
+    let retried = app.outbox().get(&social_profile::publication_id(
+        &app.profile_of(app.identity().fingerprint()).unwrap(), app.identity().fingerprint(),
+    ).unwrap()).unwrap();
     assert_eq!(retried.attempts, if retried.id == first { 0 } else { 1 });
 }
 

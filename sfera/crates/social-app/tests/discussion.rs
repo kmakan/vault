@@ -74,7 +74,7 @@ fn own_comment_and_reaction_use_the_actual_post_audience() {
     let (id, post) = post(&mut app);
     let comment = app.comment_on_post(&id, None, 30, "Свой ответ", vec![], 30).unwrap();
     assert_eq!(comment.comment.target, target(&post));
-    assert_eq!(app.outbox().len(), 1, "очередь содержит только пост, SMTP self-copy нет");
+    assert_eq!(app.outbox().len(), 0, "без адресатов рассылки нет, SMTP self-copy нет");
     let reaction = app.react_to_post(&id, "👍", false, 31).unwrap();
     assert_eq!(reaction.reaction.target, target(&post));
     assert_eq!(app.discussion().reactions_for(&target(&post).post_id).len(), 1);
@@ -134,11 +134,11 @@ fn author_attestation_reaches_audience_unknown_to_commenter() {
     ]);
     // Конверты уже выпущены владельцем: третий участник открывает свой,
     // хотя его книга не содержит автора комментария.
-    assert_eq!(owner.outbox().pending_count(), 5, "пост и по два конверта каждому участнику");
+    assert_eq!(owner.outbox().pending_count(), 6, "два адресных поста и по два конверта каждому участнику");
     let fanout = owner.outbox().due(20).into_iter()
         .filter(|item| item.to.is_some())
         .collect::<Vec<_>>();
-    assert_eq!(fanout.len(), 4);
+    assert_eq!(fanout.len(), 6);
     let fanout = fanout.into_iter()
         .find_map(|item| {
             if item.to.as_deref() != Some("viewer@example.test") { return None; }
@@ -234,4 +234,26 @@ fn unknown_post_is_not_replaced_by_another_target() {
     let comment = compose_comment(B, &"11".repeat(32), target(&post), None, 20, "Нет поста", vec![]).unwrap();
     let unknown = "00".repeat(32).parse().unwrap();
     assert!(matches!(app.receive_comment(&unknown, comment), Err(_)));
+}
+
+#[test]
+fn own_comment_to_foreign_post_restores_without_self_contact() {
+    let mut alice = app_with_seed(A);
+    let (id, signed_post) = post(&mut alice);
+    let post_ref = target(&signed_post);
+
+    let mut bob = app_with_seed(B);
+    add_contact(&mut bob, A, Role::Friend);
+    bob.receive_posts([signed_post.clone()], 10);
+    let comment = compose_comment(B, &"44".repeat(32), post_ref.clone(), None, 30, "Ответ Боба", vec![]).unwrap();
+    // Сетевой путь остаётся строгим: записи о себе в книге контактов нет.
+    assert!(matches!(
+        bob.receive_comment(&id, comment.clone()),
+        Err(social_app::AppError::Discussion(DiscussionError::NotInAudience))
+    ));
+    assert!(bob.discussion().comments_for(&post_ref.post_id).is_empty());
+
+    // Восстановление своего события идёт локальным правилом участия.
+    bob.restore_discussion(vec![comment], vec![]).unwrap();
+    assert_eq!(bob.discussion().comments_for(&post_ref.post_id).len(), 1);
 }

@@ -15,11 +15,12 @@ use social_audience::AudienceKeys;
 use social_contacts::ContactBook;
 use social_delivery::SenderKeyMaterial;
 use social_feed::Feed;
-use social_post::{compose, PostError};
+use social_post::PostError;
 use social_profile::{ProfileBook, ProfileError};
 mod profile_publish;
 mod profile_receive;
 mod discussion;
+mod post_delivery;
 use social_sync::{ingest, DrainReport, Outbox, Quota, QuotaError, RetryPolicy};
 use storage_api::BlobStore;
 
@@ -127,6 +128,32 @@ impl SferaApp {
             own_encryption_public: None,
             own_delivery_address: String::new(),
         }
+    }
+
+    pub(crate) fn restore_feed_snapshot(
+        &mut self,
+        entries: Vec<social_feed::FeedEntry>,
+    ) -> Result<(), AppError> {
+        self.feed = Feed::restore(entries)?;
+        Ok(())
+    }
+
+    pub(crate) fn previous_outbox(&self) -> &Outbox {
+        &self.outbox
+    }
+
+    pub(crate) fn replace_outbox(&mut self, outbox: Outbox) {
+        self.outbox = outbox;
+    }
+
+    /// Материал собственного E2E-отправителя только для композиции внутри ядра.
+    pub(crate) fn encryption_material(&self) -> Option<&SenderKeyMaterial> {
+        self.encryption.as_ref()
+    }
+
+    /// Адресные ключи уже проверенных контактов; только чтение для композиции.
+    pub(crate) fn peers(&self) -> &[social_link::LinkedContact] {
+        &self.peers
     }
 
     /// Публичные ключи получателей из проверенного bundle связывания.
@@ -476,15 +503,23 @@ impl SferaApp {
         comments: Vec<social_discussion::SignedComment>,
         reactions: Vec<social_discussion::SignedReaction>,
     ) -> Result<(), AppError> {
+        // Своё событие проверяется локальным правилом участия (записи о себе в
+        // книге контактов нет), чужое — строгой проверкой аудитории. Иначе
+        // собственный комментарий к чужому посту не переживал бы рестарт.
+        let own = self.identity.fingerprint().clone();
         for signed in comments {
             let id: PostId = signed.comment.target.post_id.to_hex().parse()
                 .map_err(|_| social_discussion::DiscussionError::UnknownPost)?;
-            self.receive_comment(&id, signed)?;
+            let local = signed.comment.author.fp.same(&own);
+            let post = self.feed.get(&id).map(|entry| &entry.post);
+            discussion::receive_comment_for(&mut self.discussion, post, &self.contacts, signed, local)?;
         }
         for signed in reactions {
             let id: PostId = signed.reaction.target.post_id.to_hex().parse()
                 .map_err(|_| social_discussion::DiscussionError::UnknownPost)?;
-            self.receive_reaction(&id, signed)?;
+            let local = signed.reaction.author.fp.same(&own);
+            let post = self.feed.get(&id).map(|entry| &entry.post);
+            discussion::receive_reaction_for(&mut self.discussion, post, &self.contacts, signed, local)?;
         }
         Ok(())
     }
@@ -562,8 +597,8 @@ impl SferaApp {
         self.contacts.set_role(fp, role)
     }
 
-    /// Опубликовать пост: сборка/подпись в `social-post`, постановка в outbox.
-    /// Доставку делает `sync_outbox`, здесь её нет.
+    /// Опубликовать пост локально и поставить адресные E2E-конверты
+    /// разрешённой аудитории в outbox. Транспорт вызывается отдельно.
     pub fn publish_post(
         &mut self,
         ts: u64,
@@ -572,15 +607,15 @@ impl SferaApp {
         media: Vec<social_post::MediaRef>,
         now: u64,
     ) -> Result<SignedPost, AppError> {
-        let post = compose(self.identity.signing_seed(), ts, body, audience, media)?;
-        let id = PostId::from_post(&post.post)
-            .map_err(|e| AppError::Canonical(e.to_string()))?
-            .to_hex();
-        let len = social_post::canonical_post(&post.post)
-            .map_err(AppError::Canonical)?
-            .len() as u64;
-        self.outbox.enqueue(id, len, now)?;
-        Ok(post)
+        post_delivery::publish(self, ts, body, audience, media, now)
+    }
+
+    pub fn receive_post_payload(
+        &mut self,
+        post: SignedPost,
+        now: u64,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        post_delivery::receive(self, post, now)
     }
 
     /// Принять входящие посты: проверка подписи и дедуп в `social-feed`.

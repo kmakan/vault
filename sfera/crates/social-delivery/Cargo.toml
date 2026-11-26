@@ -8,6 +8,8 @@ description = "Vault Sfera: адресная обёртка ключа ауди�
 
 [dependencies]
 social-model = { path = "../social-model" }
+social-post = { path = "../social-post" }
+sha2 = "0.10"
 social-audience = { path = "../social-audience" }
 # Контакт bundle → материал получателя (From<&LinkedContact>). Зависимость
 # односторонняя: social-link не знает про social-delivery, цикла нет.
@@ -17,8 +19,10 @@ social-link = { path = "../social-link" }
 vault-core = { path = "../../../vault-core" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 hex = "0.4"
 
 [dev-dependencies]
+social-rights = { path = "../social-rights" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand = "0.8"

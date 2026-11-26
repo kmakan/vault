@@ -219,7 +219,7 @@ fn build_state<R: tauri::Runtime>(
     let data_dir = app.path().app_data_dir()?;
     let mut entropy = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut entropy);
-    let encryption = social_keys::load_or_create_at(&data_dir, entropy)?;
+    let encryption = social_keys::load_or_create_at(&data_dir.join("keys"), entropy)?;
     core.set_encryption_identity(encryption.sender_material());
     core.set_own_encryption_public(
         encryption.x25519_public_hex().into(),
@@ -229,7 +229,7 @@ fn build_state<R: tauri::Runtime>(
         core.set_own_delivery(config.email);
     }
     // Единый app-data каталог: приватные ключи шифрования и каталог медиа.
-    social_keys::save_at(&data_dir.join("keys"), &encryption)?;
+    // Файл уже атомарно записан load_or_create_at, повторно создавать его не нужно.
     if let Some(bundle) = read_link(&data_dir.join(LINK_FILE))? {
         core.set_link_contacts(bundle.payload.contacts);
     }

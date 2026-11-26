@@ -208,7 +208,14 @@ pub fn seal_for_contacts(
 ) -> EnvelopeBatch {
     let mut batch = EnvelopeBatch::default();
     for contact in contacts {
-        let material = RecipientKeyMaterial::from_linked(contact);
+        let mut material = RecipientKeyMaterial::from_linked(contact);
+        // `LinkedContact.fp` — идентичность аккаунта Ed25519. Адрес E2E —
+        // отдельный отпечаток его X25519-ключа; смешивать их нельзя (ADR-009).
+        let Ok(delivery_fp) = social_model::Fingerprint::from_public_key_hex(&material.x25519_public_hex) else {
+            batch.skipped.push(contact.fp.clone());
+            continue;
+        };
+        material.fp = delivery_fp;
         if !material.can_seal() {
             batch.skipped.push(contact.fp.clone());
             continue;
@@ -273,6 +280,23 @@ mod envelope_tests {
         let wire = serde_json::to_string(&for_bob.envelope).unwrap();
         assert!(!wire.contains(alice.x25519_private_hex()), "приватный ключ не сериализуется");
         assert_eq!(opened, r#"{"name":"Алиса"}"#);
+    }
+
+    #[test]
+    fn account_fingerprint_is_not_reused_as_delivery_fingerprint() {
+        let alice = identity(90);
+        let bob = identity(91);
+        let account_fp = Fingerprint::from_public_key_hex(&"02".repeat(32)).unwrap();
+        let mut contact = contact_of(&bob, "bob@example.org");
+        contact.fp = account_fp.clone();
+        contact.pub_key = "02".repeat(32);
+
+        let batch = seal_profile_for_contacts(r#"{"name":"Боб"}"#, &alice.sender_material(), &[contact]);
+        assert_eq!(batch.sealed.len(), 1);
+        assert!(batch.sealed[0].envelope.to.same(&bob.fingerprint().unwrap()));
+        assert!(!batch.sealed[0].envelope.to.same(&account_fp));
+        assert!(open_payload(&batch.sealed[0].envelope, bob.x25519_private_hex(),
+            &batch.sealed[0].envelope.from_x25519, bob.pq_seed_hex()).is_ok());
     }
 
     #[test]

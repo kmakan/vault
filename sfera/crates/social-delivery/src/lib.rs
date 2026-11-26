@@ -102,6 +102,13 @@ impl fmt::Display for DeliveryError {
 
 impl std::error::Error for DeliveryError {}
 
+/// Неполный PQ-конверт помечается как требующий повторного разбора.
+/// Этот предикат задаёт решение в домене доставки, а не подстрокой ошибки в IMAP.
+#[must_use]
+pub fn is_retryable_delivery_error(error: &DeliveryError) -> bool {
+    matches!(error, DeliveryError::MissingKemct)
+}
+
 /// Обернуть ключ ТЕКУЩЕЙ эпохи для участника. Не-участнику — отказ.
 pub fn wrap_audience_key(
     keys: &AudienceKeys,
@@ -234,12 +241,85 @@ pub fn open_payload(
         .kemct
         .as_deref()
         .ok_or(DeliveryError::MissingKemct)?;
-    hybrid_decrypt_vault(
-        &envelope.wire,
-        recipient_x25519_private_hex,
-        sender_x25519_public_hex,
-        recipient_pq_seed_hex,
-        kemct,
-    )
-    .map_err(|e| DeliveryError::Unwrap(e.to_string()))
+    let plaintext = hybrid_decrypt_vault(
+        &envelope.wire, recipient_x25519_private_hex,
+        sender_x25519_public_hex, recipient_pq_seed_hex, kemct,
+    ).map_err(|e| DeliveryError::Unwrap(e.to_string()))?;
+    let parsed: serde_json::Value = serde_json::from_str(&plaintext)
+        .map_err(|e| DeliveryError::Unwrap(format!("payload is not JSON: {e}")))?;
+    if let Some(text) = parsed.as_str() {
+        return Ok(text.to_string());
+    }
+    // Новые типизированные конверты (пост, профиль, обсуждение) несут объект
+    // напрямую. Legacy-форма hybrid_encrypt_vault может вернуть JSON-строку;
+    // обе формы проходят один и тот же гибридный E2E-путь.
+    if parsed.is_object() {
+        return Ok(plaintext);
+    }
+    Err(DeliveryError::Unwrap("payload is not a JSON object or string".into()))
+}
+
+// --- Адресный пост ---------------------------------------------------------
+// Подпись остаётся внутри E2E, но форма типизирована отдельно от профиля и
+// обсуждения. Повторный путь через профиль нельзя трактовать как пост.
+
+pub const POST_ENVELOPE_DOMAIN: &[u8] = b"sfera-post-delivery:v1\0";
+
+pub fn post_envelope_json(
+    post: &social_post::SignedPost,
+) -> Result<String, DeliveryError> {
+    if !social_post::verify_post(post) {
+        return Err(DeliveryError::Wrap("post signature is invalid".into()));
+    }
+    serde_json::to_string(post).map_err(|e| DeliveryError::Wrap(e.to_string()))
+}
+
+pub fn parse_post_envelope_json(
+    plaintext: &str,
+) -> Result<social_post::SignedPost, DeliveryError> {
+    let post: social_post::SignedPost = serde_json::from_str(plaintext)
+        .map_err(|e| DeliveryError::Unwrap(format!("post envelope: {e}")))?;
+    if !social_post::verify_post(&post) {
+        return Err(DeliveryError::Unwrap("post signature is invalid".into()));
+    }
+    Ok(post)
+}
+
+pub fn post_publication_id(
+    post: &social_post::SignedPost,
+    recipient: &Fingerprint,
+) -> Result<String, DeliveryError> {
+    use sha2::{Digest, Sha256};
+    let canonical = social_post::canonical_post(&post.post)
+        .map_err(DeliveryError::Wrap)?;
+    let mut hasher = Sha256::new();
+    hasher.update(POST_ENVELOPE_DOMAIN);
+    hasher.update(canonical);
+    hasher.update(recipient.as_str().as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
+
+#[cfg(test)]
+mod post_tests {
+    use super::*;
+
+    #[test]
+    fn addressed_post_is_typed_signed_and_not_accepted_after_tampering() {
+        let seed = "01".repeat(32);
+        let recipient = social_model::Fingerprint::from_public_key_hex(
+            &social_model::post::public_key_hex(&"02".repeat(32)).unwrap(),
+        ).unwrap();
+        let post = social_post::compose(&seed, 1, "Секретный пост",
+            social_post::PostAudience {
+                id: "family".into(), epoch: 1, spec: social_rights::Audience::AllContacts,
+            }, vec![]).unwrap();
+        let plaintext = post_envelope_json(&post).unwrap();
+        assert_eq!(parse_post_envelope_json(&plaintext).unwrap(), post);
+        let id = post_publication_id(&post, &recipient).unwrap();
+        assert_eq!(id, post_publication_id(&post, &recipient).unwrap());
+        assert_ne!(id, post_publication_id(&post, &post.post.author.fp).unwrap());
+        let mut tampered = post;
+        tampered.post.body = "Подмена".into();
+        assert!(parse_post_envelope_json(&serde_json::to_string(&tampered).unwrap()).is_err());
+    }
 }

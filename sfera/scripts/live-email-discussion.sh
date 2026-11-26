@@ -43,6 +43,12 @@ PY
 )"
   while IFS= read -r line; do export "${line?}"; done <<< "$envs"
   export SFERA_LIVE_PHASE="$phase" SFERA_LIVE_ROOT="$root"
+  echo "live phase=$phase"
+  if [[ "$peer" == "VAULT_TEST_ALICE_EMAIL" ]]; then
+    export SFERA_LIVE_PEER_ROOT="$RUN/owner"
+  else
+    export SFERA_LIVE_PEER_ROOT="$RUN/commenter"
+  fi
   export SFERA_LIVE_EMAIL="${!email_var}" SFERA_LIVE_PASSWORD="${!pass_var}"
   local peer_email
   peer_email="${!peer}"
@@ -50,7 +56,11 @@ PY
   cargo run --quiet --manifest-path "$ROOT/sfera/src-tauri/Cargo.toml" --bin live_discussion
 }
 
+run_phase init-commenter BOB "$RUN/commenter" VAULT_TEST_ALICE_EMAIL
+run_phase init-owner ALICE "$RUN/owner" VAULT_TEST_BOB_EMAIL
 run_phase owner ALICE "$RUN/owner" VAULT_TEST_BOB_EMAIL
 run_phase commenter BOB "$RUN/commenter" VAULT_TEST_ALICE_EMAIL
 run_phase owner-receive ALICE "$RUN/owner" VAULT_TEST_BOB_EMAIL
+run_phase owner-restart-receive ALICE "$RUN/owner" VAULT_TEST_BOB_EMAIL
 run_phase commenter-receive BOB "$RUN/commenter" VAULT_TEST_ALICE_EMAIL
+run_phase commenter-restart-restore BOB "$RUN/commenter" VAULT_TEST_ALICE_EMAIL
