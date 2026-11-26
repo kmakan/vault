@@ -89,6 +89,8 @@ pub struct SferaApp {
     store: Arc<dyn BlobStore>,
     peers: Vec<social_link::LinkedContact>,
     encryption: Option<SenderKeyMaterial>,
+    own_encryption_public: Option<(String, String)>,
+    own_delivery_address: String,
 }
 
 impl std::fmt::Debug for SferaApp {
@@ -122,6 +124,8 @@ impl SferaApp {
             store,
             peers: Vec::new(),
             encryption: None,
+            own_encryption_public: None,
+            own_delivery_address: String::new(),
         }
     }
 
@@ -130,9 +134,55 @@ impl SferaApp {
         self.peers = peers;
     }
 
+    /// Объединить проверенные адресные ключи без потери уже известных.
+    pub fn merge_link_contacts(&mut self, peers: impl IntoIterator<Item = social_link::LinkedContact>) {
+        for peer in peers {
+            if let Some(index) = self.peers.iter().position(|known| known.fp.same(&peer.fp)) {
+                self.peers[index] = peer;
+            } else {
+                self.peers.push(peer);
+            }
+        }
+        self.peers.sort_by(|a, b| a.fp.as_str().cmp(b.fp.as_str()));
+        self.peers.dedup_by(|a, b| a.fp.same(&b.fp));
+    }
+
+    /// Публичная подпись собственного транспортного адреса для делегирования
+    /// участникам обсуждения. Приватные ключи сюда не попадают.
+    pub fn set_own_delivery(&mut self, address: String) {
+        self.own_delivery_address = address;
+    }
+
+    pub fn own_delivery_material(&self) -> Result<social_delivery::RecipientKeyMaterial, AppError> {
+        let sender = self.own_encryption_public.as_ref().ok_or_else(|| {
+            social_discussion::DiscussionError::DeliveryUnavailable("owner encryption is unavailable".into())
+        })?;
+        if self.own_delivery_address.trim().is_empty() {
+            return Err(social_discussion::DiscussionError::DeliveryUnavailable(
+                "owner transport address is unavailable".into(),
+            ).into());
+        }
+        Ok(social_delivery::RecipientKeyMaterial {
+            fp: self.identity.fingerprint().clone(),
+            x25519_public_hex: sender.0.clone(),
+            pq_ek_b64: sender.1.clone(),
+            address: self.own_delivery_address.clone(),
+        })
+    }
+
+    /// Только публичная адресная часть книги; приватный ключ не выдаётся.
+    pub fn link_contacts(&self) -> &[social_link::LinkedContact] {
+        &self.peers
+    }
+
     /// Свой ключ шифрования Sfera. Приватный ключ мессенджера сюда не копируется.
     pub fn set_encryption_identity(&mut self, sender: SenderKeyMaterial) {
         self.encryption = Some(sender);
+    }
+
+    /// Публичная часть того же ключа, отдельно от приватного sender material.
+    pub fn set_own_encryption_public(&mut self, x25519_public_hex: String, pq_ek_b64: String) {
+        self.own_encryption_public = Some((x25519_public_hex, pq_ek_b64));
     }
 
     pub fn identity(&self) -> &Identity {
@@ -261,8 +311,28 @@ impl SferaApp {
             return Err(social_discussion::DiscussionError::BadId("empty discussion submission".into()).into());
         };
         if outcome != social_discussion::EventOutcome::Duplicate {
-            let entries = self.seal_discussion(&self.feed.get(&id).expect("checked post").post.clone(), &payload)?;
+            let post = self.feed.get(&id).expect("checked post").post.clone();
+            let recipients = discussion::recipients(&post, &self.contacts, &self.peers);
+            let entries = self.seal_discussion(&post, &payload)?;
             self.enqueue_discussion(entries, ts)?;
+            if let Some(link) = self.peers.iter().find(|peer| peer.fp.same(actor)).cloned() {
+                let owner = self.own_delivery_material()?;
+                let author = social_model::Author::from_public_key_hex(&link.pub_key)
+                    .map_err(social_discussion::DiscussionError::BadAuthor)?;
+                let material = social_delivery::RecipientKeyMaterial::from_linked(&link);
+                let delegated = social_discussion::delegate_peer(
+                    self.identity.signing_seed(), post.clone(), author, material, ts, owner,
+                )?;
+                let payload = social_discussion::DiscussionPayload::PeerDelegate(delegated);
+                let entries = discussion::seal_to(
+                    &recipients,
+                    self.encryption.as_ref().ok_or_else(|| social_discussion::DiscussionError::DeliveryUnavailable(
+                        "owner encryption is unavailable".into(),
+                    ))?,
+                    &payload,
+                )?;
+                self.enqueue_discussion(entries.entries, ts)?;
+            }
         }
         Ok(outcome)
     }
@@ -285,6 +355,39 @@ impl SferaApp {
         let post = self.feed.get(&id).ok_or(social_discussion::DiscussionError::UnknownPost)?;
         if post.post != attested.post { return Err(social_discussion::DiscussionError::AttestationMismatch.into()); }
         Ok(self.discussion.insert_reaction(attested.reaction)?)
+    }
+
+    fn receive_peer_delegate(
+        &mut self, delegated: social_discussion::PeerDelegate,
+    ) -> Result<social_discussion::EventOutcome, AppError> {
+        let id = PostId::from_post(&delegated.post.post)?;
+        let known = self.feed.get(&id).ok_or(social_discussion::DiscussionError::UnknownPost)?;
+        if known.post != delegated.post {
+            return Err(social_discussion::DiscussionError::AttestationMismatch.into());
+        }
+        let record = social_contacts::ContactRecord::contact(
+            delegated.actor.fp.clone(), Role::Friend, vec![], true,
+        );
+        self.contacts_mut().upsert(record);
+        self.merge_link_contacts([
+            social_link::LinkedContact {
+                fp: delegated.owner.fp.clone(),
+                pub_key: delegated.post.post.author.pub_key.clone(),
+                label: String::new(),
+                x25519_pub: delegated.owner.x25519_public_hex,
+                pq_ek: delegated.owner.pq_ek_b64,
+                address: delegated.owner.address,
+            },
+            social_link::LinkedContact {
+                fp: delegated.actor.fp,
+                pub_key: delegated.actor.pub_key,
+                label: String::new(),
+                x25519_pub: delegated.encryption.x25519_public_hex,
+                pq_ek: delegated.encryption.pq_ek_b64,
+                address: delegated.encryption.address,
+            },
+        ]);
+        Ok(social_discussion::EventOutcome::Updated)
     }
 
     pub fn receive_discussion_payload(
@@ -312,6 +415,7 @@ impl SferaApp {
             }
             Payload::CommentAttestation(attested) => self.receive_attested_comment(attested),
             Payload::ReactionAttestation(attested) => self.receive_attested_reaction(attested),
+            Payload::PeerDelegate(delegated) => self.receive_peer_delegate(delegated),
         }
     }
 

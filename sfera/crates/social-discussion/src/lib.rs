@@ -30,6 +30,19 @@ pub enum DiscussionPayload {
     ReactionSubmission { reaction: SignedReaction, post: SignedPost },
     CommentAttestation(CommentAttestation),
     ReactionAttestation(ReactionAttestation),
+    /// Владелец поста делегирует публичные адресные ключи участника только
+    /// тем, кому уже разрешено видеть его обсуждение. Не доказывает доступ.
+    PeerDelegate(PeerDelegate),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PeerDelegate {
+    pub post: SignedPost,
+    pub actor: social_model::Author,
+    pub owner: social_delivery::RecipientKeyMaterial,
+    pub encryption: social_delivery::RecipientKeyMaterial,
+    pub ts: u64,
+    pub sig: String,
 }
 
 /// Подтверждение подписано владельцем поста отдельным доменом. Нельзя
@@ -67,6 +80,7 @@ pub fn parse_envelope_json(plaintext: &str) -> Result<DiscussionPayload, Discuss
         }
         DiscussionPayload::CommentAttestation(attested) => verify_comment_attestation(attested),
         DiscussionPayload::ReactionAttestation(attested) => verify_reaction_attestation(attested),
+        DiscussionPayload::PeerDelegate(delegated) => verify_peer_delegate(delegated),
     };
     if !valid { return Err(DiscussionError::InvalidSignature); }
     Ok(payload)
@@ -129,6 +143,50 @@ pub fn verify_reaction_attestation(attested: &ReactionAttestation) -> bool {
         )
 }
 
+pub const PEER_DELEGATE_DOMAIN: &[u8] = b"sfera-peer-delegate:v1\0";
+
+pub fn delegate_peer(
+    seed_hex: &str, post: SignedPost, actor: social_model::Author,
+    encryption: social_delivery::RecipientKeyMaterial, ts: u64,
+    owner: social_delivery::RecipientKeyMaterial,
+) -> Result<PeerDelegate, DiscussionError> {
+    if !social_post::verify_post(&post)
+        || actor.fp != encryption.fp
+        || actor.pub_key.trim().is_empty()
+        || encryption.address.trim().is_empty()
+        || encryption.x25519_public_hex.trim().is_empty()
+        || encryption.pq_ek_b64.trim().is_empty()
+        || owner.fp != post.post.author.fp
+        || owner.address.trim().is_empty()
+        || owner.x25519_public_hex.trim().is_empty()
+        || owner.pq_ek_b64.trim().is_empty()
+    {
+        return Err(DiscussionError::DeliveryUnavailable("delegate material is incomplete".into()));
+    }
+    let unsigned = PeerDelegate { post, actor, owner, encryption, ts, sig: String::new() };
+    let sig = signing::sign_with_domain(PEER_DELEGATE_DOMAIN, seed_hex, &unsigned)
+        .map_err(DiscussionError::Sign)?;
+    Ok(PeerDelegate { sig, ..unsigned })
+}
+
+pub fn verify_peer_delegate(delegated: &PeerDelegate) -> bool {
+    social_post::verify_post(&delegated.post)
+        && delegated.actor.fp == delegated.encryption.fp
+        && delegated.owner.fp == delegated.post.post.author.fp
+        && !delegated.owner.address.trim().is_empty()
+        && !delegated.owner.x25519_public_hex.trim().is_empty()
+        && !delegated.owner.pq_ek_b64.trim().is_empty()
+        && !delegated.encryption.address.trim().is_empty()
+        && !delegated.encryption.x25519_public_hex.trim().is_empty()
+        && !delegated.encryption.pq_ek_b64.trim().is_empty()
+        && signing::verify_with_domain(
+            PEER_DELEGATE_DOMAIN,
+            &PeerDelegate { sig: String::new(), ..delegated.clone() },
+            &delegated.post.post.author,
+            &delegated.sig,
+        )
+}
+
 pub fn publication_id(payload: &DiscussionPayload, recipient: &Fingerprint) -> Result<String, DiscussionError> {
     let canonical = match payload {
         DiscussionPayload::SocialComment(signed) => social_model::canonical::canonical_bytes(&signed.comment),
@@ -137,6 +195,7 @@ pub fn publication_id(payload: &DiscussionPayload, recipient: &Fingerprint) -> R
         DiscussionPayload::ReactionSubmission { reaction, .. } => social_model::canonical::canonical_bytes(reaction),
         DiscussionPayload::CommentAttestation(attested) => social_model::canonical::canonical_bytes(attested),
         DiscussionPayload::ReactionAttestation(attested) => social_model::canonical::canonical_bytes(attested),
+        DiscussionPayload::PeerDelegate(delegated) => social_model::canonical::canonical_bytes(delegated),
     }.map_err(DiscussionError::Canonical)?;
     let mut hasher = Sha256::new();
     hasher.update(ENVELOPE_DOMAIN);
@@ -151,6 +210,7 @@ pub fn publication_id(payload: &DiscussionPayload, recipient: &Fingerprint) -> R
         DiscussionPayload::ReactionSubmission { .. } => b"reaction-submission".as_slice(),
         DiscussionPayload::CommentAttestation(_) => b"comment-attestation".as_slice(),
         DiscussionPayload::ReactionAttestation(_) => b"reaction-attestation".as_slice(),
+        DiscussionPayload::PeerDelegate(_) => b"peer-delegate".as_slice(),
     });
     hasher.update(canonical);
     hasher.update(recipient.as_str().as_bytes());

@@ -221,6 +221,13 @@ fn build_state<R: tauri::Runtime>(
     rand::rngs::OsRng.fill_bytes(&mut entropy);
     let encryption = social_keys::load_or_create_at(&data_dir, entropy)?;
     core.set_encryption_identity(encryption.sender_material());
+    core.set_own_encryption_public(
+        encryption.x25519_public_hex().into(),
+        encryption.pq_ek_b64().into(),
+    );
+    if let Some(config) = smtp::SmtpConfig::from_env()? {
+        core.set_own_delivery(config.email);
+    }
     // Единый app-data каталог: приватные ключи шифрования и каталог медиа.
     social_keys::save_at(&data_dir.join("keys"), &encryption)?;
     if let Some(bundle) = read_link(&data_dir.join(LINK_FILE))? {

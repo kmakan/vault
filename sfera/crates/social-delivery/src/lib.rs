@@ -16,7 +16,7 @@ use vault_core::crypto_pq::{hybrid_decrypt_vault, hybrid_encrypt_vault, HybridHe
 use std::fmt;
 
 /// Открытые ключи получателя, нужные для обёртки.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RecipientKeyMaterial {
     pub fp: Fingerprint,
     /// X25519-публичный ключ получателя, hex (32 байта).

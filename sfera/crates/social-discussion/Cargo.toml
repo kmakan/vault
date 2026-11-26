@@ -9,6 +9,7 @@ description = "Vault Sfera: подписанные комментарии и р�
 [dependencies]
 social-model = { path = "../social-model" }
 social-post = { path = "../social-post" }
+social-delivery = { path = "../social-delivery" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

@@ -184,7 +184,8 @@ impl SferaState {
                 let event = match &payload {
                     social_discussion::DiscussionPayload::SocialComment(_)
                     | social_discussion::DiscussionPayload::CommentSubmission { .. }
-                    | social_discussion::DiscussionPayload::CommentAttestation(_) => "comment",
+                    | social_discussion::DiscussionPayload::CommentAttestation(_)
+                    | social_discussion::DiscussionPayload::PeerDelegate(_) => "comment",
                     social_discussion::DiscussionPayload::SocialReaction(_)
                     | social_discussion::DiscussionPayload::ReactionSubmission { .. }
                     | social_discussion::DiscussionPayload::ReactionAttestation(_) => "reaction",

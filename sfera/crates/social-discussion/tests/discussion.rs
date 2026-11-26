@@ -141,3 +141,33 @@ fn invalid_reaction_and_cross_type_signature_fail() {
     reaction.sig = comment.sig;
     assert!(!verify_reaction(&reaction));
 }
+
+#[test]
+fn peer_delegate_binds_actor_transport_and_owner_to_the_post() {
+    let (post, _) = target_post();
+    let actor = comment(&"11".repeat(32), "Автор").comment.author;
+    let material = social_delivery::RecipientKeyMaterial {
+        fp: actor.fp.clone(), x25519_public_hex: "22".repeat(32),
+        pq_ek_b64: "encapsulation-key".into(), address: "actor@example.org".into(),
+    };
+    let owner = social_delivery::RecipientKeyMaterial {
+        fp: post.post.author.fp.clone(), x25519_public_hex: "11".repeat(32),
+        pq_ek_b64: "owner-key".into(), address: "owner@example.org".into(),
+    };
+    let valid = delegate_peer(A, post, actor, material, 42, owner).unwrap();
+    assert!(verify_peer_delegate(&valid));
+
+    let mut tampered = valid.clone();
+    tampered.encryption.address = "attacker@example.org".into();
+    assert!(!verify_peer_delegate(&tampered));
+    let mut wrong_domain = valid.clone();
+    wrong_domain.sig = social_model::post::sign_with_domain(
+        COMMENT_ATTESTATION_DOMAIN, A,
+        &PeerDelegate { sig: String::new(), ..valid.clone() },
+    ).unwrap();
+    assert!(!verify_peer_delegate(&wrong_domain));
+
+    let (other_post, _) = target_post();
+    let forged = delegate_peer(B, other_post, valid.actor, valid.encryption, 42, valid.owner).unwrap();
+    assert!(!verify_peer_delegate(&forged), "участник не выдаёт доверие от имени владельца");
+}

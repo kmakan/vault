@@ -31,6 +31,8 @@ fn state(seed: &str, root: &Path, email: String) -> (SferaState, social_keys::En
         Arc::new(LocalStore::new(root.join("blobs")).unwrap()),
         RetryPolicy::default(), Quota::new(3600, 20_000_000, 100, now()));
     app.set_encryption_identity(keys.sender_material());
+    app.set_own_encryption_public(keys.x25519_public_hex().into(), keys.pq_ek_b64().into());
+    app.set_own_delivery(email.clone());
     let delivery = Arc::new(SmtpDelivery::new(SmtpConfig {
         email: email.clone(), password: env("SFERA_LIVE_PASSWORD"),
         server: env("SFERA_LIVE_SMTP_SERVER"),

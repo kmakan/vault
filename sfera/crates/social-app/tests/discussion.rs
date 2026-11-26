@@ -89,8 +89,10 @@ fn author_attestation_reaches_audience_unknown_to_commenter() {
     let owner_keys = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
     let commenter_keys = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
     let viewer_keys = social_keys::EncryptionIdentity::generate([33; 32]).unwrap();
-    for (app, keys) in [(&mut owner, &owner_keys), (&mut commenter, &commenter_keys), (&mut viewer, &viewer_keys)] {
+    for (app, keys, address) in [(&mut owner, &owner_keys, "owner@example.test"), (&mut commenter, &commenter_keys, "commenter@example.test"), (&mut viewer, &viewer_keys, "viewer@example.test")] {
         app.set_encryption_identity(keys.sender_material());
+        app.set_own_delivery(address.into());
+        app.set_own_encryption_public(keys.x25519_public_hex().into(), keys.pq_ek_b64().into());
     }
     fn link(seed: &str, keys: &social_keys::EncryptionIdentity, address: &str) -> social_link::LinkedContact {
         social_link::LinkedContact {
@@ -100,7 +102,7 @@ fn author_attestation_reaches_audience_unknown_to_commenter() {
         }
     }
     add_contact(&mut owner, B, Role::Friend);
-    add_contact(&mut owner, OUTSIDER, Role::Acquaintance);
+    add_contact(&mut owner, OUTSIDER, Role::Friend);
     // Ключи привязываются после создания записей: неизвестный fingerprint
     // намеренно не попадает в адресную книгу доставки.
     owner.set_link_contacts(vec![
@@ -132,21 +134,85 @@ fn author_attestation_reaches_audience_unknown_to_commenter() {
     ]);
     // Конверты уже выпущены владельцем: третий участник открывает свой,
     // хотя его книга не содержит автора комментария.
-    assert_eq!(owner.outbox().pending_count(), 3, "пост и два адресных подтверждения");
+    assert_eq!(owner.outbox().pending_count(), 5, "пост и по два конверта каждому участнику");
     let fanout = owner.outbox().due(20).into_iter()
         .filter(|item| item.to.is_some())
         .collect::<Vec<_>>();
-    assert_eq!(fanout.len(), 2);
+    assert_eq!(fanout.len(), 4);
     let fanout = fanout.into_iter()
-        .find(|item| item.to.as_deref() == Some("viewer@example.test"))
-        .expect("attestation for the viewer").envelope.clone().unwrap();
-    let attested: social_delivery::SealedEnvelope = serde_json::from_str(&fanout).unwrap();
+        .find_map(|item| {
+            if item.to.as_deref() != Some("viewer@example.test") { return None; }
+            let envelope: social_delivery::SealedEnvelope = serde_json::from_str(item.envelope.as_deref()?).ok()?;
+            let plaintext = social_delivery::open_payload(&envelope, viewer_keys.x25519_private_hex(), &envelope.from_x25519, viewer_keys.pq_seed_hex()).ok()?;
+            let payload = social_discussion::parse_envelope_json(&plaintext).ok()?;
+            matches!(payload, social_discussion::DiscussionPayload::CommentAttestation(_)).then_some(envelope)
+        }).expect("attestation for the viewer");
+    let attested: social_delivery::SealedEnvelope = fanout;
     let plaintext = social_delivery::open_payload(&attested, viewer_keys.x25519_private_hex(), &attested.from_x25519, viewer_keys.pq_seed_hex()).unwrap();
     let payload = social_discussion::parse_envelope_json(&plaintext).unwrap();
     assert_eq!(viewer.receive_discussion_payload(payload, 21).unwrap(), EventOutcome::Inserted);
     assert_eq!(viewer.discussion().comments_for(&target(&signed_post).post_id)[0].comment.id, comment.comment.id);
-    let direct = social_discussion::DiscussionPayload::SocialComment(comment);
+    let direct = social_discussion::DiscussionPayload::SocialComment(comment.clone());
     assert!(viewer.receive_discussion_payload(direct, 22).is_err(), "неподтверждённая самоподпись не выдаёт себе доступ");
+
+    // Владелец выдаёт адресный материал B только внутри исходной аудитории.
+    let delegated = owner.outbox().due(20).into_iter().find_map(|item| {
+        let envelope: social_delivery::SealedEnvelope = serde_json::from_str(item.envelope.as_deref()?).ok()?;
+        let plaintext = social_delivery::open_payload(&envelope, viewer_keys.x25519_private_hex(), &envelope.from_x25519, viewer_keys.pq_seed_hex()).ok()?;
+        match social_discussion::parse_envelope_json(&plaintext).ok()? {
+            social_discussion::DiscussionPayload::PeerDelegate(delegated) => Some(delegated),
+            _ => None,
+        }
+    }).expect("owner delegates the commenter address to the viewer");
+    assert_eq!(viewer.receive_discussion_payload(
+        social_discussion::DiscussionPayload::PeerDelegate(delegated), 23,
+    ).unwrap(), EventOutcome::Updated);
+    let reply = viewer.comment_on_post(&id, Some(comment.comment.id.clone()), 24, "Ответ участнику", vec![], 24).unwrap();
+    assert_eq!(reply.comment.parent_id.as_deref(), Some(comment.comment.id.as_str()));
+    let addressed = viewer.outbox().due(24).into_iter()
+        .find(|item| item.to.as_deref() == Some("owner@example.test"))
+        .expect("reply is submitted to the original post owner");
+    let envelope: social_delivery::SealedEnvelope = serde_json::from_str(addressed.envelope.as_deref().unwrap()).unwrap();
+    assert_eq!(owner.receive_discussion_envelope(
+        &envelope, owner_keys.x25519_private_hex(), owner_keys.pq_seed_hex(),
+    ).unwrap(), EventOutcome::Inserted);
+    let fanout = owner.outbox().due(24).into_iter().find_map(|item| {
+        if item.to.as_deref() != Some("commenter@example.test") { return None; }
+        let envelope: social_delivery::SealedEnvelope = serde_json::from_str(item.envelope.as_deref()?).ok()?;
+        let plaintext = social_delivery::open_payload(&envelope, commenter_keys.x25519_private_hex(), &envelope.from_x25519, commenter_keys.pq_seed_hex()).ok()?;
+        match social_discussion::parse_envelope_json(&plaintext).ok()? {
+            social_discussion::DiscussionPayload::CommentAttestation(attested)
+                if attested.comment.comment.id == reply.comment.id => Some(envelope),
+            _ => None,
+        }
+    }).expect("owner attests the reply to the original commenter");
+    assert_eq!(commenter.receive_discussion_envelope(
+        &fanout, commenter_keys.x25519_private_hex(), commenter_keys.pq_seed_hex(),
+    ).unwrap(), EventOutcome::Inserted);
+    assert_eq!(commenter.discussion().comments_for(&target(&signed_post).post_id).len(), 2);
+}
+
+#[test]
+fn peer_delegate_rejects_wrong_domain_and_does_not_leak_to_outsider() {
+    let mut owner = app_with_seed(A);
+    let owner_keys = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
+    owner.set_encryption_identity(owner_keys.sender_material());
+    owner.set_own_delivery("owner@example.test".into());
+    owner.set_own_encryption_public(owner_keys.x25519_public_hex().into(), owner_keys.pq_ek_b64().into());
+    let (_, signed_post) = post(&mut owner);
+    let actor = social_model::Author::from_public_key_hex(&social_model::post::public_key_hex(B).unwrap()).unwrap();
+    let keys = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
+    let material = social_delivery::RecipientKeyMaterial {
+        fp: actor.fp.clone(), x25519_public_hex: keys.x25519_public_hex().into(),
+        pq_ek_b64: keys.pq_ek_b64().into(), address: "commenter@example.test".into(),
+    };
+    let mut delegated = social_discussion::delegate_peer(A, signed_post, actor, material, 30, owner.own_delivery_material().unwrap()).unwrap();
+    assert!(social_discussion::verify_peer_delegate(&delegated));
+    delegated.sig = social_model::post::sign_with_domain(
+        social_discussion::COMMENT_ATTESTATION_DOMAIN, A,
+        &social_discussion::PeerDelegate { sig: String::new(), ..delegated.clone() },
+    ).unwrap();
+    assert!(!social_discussion::verify_peer_delegate(&delegated));
 }
 
 #[test]
