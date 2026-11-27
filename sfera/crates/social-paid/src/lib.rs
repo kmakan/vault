@@ -361,6 +361,33 @@ mod tests {
     }
 
     #[test]
+    fn creator_can_sign_entitlement_without_platform_money() {
+        // Фаза «самозанятый»: платформа не проводит деньги автора и не берёт
+        // комиссию. Автор сам собирает оплату и сам подписывает право.
+        let mut channel = channel();
+        channel.subscribe(&fp(SUBJECT_SEED));
+        let mut token = CreatorEntitlement {
+            v: 1,
+            kind: EntitlementKind::Channel,
+            creator: fp(CREATOR_SEED),
+            subject: fp(SUBJECT_SEED),
+            plan: "monthly".into(),
+            key_id: channel.current_key_id(),
+            period_start: 1_000,
+            period_end: 1_000 + 30 * 86_400,
+            issued_at: 999,
+            payment_id: "creator-side-payment".into(),
+            sig: String::new(),
+        };
+        token.sig = signing::sign_with_domain(ENTITLEMENT_DOMAIN, CREATOR_SEED, &token).unwrap();
+        let creator_author =
+            Author::from_public_key_hex(&signing::public_key_hex(CREATOR_SEED).unwrap()).unwrap();
+        assert!(channel
+            .access(&token, &creator_author, &fp(SUBJECT_SEED), 2_000)
+            .is_ok());
+    }
+
+    #[test]
     fn subscriber_can_unwrap_the_epoch_key_and_outsider_cannot() {
         let creator_keys = social_keys::EncryptionIdentity::generate([11; 32]).unwrap();
         let subscriber_keys = social_keys::EncryptionIdentity::generate([22; 32]).unwrap();
