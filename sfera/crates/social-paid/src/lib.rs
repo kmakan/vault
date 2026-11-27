@@ -400,6 +400,19 @@ impl std::error::Error for ChannelInviteError {}
 pub const PUBLIC_CHANNEL_DOMAIN: &[u8] = b"sfera-public-channel:v1\0";
 pub const PUBLIC_CHANNEL_VERSION: u8 = 1;
 
+/// Id канала становится именем файла витрины, поэтому он обязан быть
+/// безопасным сегментом: без `/`, `\`, пробелов и `..`.
+#[must_use]
+pub fn is_valid_channel_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id != "."
+        && id != ".."
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicChannel {
     pub v: u8,
@@ -429,6 +442,9 @@ impl PublicChannel {
         let id = id.into();
         if id.trim().is_empty() {
             return Err(PublicChannelError::EmptyId);
+        }
+        if !is_valid_channel_id(&id) {
+            return Err(PublicChannelError::BadId);
         }
         let title = title.into();
         if title.trim().is_empty() {
@@ -462,6 +478,9 @@ impl PublicChannel {
         }
         if self.id.trim().is_empty() {
             return Err(PublicChannelError::EmptyId);
+        }
+        if !is_valid_channel_id(&self.id) {
+            return Err(PublicChannelError::BadId);
         }
         if self.title.trim().is_empty() {
             return Err(PublicChannelError::EmptyTitle);
@@ -506,6 +525,7 @@ impl PublicChannel {
 pub enum PublicChannelError {
     UnsupportedVersion,
     EmptyId,
+    BadId,
     EmptyTitle,
     BadSignature,
     BadPost,
@@ -519,6 +539,7 @@ impl fmt::Display for PublicChannelError {
         f.write_str(match self {
             Self::UnsupportedVersion => "public channel version is not supported",
             Self::EmptyId => "public channel id is empty",
+            Self::BadId => "public channel id is not a safe slug",
             Self::EmptyTitle => "public channel title is empty",
             Self::BadSignature => "public channel signature is invalid",
             Self::BadPost => "post signature is invalid",
@@ -1175,6 +1196,10 @@ mod tests {
         assert_eq!(
             PublicChannel::create("pub-1", CREATOR_SEED, "  ", "", 100).unwrap_err(),
             PublicChannelError::EmptyTitle
+        );
+        assert_eq!(
+            PublicChannel::create("../evil", CREATOR_SEED, "Публичный", "", 100).unwrap_err(),
+            PublicChannelError::BadId
         );
     }
 
