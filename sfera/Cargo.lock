@@ -3163,6 +3163,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "social-model",
 ]
 
 [[package]]
@@ -3557,6 +3558,20 @@ name = "social-offline"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "social-paid"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "sfera-billing",
+ "sha2",
+ "social-audience",
+ "social-delivery",
+ "social-keys",
+ "social-model",
 ]
 
 [[package]]

@@ -36,6 +36,7 @@ members = [
     "crates/social-rights",
     "crates/social-contacts",
     "crates/social-audience",
+    "crates/social-paid",
     "crates/social-delivery",
     "crates/social-keys",
     "crates/social-post",

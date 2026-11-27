@@ -1,0 +1,19 @@
+[package]
+name = "social-paid"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Vault Sfera: платный канал — подписанное право и выдача эпохного ключа"
+
+[dependencies]
+social-model = { path = "../social-model" }
+social-audience = { path = "../social-audience" }
+sfera-billing = { path = "../sfera-billing" }
+social-delivery = { path = "../social-delivery" }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+serde_json = "1"
+social-keys = { path = "../social-keys" }
