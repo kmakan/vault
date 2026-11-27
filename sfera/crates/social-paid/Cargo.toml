@@ -11,6 +11,8 @@ social-model = { path = "../social-model" }
 social-audience = { path = "../social-audience" }
 sfera-billing = { path = "../sfera-billing" }
 social-delivery = { path = "../social-delivery" }
+social-post = { path = "../social-post" }
+social-rights = { path = "../social-rights" }
 sha2 = "0.10"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }

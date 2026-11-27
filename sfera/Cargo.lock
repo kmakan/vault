@@ -3573,6 +3573,8 @@ dependencies = [
  "social-delivery",
  "social-keys",
  "social-model",
+ "social-post",
+ "social-rights",
  "tempfile",
 ]
 

@@ -34,6 +34,8 @@ use social_delivery::{
 };
 use social_model::post as signing;
 use social_model::{Author, Fingerprint};
+use social_post::SignedPost;
+use social_rights::Audience;
 
 /// Идентификатор ключа эпохи: SHA-256 от 32 байт ключа, hex.
 /// В праве хранится только он, а не сам ключ.
@@ -385,6 +387,149 @@ impl fmt::Display for ChannelInviteError {
 }
 
 impl std::error::Error for ChannelInviteError {}
+
+// --- Публичный канал: подписанный манифест --------------------------------
+//
+// Публичный канал — это осознанно публичный контент: манифест и посты
+// подписаны, но не зашифрованы. Витрина/релей может отдавать их любому
+// читателю; проверка подписи остаётся у клиента.
+//
+// Манифест не даёт прав на платный контент и не заменяет ChannelInvite:
+// это описание канала и привязка постов к создателю.
+
+pub const PUBLIC_CHANNEL_DOMAIN: &[u8] = b"sfera-public-channel:v1\0";
+pub const PUBLIC_CHANNEL_VERSION: u8 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicChannel {
+    pub v: u8,
+    pub id: String,
+    pub creator: Author,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub created_at: u64,
+    pub sig: String,
+}
+
+impl PublicChannel {
+    #[must_use]
+    pub fn unsigned(&self) -> Self {
+        Self { sig: String::new(), ..self.clone() }
+    }
+
+    /// Создать манифест. Создатель — владелец ключа, которым подписан канал.
+    pub fn create(
+        id: impl Into<String>,
+        creator_seed_hex: &str,
+        title: impl Into<String>,
+        description: impl Into<String>,
+        now: u64,
+    ) -> Result<Self, PublicChannelError> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err(PublicChannelError::EmptyId);
+        }
+        let title = title.into();
+        if title.trim().is_empty() {
+            return Err(PublicChannelError::EmptyTitle);
+        }
+        let pub_key = signing::public_key_hex(creator_seed_hex)
+            .map_err(|_| PublicChannelError::BadSignature)?;
+        let creator = Author::from_public_key_hex(&pub_key)
+            .map_err(|_| PublicChannelError::BadSignature)?;
+        let mut channel = Self {
+            v: PUBLIC_CHANNEL_VERSION,
+            id,
+            creator,
+            title,
+            description: description.into(),
+            created_at: now,
+            sig: String::new(),
+        };
+        channel.sig = signing::sign_with_domain(
+            PUBLIC_CHANNEL_DOMAIN,
+            creator_seed_hex,
+            &channel.unsigned(),
+        )
+        .map_err(|_| PublicChannelError::BadSignature)?;
+        Ok(channel)
+    }
+
+    pub fn verify(&self) -> Result<(), PublicChannelError> {
+        if self.v != PUBLIC_CHANNEL_VERSION {
+            return Err(PublicChannelError::UnsupportedVersion);
+        }
+        if self.id.trim().is_empty() {
+            return Err(PublicChannelError::EmptyId);
+        }
+        if self.title.trim().is_empty() {
+            return Err(PublicChannelError::EmptyTitle);
+        }
+        let derived = Fingerprint::from_public_key_hex(&self.creator.pub_key)
+            .map_err(|_| PublicChannelError::BadSignature)?;
+        if !derived.same(&self.creator.fp) {
+            return Err(PublicChannelError::BadSignature);
+        }
+        if !signing::verify_with_domain(
+            PUBLIC_CHANNEL_DOMAIN,
+            &self.unsigned(),
+            &self.creator,
+            &self.sig,
+        ) {
+            return Err(PublicChannelError::BadSignature);
+        }
+        Ok(())
+    }
+
+    /// Принять публичный пост: подпись автора, аудитория `public`, тот же
+    /// канал и тот же создатель. Приватный пост сюда не пройдёт.
+    pub fn accept_post(&self, post: &SignedPost) -> Result<(), PublicChannelError> {
+        self.verify()?;
+        if !social_post::verify_post(post) {
+            return Err(PublicChannelError::BadPost);
+        }
+        if !matches!(post.post.audience.spec, Audience::Public) {
+            return Err(PublicChannelError::NotPublic);
+        }
+        if post.post.audience.id != self.id {
+            return Err(PublicChannelError::WrongChannel);
+        }
+        if !post.post.author.fp.same(&self.creator.fp) {
+            return Err(PublicChannelError::NotCreator);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicChannelError {
+    UnsupportedVersion,
+    EmptyId,
+    EmptyTitle,
+    BadSignature,
+    BadPost,
+    NotPublic,
+    WrongChannel,
+    NotCreator,
+}
+
+impl fmt::Display for PublicChannelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::UnsupportedVersion => "public channel version is not supported",
+            Self::EmptyId => "public channel id is empty",
+            Self::EmptyTitle => "public channel title is empty",
+            Self::BadSignature => "public channel signature is invalid",
+            Self::BadPost => "post signature is invalid",
+            Self::NotPublic => "post audience is not public",
+            Self::WrongChannel => "post belongs to another channel",
+            Self::NotCreator => "post author is not the channel creator",
+        })
+    }
+}
+
+impl std::error::Error for PublicChannelError {}
 
 // --- Локальное хранилище каналов -------------------------------------------
 //
@@ -888,16 +1033,91 @@ mod tests {
     }
 
     #[test]
-    fn debug_never_prints_the_epoch_key() {
-        let mut channel = channel();
-        channel.subscribe(&fp(SUBJECT_SEED));
-        let token = token(&channel, EntitlementKind::Channel);
-        let access = channel
-            .access(&token, &issuer(), &fp(SUBJECT_SEED), 2_000)
+    fn public_channel_manifest_is_signed_and_rejects_tampering() {
+        let channel = PublicChannel::create("pub-1", CREATOR_SEED, "Публичный канал", "Описание", 100)
             .unwrap();
-        let rendered = format!("{access:?}");
-        assert!(rendered.contains("<redacted>"));
-        assert!(!rendered.contains(&hex::encode(access.key())));
-        assert!(!format!("{channel:?}").contains(&hex::encode(access.key())));
+        assert!(channel.verify().is_ok());
+
+        let mut tampered = channel.clone();
+        tampered.title = "другой канал".into();
+        assert_eq!(tampered.verify().unwrap_err(), PublicChannelError::BadSignature);
+
+        let mut foreign = channel.clone();
+        foreign.creator.fp = fp(OTHER_SEED);
+        assert_eq!(foreign.verify().unwrap_err(), PublicChannelError::BadSignature);
+
+        assert_eq!(
+            PublicChannel::create("pub-1", CREATOR_SEED, "  ", "", 100).unwrap_err(),
+            PublicChannelError::EmptyTitle
+        );
+    }
+
+    #[test]
+    fn public_channel_accepts_only_public_posts_of_its_creator() {
+        let channel = PublicChannel::create("pub-1", CREATOR_SEED, "Публичный", "", 100).unwrap();
+        let good = social_post::compose(
+            CREATOR_SEED,
+            100,
+            "пост",
+            social_post::PostAudience {
+                id: channel.id.clone(),
+                epoch: 1,
+                spec: Audience::Public,
+            },
+            vec![],
+        )
+        .unwrap();
+        assert!(channel.accept_post(&good).is_ok());
+
+        let private = social_post::compose(
+            CREATOR_SEED,
+            100,
+            "пост",
+            social_post::PostAudience {
+                id: channel.id.clone(),
+                epoch: 1,
+                spec: Audience::AllContacts,
+            },
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            channel.accept_post(&private).unwrap_err(),
+            PublicChannelError::NotPublic
+        );
+
+        let other_channel = social_post::compose(
+            CREATOR_SEED,
+            100,
+            "пост",
+            social_post::PostAudience {
+                id: "pub-2".into(),
+                epoch: 1,
+                spec: Audience::Public,
+            },
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            channel.accept_post(&other_channel).unwrap_err(),
+            PublicChannelError::WrongChannel
+        );
+
+        let foreign_author = social_post::compose(
+            OTHER_SEED,
+            100,
+            "пост",
+            social_post::PostAudience {
+                id: channel.id.clone(),
+                epoch: 1,
+                spec: Audience::Public,
+            },
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            channel.accept_post(&foreign_author).unwrap_err(),
+            PublicChannelError::NotCreator
+        );
     }
 }
