@@ -40,7 +40,7 @@ class PageSitemap(SiteSitemap):
         return Page.objects.filter(
             site=self.site,
             is_published=True,
-            slug__in=("home", "pricing", "pay"),
+            slug__in=("home", "pricing", "pay", "sfera"),
         )
 
     def location(self, item: Page) -> str:
@@ -54,10 +54,11 @@ class DocSitemap(SiteSitemap):
     priority = 0.8
 
     def items(self):
-        return DocPage.objects.filter(site=self.site, product="sfera", is_published=True)
+        return DocPage.objects.filter(site=self.site, is_published=True)
 
     def location(self, item: DocPage) -> str:
-        return f"/docs/{item.slug}"
+        prefix = "/vault/docs" if item.product == "vault" else "/sfera/docs"
+        return f"{prefix}/{item.slug}"
 
     def lastmod(self, item: DocPage):
         return item.updated_at

@@ -56,13 +56,23 @@ export async function render({ url = '/', host = DEFAULT_SITE } = {}) {
   let description = shell.site.default_seo_description || ''
 
   try {
-    if (path === '/') {
+    if (path === '/' || path === '/vault') {
       state.page = await get('/api/v1/pages/home/', siteHost)
       state.view = 'home'
       title = state.page.seo_title || state.page.title || title
       description = state.page.seo_description || description
-    } else if (path === '/pricing' || path === '/pay') {
+    } else if (path === '/pricing' || path === '/pay' || path === '/sfera') {
       state.page = await get(`/api/v1/pages/${path.slice(1)}/`, siteHost)
+      state.view = 'page'
+      title = state.page.seo_title || state.page.title || title
+      description = state.page.seo_description || description
+    } else if (path === '/vault/pricing') {
+      state.page = await get('/api/v1/pages/pricing/', siteHost)
+      state.view = 'page'
+      title = state.page.seo_title || state.page.title || title
+      description = state.page.seo_description || description
+    } else if (path === '/vault/pay') {
+      state.page = await get('/api/v1/pages/pay/', siteHost)
       state.view = 'page'
       title = state.page.seo_title || state.page.title || title
       description = state.page.seo_description || description
@@ -71,14 +81,29 @@ export async function render({ url = '/', host = DEFAULT_SITE } = {}) {
       state.legal = await get(`/api/v1/legal/${encodeURIComponent(kind)}/`, siteHost)
       state.view = 'legal'
       title = state.legal.title || title
-    } else if (path === '/docs' || path === '/docs/') {
-      const tree = await get('/api/v1/docs/tree/', siteHost)
+    } else if (['/docs', '/docs/', '/vault/docs', '/vault/docs/', '/sfera/docs', '/sfera/docs/'].includes(path)) {
+      const product = path.startsWith('/vault') ? 'vault' : 'sfera'
+      const base = path.startsWith('/vault') ? '/vault/docs' : '/sfera/docs'
+      const tree = await get(`/api/v1/docs/tree/?product=${product}`, siteHost)
       state.tree = tree.tree || []
+      state.docsBase = base
+      state.docsProduct = product
+      state.docsTitle = product === 'vault' ? 'Руководство Vault' : 'Руководство Sfera'
+      state.docsLabel = product === 'vault' ? 'Руководство Vault' : 'Руководство Sfera'
+      if (path === '/docs' || path === '/docs/') state.path = base
       state.view = 'docs'
-      title = shell.site.locale === 'en' ? 'Documentation' : 'Руководство'
-    } else if (path.startsWith('/docs/')) {
-      const slug = decodeSlug(path, '/docs/')
-      state.doc = await get(`/api/v1/docs/${encodeURIComponent(slug)}/`, siteHost)
+      title = state.docsTitle
+    } else if (path.startsWith('/docs/') || path.startsWith('/vault/docs/') || path.startsWith('/sfera/docs/')) {
+      const vault = path.startsWith('/vault/docs/')
+      const base = vault ? '/vault/docs' : '/sfera/docs'
+      const prefix = vault ? '/vault/docs/' : path.startsWith('/sfera/docs/') ? '/sfera/docs/' : '/docs/'
+      const slug = decodeSlug(path, prefix)
+      const product = vault ? 'vault' : 'sfera'
+      state.doc = await get(`/api/v1/docs/${encodeURIComponent(slug)}/?product=${product}`, siteHost)
+      state.docsBase = base
+      state.docsProduct = product
+      state.docsLabel = vault ? 'Руководство Vault' : 'Руководство Sfera'
+      if (path.startsWith('/docs/')) state.path = `${base}/${slug}`
       state.view = 'doc'
       title = state.doc.title || title
       description = state.doc.summary || description

@@ -30,5 +30,14 @@ class DocDetailView(APIView):
         site = getattr(request, "site", None)
         if site is None:
             return Response({"error": {"code": "site_not_found", "message": "Host is not configured"}}, status=404)
-        page = get_object_or_404(DocPage, site=site, slug=slug, is_published=True)
+        qs = DocPage.objects.filter(site=site, slug=slug, is_published=True)
+        product = request.query_params.get("product")
+        if product:
+            qs = qs.filter(product=product)
+        elif qs.count() > 1:
+            return Response(
+                {"error": {"code": "product_required", "message": "Pass ?product=vault|sfera"}},
+                status=400,
+            )
+        page = get_object_or_404(qs)
         return Response(DocPageSerializer(page).data)

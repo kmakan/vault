@@ -28,7 +28,9 @@ class DocPage(models.Model):
     class Meta:
         ordering = ["site_id", "order", "slug"]
         constraints = [
-            models.UniqueConstraint(fields=["site", "slug"], name="uniq_doc_site_slug")
+            models.UniqueConstraint(
+                fields=["site", "product", "slug"], name="uniq_doc_site_product_slug"
+            )
         ]
 
     def __str__(self) -> str:

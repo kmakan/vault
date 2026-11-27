@@ -188,6 +188,20 @@ class Command(BaseCommand):
                 order=order,
                 is_external=href.startswith("http"),
             )
+        NavigationItem.objects.create(
+            site=site,
+            location=NavigationItem.Location.HEADER,
+            label="Sfera",
+            url="/sfera",
+            order=len(header),
+        )
+        NavigationItem.objects.create(
+            site=site,
+            location=NavigationItem.Location.HEADER,
+            label="Vault",
+            url="/vault",
+            order=len(header) + 1,
+        )
         legal_paths = {"/privacy", "/terms", "/offer", "/legal/privacy", "/legal/terms", "/legal/offer", "/legal/pd", "/legal/requisites"}
         for order, link in enumerate(footer):
             href = (link.get("href") or "").strip()

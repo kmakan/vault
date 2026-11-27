@@ -19,7 +19,9 @@ from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
+from apps.core.models import NavigationItem
 from apps.docs.models import DocPage
+from apps.pages.models import Page
 
 SLUGS = {
     "1. Что такое Sfera": "what-is-sfera",
@@ -106,3 +108,40 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f"Imported {imported} Sfera documentation pages for {site.domain}.")
         )
+        self.create_landing(site)
+
+    def create_landing(self, site: Site) -> None:
+        Page.objects.update_or_create(
+            site=site,
+            slug="sfera",
+            defaults={
+                "title": "Sfera",
+                "subtitle": "Распределённая социальная сеть на вашей почте",
+                "seo_title": "Sfera — социальная сеть на вашей почте",
+                "seo_description": "Лента, сферы и публичные каналы Sfera. Личные посты шифруются, данные остаются у вас.",
+                "canonical_path": "/sfera",
+                "body_html": (
+                    '<p class="lead">Sfera — отдельное приложение: лента, круги получателей '
+                    "и публичные страницы. Личные посты шифруются для выбранной аудитории, "
+                    "публичные — открыты по замыслу. Это не замена чатам Vault.</p>"
+                    '<div class="cards">'
+                    '<div class="card"><h3>Начало работы</h3><p>Установка, первый запуск, '
+                    'ключ устройства и резервная копия.</p><p><a class="btn btn-primary" '
+                    'href="/docs/getting-started">Открыть руководство</a></p></div>'
+                    '<div class="card"><h3>Почта и контакты</h3><p>SMTP/IMAP, приглашения, '
+                    'сферы и роли.</p><p><a class="btn btn-ghost" href="/docs/email">Настроить почту</a></p></div>'
+                    '<div class="card"><h3>Публичные каналы</h3><p>Что уже готово в ядре и '
+                    'чего ещё нет в интерфейсе.</p><p><a class="btn btn-ghost" '
+                    'href="/docs/public-channels">Подробнее</a></p></div>'
+                    "</div>"
+                    '<p><a class="btn btn-primary" href="/docs">Все разделы руководства</a></p>'
+                ),
+            },
+        )
+        NavigationItem.objects.get_or_create(
+            site=site,
+            location=NavigationItem.Location.HEADER,
+            label="Sfera",
+            defaults={"url": "/sfera", "order": 100},
+        )
+
