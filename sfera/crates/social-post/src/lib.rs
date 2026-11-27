@@ -167,3 +167,78 @@ pub fn verify_post(signed: &SignedPost) -> bool {
     signed.post.validate().is_ok()
         && signing::verify_value(&signed.post, &signed.post.author, &signed.sig)
 }
+
+pub const POST_ENVELOPE_DOMAIN: &[u8] = b"sfera-post-delivery:v1\0";
+
+/// Ошибка типизированного plaintext поста до его E2E-упаковки.
+/// Доставка лишь шифрует этот JSON и не знает правил подписи поста.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PostEnvelopeError {
+    Wrap(String),
+    Unwrap(String),
+}
+
+impl std::fmt::Display for PostEnvelopeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Wrap(message) => f.write_str(message),
+            Self::Unwrap(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for PostEnvelopeError {}
+
+pub fn post_envelope_json(post: &SignedPost) -> Result<String, PostEnvelopeError> {
+    if !verify_post(post) {
+        return Err(PostEnvelopeError::Wrap("post signature is invalid".into()));
+    }
+    serde_json::to_string(post).map_err(|e| PostEnvelopeError::Wrap(e.to_string()))
+}
+
+pub fn parse_post_envelope_json(plaintext: &str) -> Result<SignedPost, PostEnvelopeError> {
+    let post: SignedPost = serde_json::from_str(plaintext)
+        .map_err(|e| PostEnvelopeError::Unwrap(format!("post envelope: {e}")))?;
+    if !verify_post(&post) {
+        return Err(PostEnvelopeError::Unwrap("post signature is invalid".into()));
+    }
+    Ok(post)
+}
+
+pub fn post_publication_id(
+    post: &SignedPost,
+    recipient: &social_model::Fingerprint,
+) -> Result<String, PostEnvelopeError> {
+    use sha2::{Digest, Sha256};
+    let canonical = canonical_post(&post.post).map_err(PostEnvelopeError::Wrap)?;
+    let mut hasher = Sha256::new();
+    hasher.update(POST_ENVELOPE_DOMAIN);
+    hasher.update(canonical);
+    hasher.update(recipient.as_str().as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::*;
+
+    #[test]
+    fn addressed_post_is_typed_signed_and_not_accepted_after_tampering() {
+        let seed = "01".repeat(32);
+        let recipient = social_model::Fingerprint::from_public_key_hex(
+            &social_model::post::public_key_hex(&"02".repeat(32)).unwrap(),
+        ).unwrap();
+        let post = compose(&seed, 1, "Секретный пост",
+            PostAudience {
+                id: "family".into(), epoch: 1, spec: social_rights::Audience::AllContacts,
+            }, vec![]).unwrap();
+        let plaintext = post_envelope_json(&post).unwrap();
+        assert_eq!(parse_post_envelope_json(&plaintext).unwrap(), post);
+        let id = post_publication_id(&post, &recipient).unwrap();
+        assert_eq!(id, post_publication_id(&post, &recipient).unwrap());
+        assert_ne!(id, post_publication_id(&post, &post.post.author.fp).unwrap());
+        let mut tampered = post;
+        tampered.post.body = "Подмена".into();
+        assert!(parse_post_envelope_json(&serde_json::to_string(&tampered).unwrap()).is_err());
+    }
+}

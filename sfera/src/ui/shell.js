@@ -1,4 +1,4 @@
-// Sfera UI: лёгкий каркас из пяти вкладок (ADR-006 §10, §17).
+// Sfera UI: лёгкий каркас из шести вкладок (ADR-006 §10, §17).
 // Только навигация и состояние активной вкладки. Никаких правил, цен,
 // подписей и форматов — они живут в Rust и приходят через Tauri-команды.
 // Организации и платные возможности НЕ получают отдельных вкладок: они
@@ -7,6 +7,7 @@
 export const TABS = Object.freeze([
   { id: 'feed', labelKey: 'nav_feed' },
   { id: 'contacts', labelKey: 'nav_contacts' },
+  { id: 'channels', labelKey: 'nav_channels' },
   { id: 'create', labelKey: 'nav_create' },
   { id: 'storage', labelKey: 'nav_storage' },
   { id: 'profile', labelKey: 'nav_profile' },

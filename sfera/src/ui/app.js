@@ -37,6 +37,9 @@ export function createAppState({
     // Выбранный, но ещё не сохранённый аватар: ссылка на блоб без ключа.
     avatarDraft: null,
     feed: [],
+    // Публичные каналы: DTO из Rust, подписи и проверки не в JS.
+    publicChannels: [],
+    publicChannelViews: {},
     // Обсуждение по id поста: готовые подписанные события из Rust.
     discussions: {},
     contacts: [],
@@ -234,6 +237,7 @@ export function createAppState({
         load('link', () => bridge.linkStatus()),
         load('identity', () => bridge.identity()),
         load('feed', () => bridge.feed()),
+        load('publicChannels', () => bridge.publicChannels()),
         load('contacts', () => bridge.contacts()),
         load('roleOptions', () => bridge.roleOptions()),
         load('audiences', () => bridge.audiences()),
@@ -262,6 +266,37 @@ export function createAppState({
     loadContacts: () => load('contacts', () => bridge.contacts()),
     loadContactProfile,
     loadDiscussion,
+
+    loadPublicChannels: () => load('publicChannels', () => bridge.publicChannels()),
+
+    async loadPublicChannel(id) {
+      const view = await bridge.publicChannel(id);
+      state.publicChannelViews[id] = view;
+      return view;
+    },
+
+    async createPublicChannel(id, title, description = '') {
+      if (!id || !title) throw new Error('channel id and title required');
+      if (state.apiVersion == null) throw new Error('bridge not initialized');
+      const created = await bridge.createPublicChannel({
+        v: state.apiVersion, id, title, description, now: clock(),
+      });
+      await load('publicChannels', () => bridge.publicChannels());
+      return created;
+    },
+
+    async publishPublicPost(channelId, body) {
+      if (!channelId || !body) throw new Error('channel and body required');
+      if (state.apiVersion == null) throw new Error('bridge not initialized');
+      const ts = clock();
+      const post = await bridge.publishPublicPost({
+        v: state.apiVersion, channel_id: channelId, ts, body, now: ts,
+      });
+      await load('publicChannels', () => bridge.publicChannels());
+      await load('feed', () => bridge.feed());
+      state.publicChannelViews[channelId] = await bridge.publicChannel(channelId);
+      return post;
+    },
 
     async commentOnPost(postId, body, parentId = null) {
       const now = clock();

@@ -8,8 +8,6 @@ description = "Vault Sfera: адресная обёртка ключа ауди�
 
 [dependencies]
 social-model = { path = "../social-model" }
-social-post = { path = "../social-post" }
-sha2 = "0.10"
 social-audience = { path = "../social-audience" }
 # Контакт bundle → материал получателя (From<&LinkedContact>). Зависимость
 # односторонняя: social-link не знает про social-delivery, цикла нет.

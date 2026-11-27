@@ -71,22 +71,30 @@ pub struct SferaState {
     received_avatars: Mutex<std::collections::HashMap<String, social_library::AvatarManifest>>,
     /// Каталог локальных ключей и метаданных (media_library.json).
     keys_dir: std::path::PathBuf,
+    /// Локальные публичные витрины. Путь фиксируется при старте состояния:
+    /// команды не перечитывают env на каждый вызов.
+    public_root: std::path::PathBuf,
 }
 
 impl SferaState {
     pub fn new(app: SferaApp, delivery: Option<Arc<dyn DeliveryPort>>) -> Self {
+        let keys_dir = std::env::var("SFERA_KEYS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".sfera")
+                    .join("keys")
+            });
+        let public_root = std::env::var("SFERA_PUBLIC_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| keys_dir.join("public").join("channels"));
         Self {
             app: Mutex::new(app),
             delivery,
             received_avatars: Mutex::new(std::collections::HashMap::new()),
-            keys_dir: std::env::var("SFERA_KEYS_DIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| {
-                    dirs::home_dir()
-                        .unwrap_or_else(|| std::path::PathBuf::from("."))
-                        .join(".sfera")
-                        .join("keys")
-                }),
+            keys_dir,
+            public_root,
         }
     }
 
@@ -199,7 +207,7 @@ impl SferaState {
                     CommandError::input(e)
                 }
             })?;
-            if let Ok(post) = social_delivery::parse_post_envelope_json(&plaintext) {
+            if let Ok(post) = social_post::parse_post_envelope_json(&plaintext) {
                 let outcome = app.receive_post_payload(post, now)?;
                 if outcome == social_discussion::EventOutcome::Inserted {
                     self.persist_received_profiles(app)?;
@@ -1173,6 +1181,160 @@ fn social_store_caps(state: tauri::State<'_, SferaState>) -> Result<StoreCaps, C
     state.call(|app| Ok(app.store().caps()))
 }
 
+// ── Публичные каналы ─────────────────────────────────────────────────────
+// Локальный каталог витрин: подпись проверяется при загрузке (`PublicCatalog`).
+// Создание канала и публикация подписываются seed'ом устройства в Rust;
+// JS получает только DTO. Публичный пост не рассылается по почте — он
+// складывается в локальную витрину, которую может раздавать релей/сайт.
+
+fn public_root(state: &SferaState) -> &std::path::Path {
+    &state.public_root
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicChannelSummaryDto {
+    pub v: u8,
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub creator_fp: String,
+    pub created_at: u64,
+    pub posts: usize,
+    pub latest_ts: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicPostDto {
+    pub id: String,
+    pub ts: u64,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicChannelViewDto {
+    pub v: u8,
+    pub channel: PublicChannelSummaryDto,
+    pub posts: Vec<PublicPostDto>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreatePublicChannelRequest {
+    pub v: u8,
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub now: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublishPublicPostRequest {
+    pub v: u8,
+    pub channel_id: String,
+    pub ts: u64,
+    pub body: String,
+    pub now: u64,
+}
+
+fn summary_of(feed: &social_paid::PublicFeed) -> PublicChannelSummaryDto {
+    PublicChannelSummaryDto {
+        v: API_VERSION,
+        id: feed.channel.id.clone(),
+        title: feed.channel.title.clone(),
+        description: feed.channel.description.clone(),
+        creator_fp: feed.channel.creator.fp.as_str().to_string(),
+        created_at: feed.channel.created_at,
+        posts: feed.posts.len(),
+        latest_ts: feed.posts.iter().map(|p| p.post.ts).max(),
+    }
+}
+
+fn catalog_at(state: &SferaState) -> Result<social_public::PublicCatalog, CommandError> {
+    social_public::PublicCatalog::open(public_root(state))
+        .map_err(|e| CommandError::backend(e.to_string()))
+}
+
+#[tauri::command]
+fn social_public_channels(
+    state: tauri::State<'_, SferaState>,
+) -> Result<Vec<PublicChannelSummaryDto>, CommandError> {
+    let catalog = catalog_at(&state)?;
+    Ok(catalog.ids().filter_map(|id| catalog.get(id)).map(summary_of).collect())
+}
+
+#[tauri::command]
+fn social_public_channel(
+    state: tauri::State<'_, SferaState>,
+    id: String,
+) -> Result<PublicChannelViewDto, CommandError> {
+    let catalog = catalog_at(&state)?;
+    let feed = catalog
+        .get(&id)
+        .ok_or_else(|| CommandError::input("unknown public channel"))?;
+    let posts = feed
+        .latest(200)
+        .into_iter()
+        .map(|p| {
+            let id = social_app::PostId::from_post(&p.post)
+                .map_err(CommandError::input)?
+                .to_hex();
+            Ok(PublicPostDto { id, ts: p.post.ts, body: p.post.body.clone() })
+        })
+        .collect::<Result<Vec<_>, CommandError>>()?;
+    Ok(PublicChannelViewDto { v: API_VERSION, channel: summary_of(feed), posts })
+}
+
+#[tauri::command]
+fn social_create_public_channel(
+    state: tauri::State<'_, SferaState>,
+    req: CreatePublicChannelRequest,
+) -> Result<PublicChannelSummaryDto, CommandError> {
+    check(req.v)?;
+    let seed = state.call(|app| Ok(app.identity().signing_seed().to_string()))?;
+    let channel = social_paid::PublicChannel::create(req.id, &seed, req.title, req.description, req.now)
+        .map_err(|e| CommandError::input(e.to_string()))?;
+    let feed = social_paid::PublicFeed::new(channel).map_err(|e| CommandError::input(e.to_string()))?;
+    let summary = summary_of(&feed);
+    let path = public_root(&state).join(format!("{}.json", feed.channel.id));
+    feed.create_to(&path).map_err(|e| {
+        if path.exists() {
+            CommandError::input("public channel already exists")
+        } else {
+            CommandError::backend(e.to_string())
+        }
+    })?;
+    Ok(summary)
+}
+
+#[tauri::command]
+fn social_publish_public_post(
+    state: tauri::State<'_, SferaState>,
+    req: PublishPublicPostRequest,
+) -> Result<PublicPostDto, CommandError> {
+    check(req.v)?;
+    let mut catalog = catalog_at(&state)?;
+    let post = state.call(|app| {
+        let post = app.publish_post(
+            req.ts,
+            req.body,
+            social_post::PostAudience {
+                id: req.channel_id.clone(),
+                epoch: 1,
+                spec: social_rights::Audience::Public,
+            },
+            vec![],
+            req.now,
+        )?;
+        state.persist_received_profiles(app)?;
+        Ok(post)
+    })?;
+    catalog
+        .publish(post.clone())
+        .map_err(|e| CommandError::backend(e.to_string()))?;
+    let id = social_app::PostId::from_post(&post.post).map_err(CommandError::input)?.to_hex();
+    Ok(PublicPostDto { id, ts: post.post.ts, body: post.post.body })
+}
+
 /// Какие команды обслуживает этот крейт. Оболочке нужно собрать несколько
 /// handler'ов в один `invoke_handler` (tauri допускает только один), поэтому
 /// список имён живёт рядом с командами, а не в оболочке.
@@ -1216,6 +1378,10 @@ pub fn handles(command: &str) -> bool {
             | "social_sync_outbox"
             | "social_sync_status"
             | "social_store_caps"
+            | "social_public_channels"
+            | "social_public_channel"
+            | "social_create_public_channel"
+            | "social_publish_public_post"
     )
 }
 
@@ -1265,6 +1431,10 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_sync_outbox,
         social_sync_status,
         social_store_caps,
+        social_public_channels,
+        social_public_channel,
+        social_create_public_channel,
+        social_publish_public_post,
     ]
 }
 
@@ -1291,6 +1461,71 @@ mod tests {
             Quota::new(60, 10_000, 10, 0),
         );
         SferaState::new(app, None)
+    }
+
+    #[test]
+    fn public_channel_lifecycle_via_ffi() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("channels");
+        let st = state().with_keys_dir(dir.path().join("keys"));
+
+        let created = st.call(|app| {
+            let seed = app.identity().signing_seed().to_string();
+            let channel = social_paid::PublicChannel::create("news", &seed, "Новости", "Описание", 100).unwrap();
+            let feed = social_paid::PublicFeed::new(channel).unwrap();
+            feed.create_to(&root.join("news.json")).unwrap();
+            Ok::<(), CommandError>(())
+        });
+        created.unwrap();
+        st.call(|app| {
+            let seed = app.identity().signing_seed().to_string();
+            let channel = social_paid::PublicChannel::create("news", &seed, "Подмена", "", 101).unwrap();
+            let feed = social_paid::PublicFeed::new(channel).unwrap();
+            assert!(feed.create_to(&root.join("news.json")).is_err());
+            Ok::<(), CommandError>(())
+        }).unwrap();
+
+        let catalog = social_public::PublicCatalog::open(&root).unwrap();
+        assert_eq!(catalog.len(), 1);
+        let summary = summary_of(catalog.get("news").unwrap());
+        assert_eq!(summary.title, "Новости");
+        assert_eq!(summary.posts, 0);
+
+        let post = st.call(|app| {
+            app.publish_post(
+                200,
+                "первый пост",
+                social_post::PostAudience { id: "news".into(), epoch: 1, spec: social_rights::Audience::Public },
+                vec![],
+                200,
+            )
+            .map_err(CommandError::from)
+        }).unwrap();
+        let mut catalog = social_public::PublicCatalog::open(&root).unwrap();
+        assert!(catalog.publish(post).unwrap());
+
+        let view = catalog.get("news").unwrap();
+        assert_eq!(view.posts.len(), 1);
+        assert_eq!(view.posts[0].post.body, "первый пост");
+        assert_eq!(view.latest(1)[0].post.body, "первый пост");
+    }
+
+    #[test]
+    fn public_post_is_not_mailed_to_contacts() {
+        let st = state();
+        let post = st.call(|app| {
+            app.publish_post(
+                300,
+                "публичный",
+                social_post::PostAudience { id: "pub".into(), epoch: 1, spec: social_rights::Audience::Public },
+                vec![],
+                300,
+            )
+            .map_err(CommandError::from)
+        }).unwrap();
+        assert!(matches!(post.post.audience.spec, social_rights::Audience::Public));
+        let outbox_empty = st.call(|app| Ok(app.outbox().is_empty())).unwrap();
+        assert!(outbox_empty, "публичный пост не уходит в адресный outbox");
     }
 
     #[test]

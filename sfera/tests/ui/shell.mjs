@@ -4,9 +4,9 @@ import { TABS, COMPANION, companionLabelKey, createShell } from '../../src/ui/sh
 
 function fail(msg) { console.error(`FAIL: ${msg}`); process.exit(1); }
 
-if (TABS.length !== 5) fail(`expected 5 tabs, got ${TABS.length}`);
+if (TABS.length !== 6) fail(`expected 6 tabs, got ${TABS.length}`);
 const ids = TABS.map((t) => t.id).join(',');
-if (ids !== 'feed,contacts,create,storage,profile') fail(`unexpected tabs: ${ids}`);
+if (ids !== 'feed,contacts,channels,create,storage,profile') fail(`unexpected tabs: ${ids}`);
 for (const t of TABS) {
   if (!t.labelKey.startsWith('nav_')) fail(`tab ${t.id} must use a locale key`);
 }
@@ -20,4 +20,4 @@ if (shell.active() !== 'profile') fail('failed select changed state');
 if (companionLabelKey(true) !== COMPANION.openLabelKey) fail('installed companion label');
 if (companionLabelKey(false) !== COMPANION.installLabelKey) fail('missing companion label');
 
-console.log('OK: Sfera UI shell — 5 вкладок, контекстная кнопка мессенджера');
+console.log('OK: Sfera UI shell — 6 вкладок, контекстная кнопка мессенджера');

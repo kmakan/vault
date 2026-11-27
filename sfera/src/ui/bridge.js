@@ -11,6 +11,10 @@ export const COMMANDS = Object.freeze({
   linkAccept: 'social_link_accept',
   identity: 'social_identity',
   feed: 'social_feed',
+  publicChannels: 'social_public_channels',
+  publicChannel: 'social_public_channel',
+  createPublicChannel: 'social_create_public_channel',
+  publishPublicPost: 'social_publish_public_post',
   contacts: 'social_contacts',
   setContactRole: 'social_set_contact_role',
   roleOptions: 'social_role_options',
@@ -70,6 +74,22 @@ export function createBridge(invoke) {
 
     feed() {
       return invoke(COMMANDS.feed);
+    },
+
+    publicChannels() {
+      return invoke(COMMANDS.publicChannels);
+    },
+
+    publicChannel(id) {
+      return invoke(COMMANDS.publicChannel, { id });
+    },
+
+    createPublicChannel(req) {
+      return invoke(COMMANDS.createPublicChannel, { req });
+    },
+
+    publishPublicPost(req) {
+      return invoke(COMMANDS.publishPublicPost, { req });
     },
 
     contacts() {

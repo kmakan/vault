@@ -642,6 +642,23 @@ impl PublicFeed {
         std::fs::rename(&tmp, path).map_err(|e| PublicFeedError::Io(e.to_string()))
     }
 
+    /// Создать новую витрину без затирания существующей. `create_new(true)`
+    /// атомарно отвергает уже существующий id даже при двух процессах.
+    pub fn create_to(&self, path: &Path) -> Result<(), PublicFeedError> {
+        let body = serde_json::to_vec(self).map_err(|e| PublicFeedError::Format(e.to_string()))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| PublicFeedError::Io(e.to_string()))?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| PublicFeedError::Io(e.to_string()))?;
+        file.write_all(&body)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| PublicFeedError::Io(e.to_string()))
+    }
+
     /// Нет файла — нет витрины. Битый или подменённый файл — ошибка.
     pub fn load_from(path: &Path) -> Result<Option<Self>, PublicFeedError> {
         if !path.exists() {

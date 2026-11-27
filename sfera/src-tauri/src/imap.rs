@@ -448,7 +448,7 @@ mod tests {
         let post = social_post::compose(author_seed, 101, "Секретный пост", social_post::PostAudience {
             id: "imap-test".into(), epoch: 1, spec: social_rights::Audience::AllContacts,
         }, vec![]).unwrap();
-        let post_plaintext = social_delivery::post_envelope_json(&post).unwrap();
+        let post_plaintext = social_post::post_envelope_json(&post).unwrap();
         let post_envelope = social_delivery::seal_payload(
             &post_plaintext,
             &sender.sender_material(),

@@ -95,6 +95,20 @@ const bridge = {
   commentOnPost: async (req) => { calls.push({ command: 'comment', ...req }); return { comment: { id: 'c1' } }; },
   reactToPost: async (req) => { calls.push({ command: 'reaction', ...req }); return { reaction: { version: 1 } }; },
   companionAction: async (handled) => ({ install: !handled, target: 'vault://open' }),
+  publicChannels: async () => [{ v: 7, id: 'news', title: 'Новости', description: '', creator_fp: 'aa:bb', created_at: 1, posts: 1, latest_ts: 1000 }],
+  publicChannel: async (id) => ({
+    v: 7,
+    channel: { v: 7, id, title: 'Новости', description: '', creator_fp: 'aa:bb', created_at: 1, posts: 1, latest_ts: 1000 },
+    posts: [{ id: 'pub1', ts: 1000, body: 'публичный пост' }],
+  }),
+  createPublicChannel: async (req) => {
+    calls.push({ command: 'create-channel', ...req });
+    return { v: 7, id: req.id, title: req.title, description: req.description, creator_fp: 'aa:bb', created_at: req.now, posts: 0, latest_ts: null };
+  },
+  publishPublicPost: async (req) => {
+    calls.push({ command: 'publish-public', ...req });
+    return { id: 'pub2', ts: req.ts, body: req.body };
+  },
 };
 
 const api = createAppState({ bridge, locale: 'ru', theme: 'dark', clock: () => 1000 });
@@ -109,6 +123,7 @@ check(s.apiVersion === 7, 'api version comes from Rust');
 check(s.link.linked === false, 'link status loaded');
 check(s.identity.fp === 'aa:bb', 'identity loaded');
 check(s.feed.length === 1, 'feed loaded');
+check(s.publicChannels.length === 1 && s.publicChannels[0].id === 'news', 'public channels loaded');
 check(s.contacts.length === 2, 'contacts loaded');
 check(s.roleOptions.length === 2 && s.roleOptions[0].value === 'friend', 'role presets loaded from Rust');
 check(s.audiences[0].id === 'sphere_close', 'audiences loaded');
@@ -248,6 +263,23 @@ await api.commentOnPost('p1', 'Ответ');
 check(calls.at(-1).command === 'comment' && !('comment_id' in calls.at(-1)), 'comment id is assigned in Rust, not UI');
 await api.reactToPost('p1', '❤️');
 check(calls.at(-1).command === 'reaction' && !('version' in calls.at(-1)), 'reaction version is assigned in Rust, not UI');
+
+const channelView = await api.loadPublicChannel('news');
+check(channelView.posts[0].body === 'публичный пост', 'public channel view comes from Rust');
+check(s.publicChannelViews.news.channel.id === 'news', 'public channel view stored by id');
+
+const createdChannel = await api.createPublicChannel('tech', 'Техно', 'Описание');
+check(createdChannel.id === 'tech', 'created public channel passed through');
+check(calls.at(-1).command === 'create-channel' && calls.at(-1).v === 7, 'channel creation uses Rust version');
+check(calls.at(-1).now === 1000, 'channel creation time from clock');
+
+const publicPost = await api.publishPublicPost('news', 'второй пост');
+check(publicPost.id === 'pub2', 'public post id from Rust');
+check(calls.filter((c) => c.command === 'publish-public').length === 1, 'one public publish call');
+const publishCall = calls.find((c) => c.command === 'publish-public');
+check(publishCall.channel_id === 'news' && publishCall.body === 'второй пост', 'public publish payload passed through');
+check(publishCall.v === 7 && publishCall.ts === 1000 && publishCall.now === 1000, 'public publish version and clock');
+check(s.publicChannelViews.news.posts.length === 1, 'channel view refreshed after publish');
 
 failFeed = true;
 const loaded = await api.loadFeed();

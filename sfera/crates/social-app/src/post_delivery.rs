@@ -27,11 +27,11 @@ pub fn publish(
             ).into());
         }
         if let Some(sender) = sender {
-            let plaintext = social_delivery::post_envelope_json(&post)
+            let plaintext = social_post::post_envelope_json(&post)
                 .map_err(|e| AppError::Canonical(e.to_string()))?;
             let batch = social_bridge::seal_for_contacts(&plaintext, sender, &recipients);
             for item in batch.sealed {
-                let id = social_delivery::post_publication_id(&post, &item.to)
+                let id = social_post::post_publication_id(&post, &item.to)
                     .map_err(|e| AppError::Canonical(e.to_string()))?;
                 let wire = serde_json::to_string(&item.envelope)
                     .map_err(|e| AppError::Canonical(e.to_string()))?;

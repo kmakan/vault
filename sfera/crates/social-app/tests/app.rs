@@ -113,7 +113,7 @@ fn addressed_post_is_encrypted_to_audience_and_feed_precedes_discussion() {
 
     let plaintext = social_delivery::open_payload(&envelope, bob.x25519_private_hex(),
         &envelope.from_x25519, bob.pq_seed_hex()).unwrap();
-    let received = social_delivery::parse_post_envelope_json(&plaintext).unwrap();
+    let received = social_post::parse_post_envelope_json(&plaintext).unwrap();
     assert_eq!(received, post);
     let mut reader = app(Quota::new(60, 10_000, 10, 0), &dir.path().join("reader"));
     assert_eq!(reader.receive_post_payload(received.clone(), 51).unwrap(),

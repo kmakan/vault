@@ -4,6 +4,7 @@
 import { computed, onMounted, onUnmounted } from 'vue';
 import FeedView from './views/FeedView.vue';
 import ContactsView from './views/ContactsView.vue';
+import ChannelsView from './views/ChannelsView.vue';
 import CreateView from './views/CreateView.vue';
 import StorageView from './views/StorageView.vue';
 import ProfileView from './views/ProfileView.vue';
@@ -17,6 +18,7 @@ const props = defineProps({
 const VIEWS = {
   feed: FeedView,
   contacts: ContactsView,
+  channels: ChannelsView,
   create: CreateView,
   storage: StorageView,
   profile: ProfileView,

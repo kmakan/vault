@@ -19,6 +19,9 @@ social-media-kind = { path = "../social-media-kind" }
 social-manifest = { path = "../social-manifest" }
 social-library = { path = "../social-library" }
 social-post = { path = "../social-post" }
+social-public = { path = "../social-public" }
+social-paid = { path = "../social-paid" }
+social-rights = { path = "../social-rights" }
 storage-api = { path = "../storage-api" }
 base64 = "0.22"
 hex = "0.4"
