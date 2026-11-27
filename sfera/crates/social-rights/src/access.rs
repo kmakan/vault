@@ -65,6 +65,23 @@ pub fn evaluate(
     audience: &Audience,
     viewer_spheres: &[String],
 ) -> Access {
+    // Блокировка сильнее публичности: заблокированный не видит и публичный пост.
+    if matches!(relation, RelationState::Blocked) {
+        return Access {
+            delivered: false,
+            permissions: PermissionSet::none(),
+            deny: Some(DenyReason::Blocked),
+        };
+    }
+    // Публичный канал читается без контакта. Это осознанно публичный контент,
+    // но прав больше чтения он не даёт.
+    if audience.is_public() {
+        return Access {
+            delivered: true,
+            permissions: PermissionSet::public_read(),
+            deny: None,
+        };
+    }
     match relation {
         RelationState::Blocked => Access {
             delivered: false,

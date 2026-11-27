@@ -59,6 +59,41 @@ fn audience_membership() {
     assert!(!Audience::Selected { fps: vec![b.clone()] }.contains(&a, &[]));
     assert!(Audience::AllExcept { fps: vec![b] }.contains(&a, &[]));
     assert!(!Audience::AllExcept { fps: vec![a.clone()] }.contains(&a, &[]));
+    assert!(Audience::Public.contains(&Fingerprint::from_str(""), &[]));
+}
+
+#[test]
+fn public_audience_is_read_only_and_needs_no_contact() {
+    let a = fp(2);
+    let access = evaluate(
+        &a,
+        RelationState::None,
+        Role::Restricted,
+        &RoleOverrides::default(),
+        &Audience::Public,
+        &[],
+    );
+    assert!(access.delivered, "публичный пост виден без контакта");
+    assert!(access.can_view_media(), "публичное медиа открыто");
+    assert!(access.can_view_history(), "публичная история открыта");
+    assert!(!access.can_react(), "публичность не даёт реакций");
+    assert!(!access.permissions.can_request_chat);
+    assert!(access.deny.is_none());
+}
+
+#[test]
+fn blocked_stays_denied_even_for_public_audience() {
+    let a = fp(2);
+    let access = evaluate(
+        &a,
+        RelationState::Blocked,
+        Role::Close,
+        &RoleOverrides::default(),
+        &Audience::Public,
+        &[],
+    );
+    assert!(!access.delivered);
+    assert_eq!(access.deny, Some(DenyReason::Blocked));
 }
 
 #[test]

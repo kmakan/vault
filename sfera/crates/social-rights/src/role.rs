@@ -43,6 +43,19 @@ impl PermissionSet {
             profile: ProfileView::None,
         }
     }
+
+    /// Публичный пост: текст, медиа и история открыты, но это не контакт —
+    /// реакции и личный чат остаются закрытыми. Публичность не даёт прав
+    /// сверх чтения.
+    pub const fn public_read() -> Self {
+        Self {
+            can_view_media: true,
+            can_react: false,
+            can_view_history: true,
+            can_request_chat: false,
+            profile: ProfileView::Brief,
+        }
+    }
 }
 
 /// Роли из таблицы ADR-006 §4.2.

@@ -16,6 +16,10 @@ pub enum Audience {
     Selected { fps: Vec<Fingerprint> },
     /// Все контакты, кроме перечисленных.
     AllExcept { fps: Vec<Fingerprint> },
+    /// Публичный канал: контент осознанно публичный, без E2E. Доставляется
+    /// не почтой на каждый контакт, а публичной витриной/релеем; зритель не
+    /// обязан быть контактом. Приватные сферы остаются E2E.
+    Public,
 }
 
 impl Audience {
@@ -27,6 +31,12 @@ impl Audience {
             Audience::Sphere { id } => viewer_spheres.iter().any(|s| s == id),
             Audience::Selected { fps } => fps.iter().any(|f| f.same(viewer)),
             Audience::AllExcept { fps } => !fps.iter().any(|f| f.same(viewer)),
+            Audience::Public => true,
         }
+    }
+
+    /// Публичная аудитория не шифруется и не рассылается по книге контактов.
+    pub fn is_public(&self) -> bool {
+        matches!(self, Audience::Public)
     }
 }

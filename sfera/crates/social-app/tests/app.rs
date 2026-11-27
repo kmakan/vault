@@ -65,6 +65,28 @@ fn published_post_goes_to_outbox_then_into_feed() {
 }
 
 #[test]
+fn public_post_is_local_and_not_emailed_to_contacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(Quota::new(60, 10_000, 10, 0), dir.path());
+    let post = app
+        .publish_post(
+            100,
+            "публичный пост",
+            PostAudience {
+                id: "public".into(),
+                epoch: 1,
+                spec: Audience::Public,
+            },
+            vec![],
+            50,
+        )
+        .unwrap();
+    assert_eq!(post.post.audience.spec, Audience::Public);
+    assert_eq!(app.outbox().len(), 0, "публичный пост не рассылается почтой");
+    assert_eq!(app.feed().len(), 1);
+}
+
+#[test]
 fn addressed_post_is_encrypted_to_audience_and_feed_precedes_discussion() {
     let dir = tempfile::tempdir().unwrap();
     let mut author = app(Quota::new(60, 10_000, 10, 0), &dir.path().join("author"));

@@ -316,7 +316,7 @@ pub struct PostDto { pub v: u8, pub id: String, pub ts: u64 }
 /// Rust, подписи для людей — в локалях UI.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudienceViewDto {
-    /// `all` | `sphere` | `selected` | `except`.
+    /// `all` | `sphere` | `selected` | `except` | `public`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -336,6 +336,7 @@ fn audience_view(spec: &Audience) -> AudienceViewDto {
         Audience::AllExcept { fps } => {
             AudienceViewDto { kind: "except".into(), id: None, count: fps.len() }
         }
+        Audience::Public => AudienceViewDto { kind: "public".into(), id: None, count: 0 },
     }
 }
 
@@ -1322,6 +1323,11 @@ mod tests {
         let except = audience_view(&Audience::AllExcept { fps: vec![fp("02:00:00:00:00:00:00:00:****")] });
         assert_eq!(except.kind, "except");
         assert_eq!(except.count, 1);
+
+        let public = audience_view(&Audience::Public);
+        assert_eq!(public.kind, "public");
+        assert_eq!(public.id, None);
+        assert_eq!(public.count, 0);
     }
 
     #[test]

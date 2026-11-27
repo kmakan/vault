@@ -9,12 +9,19 @@ use social_discussion::{
 };
 use social_model::Fingerprint;
 use social_post::SignedPost;
+use social_rights::Audience;
 
 pub fn recipients(
     post: &SignedPost,
     author_contacts: &social_contacts::ContactBook,
     peers: &[social_link::LinkedContact],
 ) -> Vec<social_link::LinkedContact> {
+    // Публичный пост не рассылается по книге контактов: он публикуется на
+    // витрине/релее. Иначе «публичный» стал бы почтовой рассылкой всем
+    // контактам и всё равно остался бы E2E-конвертом.
+    if matches!(post.post.audience.spec, Audience::Public) {
+        return Vec::new();
+    }
     // До протокола делегированной рассылки ответ распространяет сам участник.
     // Книга автора поста ограничивает исходную аудиторию; peers дают ключи
     // собеседников участника. Их пересечение не раскрывает чужую адресную книгу.
