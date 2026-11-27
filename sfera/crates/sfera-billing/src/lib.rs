@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod creator;
+
 /// Одна позиция витрины — точная форма ответа `/relay/plans`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerPlan {
