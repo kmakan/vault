@@ -111,30 +111,67 @@ class Command(BaseCommand):
         self.create_landing(site)
 
     def create_landing(self, site: Site) -> None:
+        is_en = site.domain.endswith(".tech")
+        title = "Sfera — a social network on your email" if is_en else "Sfera — социальная сеть на вашей почте"
+        subtitle = (
+            "Distributed social network over ordinary email"
+            if is_en
+            else "Распределённая социальная сеть на вашей почте"
+        )
+        description = (
+            "Feeds, circles and public channels. Private posts are encrypted for your audience; your data stays with you."
+            if is_en
+            else "Лента, сферы и публичные каналы Sfera. Личные посты шифруются, данные остаются у вас."
+        )
+        lead = (
+            "Sfera is a separate app: a feed, circles of recipients and public pages. "
+            "Private posts are encrypted for the chosen audience; public pages are open by design. "
+            "It does not replace Vault chats."
+            if is_en
+            else "Sfera — отдельное приложение: лента, круги получателей и публичные страницы. "
+            "Личные посты шифруются для выбранной аудитории, публичные — открыты по замыслу. "
+            "Это не замена чатам Vault."
+        )
+        card_start = (
+            "Installation, first launch, device key and backup."
+            if is_en
+            else "Установка, первый запуск, ключ устройства и резервная копия."
+        )
+        card_mail = (
+            "SMTP/IMAP, invitations, circles and roles."
+            if is_en
+            else "SMTP/IMAP, приглашения, сферы и роли."
+        )
+        card_public = (
+            "What is ready in the core and what is not in the UI yet."
+            if is_en
+            else "Что уже готово в ядре и чего ещё нет в интерфейсе."
+        )
+        open_guide = "Open the guide" if is_en else "Открыть руководство"
+        email_link = "Set up email" if is_en else "Настроить почту"
+        all_docs = "All documentation" if is_en else "Все разделы руководства"
         Page.objects.update_or_create(
             site=site,
             slug="sfera",
             defaults={
                 "title": "Sfera",
-                "subtitle": "Распределённая социальная сеть на вашей почте",
-                "seo_title": "Sfera — социальная сеть на вашей почте",
-                "seo_description": "Лента, сферы и публичные каналы Sfera. Личные посты шифруются, данные остаются у вас.",
+                "subtitle": subtitle,
+                "seo_title": title,
+                "seo_description": description,
                 "canonical_path": "/sfera",
                 "body_html": (
-                    '<p class="lead">Sfera — отдельное приложение: лента, круги получателей '
-                    "и публичные страницы. Личные посты шифруются для выбранной аудитории, "
-                    "публичные — открыты по замыслу. Это не замена чатам Vault.</p>"
+                    f'<p class="lead">{lead}</p>'
                     '<div class="cards">'
-                    '<div class="card"><h3>Начало работы</h3><p>Установка, первый запуск, '
-                    'ключ устройства и резервная копия.</p><p><a class="btn btn-primary" '
-                    'href="/docs/getting-started">Открыть руководство</a></p></div>'
-                    '<div class="card"><h3>Почта и контакты</h3><p>SMTP/IMAP, приглашения, '
-                    'сферы и роли.</p><p><a class="btn btn-ghost" href="/docs/email">Настроить почту</a></p></div>'
-                    '<div class="card"><h3>Публичные каналы</h3><p>Что уже готово в ядре и '
-                    'чего ещё нет в интерфейсе.</p><p><a class="btn btn-ghost" '
-                    'href="/docs/public-channels">Подробнее</a></p></div>'
+                    f'<div class="card"><h3>{"Getting started" if is_en else "Начало работы"}</h3>'
+                    f'<p>{card_start}</p><p><a class="btn btn-primary" '
+                    f'href="/sfera/docs/getting-started">{open_guide}</a></p></div>'
+                    f'<div class="card"><h3>{"Email and contacts" if is_en else "Почта и контакты"}</h3>'
+                    f'<p>{card_mail}</p><p><a class="btn btn-ghost" href="/sfera/docs/email">{email_link}</a></p></div>'
+                    f'<div class="card"><h3>{"Public channels" if is_en else "Публичные каналы"}</h3>'
+                    f'<p>{card_public}</p><p><a class="btn btn-ghost" '
+                    f'href="/sfera/docs/public-channels">{"Read more" if is_en else "Подробнее"}</a></p></div>'
                     "</div>"
-                    '<p><a class="btn btn-primary" href="/docs">Все разделы руководства</a></p>'
+                    f'<p><a class="btn btn-primary" href="/sfera/docs">{all_docs}</a></p>'
                 ),
             },
         )
@@ -143,5 +180,10 @@ class Command(BaseCommand):
             location=NavigationItem.Location.HEADER,
             label="Sfera",
             defaults={"url": "/sfera", "order": 100},
+        )
+        Page.objects.update_or_create(
+            site=site,
+            slug="sfera-en",
+            defaults={"title": "Sfera", "is_published": False},
         )
 

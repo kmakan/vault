@@ -35,6 +35,24 @@ SLUGS = {
     "Чем это отличается от PGP?": "faq-pgp",
 }
 
+SLUGS_EN = {
+    "1. Install the app": "faq-install",
+    "2. Sign in: your email is the transport": "faq-login",
+    "3. Keys and adding a contact": "faq-contacts",
+    "4. Chats: messages, files, groups": "faq-chats",
+    "Channels: broadcast to your subscribers": "faq-channels",
+    "Bots (experimental)": "faq-bots",
+    "5. Calls (beta)": "faq-calls",
+    "Delivery modes and notifications": "faq-delivery",
+    "Backups and moving to a new device": "faq-backup",
+    "Polls, forwarding, drafts, location and folders": "faq-features",
+    "Email? Isn't that slow?": "faq-email-speed",
+    "What does my mail provider see?": "faq-provider",
+    "What does it cost?": "faq-price",
+    "What if my mail provider blocks the account?": "faq-provider-block",
+    "How is this different from PGP?": "faq-pgp",
+}
+
 ORDER = {
     "1. Установка приложения": 101,
     "2. Вход: ваша почта как транспорт": 102,
@@ -62,11 +80,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         site = Site.objects.get(domain=options["domain"])
+        slugs = SLUGS_EN if options["domain"].endswith(".tech") else SLUGS
         imported = 0
         with transaction.atomic():
             DocPage.objects.filter(site=site, product="vault", slug__startswith="faq-").delete()
             for item in FaqItem.objects.filter(site=site, product="vault").order_by("order", "id"):
-                slug = SLUGS.get(item.question)
+                slug = slugs.get(item.question)
                 if slug is None:
                     self.stderr.write(self.style.WARNING(f"No doc slug for FAQ: {item.question}"))
                     continue
@@ -80,7 +99,7 @@ class Command(BaseCommand):
                     body_markdown="",
                     body_html=item.answer_html,
                     version="0.1.294",
-                    order=ORDER[item.question],
+                    order=ORDER.get(item.question, item.order + 101),
                     is_published=True,
                 )
                 imported += 1

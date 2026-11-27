@@ -20,7 +20,9 @@ python manage.py migrate
 python manage.py import_legacy_site --source /home/maksim/vault-site
 python manage.py import_vault_docs --source /home/maksim/whisper/docs/USER-GUIDE.md
 python manage.py import_vault_faq
+python manage.py import_vault_faq --domain vault-msg.tech
 python manage.py import_sfera_docs --source /home/maksim/whisper/sfera/docs/USER-GUIDE-DRAFT.md
+python manage.py import_sfera_docs --source /home/maksim/whisper/sfera/docs/USER-GUIDE-DRAFT.md --domain vault-msg.tech
 python manage.py runserver 127.0.0.1:8000
 ```
 

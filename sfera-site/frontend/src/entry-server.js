@@ -88,8 +88,10 @@ export async function render({ url = '/', host = DEFAULT_SITE } = {}) {
       state.tree = tree.tree || []
       state.docsBase = base
       state.docsProduct = product
-      state.docsTitle = product === 'vault' ? 'Руководство Vault' : 'Руководство Sfera'
-      state.docsLabel = product === 'vault' ? 'Руководство Vault' : 'Руководство Sfera'
+      state.docsTitle = product === 'vault'
+        ? (shell.site.locale === 'en' ? 'Vault guide' : 'Руководство Vault')
+        : (shell.site.locale === 'en' ? 'Sfera guide' : 'Руководство Sfera')
+      state.docsLabel = state.docsTitle
       if (path === '/docs' || path === '/docs/') state.path = base
       state.view = 'docs'
       title = state.docsTitle
@@ -102,7 +104,9 @@ export async function render({ url = '/', host = DEFAULT_SITE } = {}) {
       state.doc = await get(`/api/v1/docs/${encodeURIComponent(slug)}/?product=${product}`, siteHost)
       state.docsBase = base
       state.docsProduct = product
-      state.docsLabel = vault ? 'Руководство Vault' : 'Руководство Sfera'
+      state.docsLabel = vault
+        ? (shell.site.locale === 'en' ? 'Vault guide' : 'Руководство Vault')
+        : (shell.site.locale === 'en' ? 'Sfera guide' : 'Руководство Sfera')
       if (path.startsWith('/docs/')) state.path = `${base}/${slug}`
       state.view = 'doc'
       title = state.doc.title || title
