@@ -32,6 +32,7 @@ use social_delivery::{
     unwrap_audience_key, wrap_audience_key, DeliveryError, RecipientKeyMaterial,
     SenderKeyMaterial, WrappedAudienceKey,
 };
+use social_model::post as signing;
 use social_model::{Author, Fingerprint};
 
 /// Идентификатор ключа эпохи: SHA-256 от 32 байт ключа, hex.
@@ -238,6 +239,152 @@ impl fmt::Display for AccessError {
 }
 
 impl std::error::Error for AccessError {}
+
+// --- Ссылка-приглашение в канал --------------------------------------------
+//
+// Приглашение — только НАВИГАЦИЯ: «вот канал, вот создатель, вот срок».
+// Оно не даёт подписку и не обходит оплату. Подписку выдаёт создатель после
+// оплаты/решения; право на ключ проверяется отдельно (`access`).
+//
+// Подпись создателя обязательна: иначе чужой человек собрал бы ссылку от
+// имени автора и увёл подписчиков на свой канал.
+
+pub const CHANNEL_INVITE_DOMAIN: &[u8] = b"sfera-channel-invite:v1\0";
+pub const CHANNEL_INVITE_VERSION: u8 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelInvite {
+    pub v: u8,
+    pub channel_id: String,
+    /// Создатель канала: отпечаток и публичный ключ для проверки подписи.
+    pub creator: Author,
+    pub title: String,
+    pub created_at: u64,
+    /// `0` — бессрочное; иначе unix-время окончания.
+    pub expires_at: u64,
+    /// Неугадываемый код: hex SHA-256 от seed, пришедшего извне.
+    pub code: String,
+    pub sig: String,
+}
+
+impl ChannelInvite {
+    #[must_use]
+    pub fn unsigned(&self) -> Self {
+        Self { sig: String::new(), ..self.clone() }
+    }
+
+    /// Собрать и подписать приглашение ключом создателя канала.
+    ///
+    /// `code_seed` приходит извне (как в `social-invite`): ядро не прячет
+    /// генерацию случайности, поведение детерминировано и тестируемо.
+    pub fn create(
+        channel: &PaidChannel,
+        creator_seed_hex: &str,
+        code_seed: &[u8],
+        now: u64,
+        expires_at: u64,
+    ) -> Result<Self, ChannelInviteError> {
+        let pub_key = signing::public_key_hex(creator_seed_hex)
+            .map_err(|_| ChannelInviteError::BadSignature)?;
+        let creator = Author::from_public_key_hex(&pub_key)
+            .map_err(|_| ChannelInviteError::BadSignature)?;
+        if !channel.creator.same(&creator.fp) {
+            return Err(ChannelInviteError::NotCreator);
+        }
+        if code_seed.is_empty() {
+            return Err(ChannelInviteError::EmptyCodeSeed);
+        }
+        if expires_at != 0 && expires_at <= now {
+            return Err(ChannelInviteError::BadPeriod);
+        }
+        let mut invite = Self {
+            v: CHANNEL_INVITE_VERSION,
+            channel_id: channel.id.clone(),
+            creator,
+            title: channel.title.clone(),
+            created_at: now,
+            expires_at,
+            code: hex::encode(Sha256::digest(code_seed)),
+            sig: String::new(),
+        };
+        invite.sig = signing::sign_with_domain(
+            CHANNEL_INVITE_DOMAIN,
+            creator_seed_hex,
+            &invite.unsigned(),
+        )
+        .map_err(|_| ChannelInviteError::BadSignature)?;
+        Ok(invite)
+    }
+
+    /// Проверить форму и подпись. Срок здесь не проверяется — для него
+    /// `valid_at`, чтобы «просрочено» отличалось от «подделано».
+    pub fn verify(&self) -> Result<(), ChannelInviteError> {
+        if self.v != CHANNEL_INVITE_VERSION {
+            return Err(ChannelInviteError::UnsupportedVersion);
+        }
+        if self.channel_id.trim().is_empty() {
+            return Err(ChannelInviteError::EmptyChannel);
+        }
+        if self.code.len() != 64 || !self.code.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(ChannelInviteError::BadCode);
+        }
+        if self.expires_at != 0 && self.expires_at <= self.created_at {
+            return Err(ChannelInviteError::BadPeriod);
+        }
+        let derived = Fingerprint::from_public_key_hex(&self.creator.pub_key)
+            .map_err(|_| ChannelInviteError::BadSignature)?;
+        if !derived.same(&self.creator.fp) {
+            return Err(ChannelInviteError::BadSignature);
+        }
+        if !signing::verify_with_domain(
+            CHANNEL_INVITE_DOMAIN,
+            &self.unsigned(),
+            &self.creator,
+            &self.sig,
+        ) {
+            return Err(ChannelInviteError::BadSignature);
+        }
+        Ok(())
+    }
+
+    /// Приглашение действительно сейчас: подпись верна и срок не вышел.
+    pub fn valid_at(&self, now: u64) -> Result<(), ChannelInviteError> {
+        self.verify()?;
+        if self.expires_at != 0 && now >= self.expires_at {
+            return Err(ChannelInviteError::Expired);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelInviteError {
+    UnsupportedVersion,
+    EmptyChannel,
+    EmptyCodeSeed,
+    NotCreator,
+    BadPeriod,
+    BadCode,
+    BadSignature,
+    Expired,
+}
+
+impl fmt::Display for ChannelInviteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::UnsupportedVersion => "channel invite version is not supported",
+            Self::EmptyChannel => "channel invite has no channel id",
+            Self::EmptyCodeSeed => "channel invite code seed is empty",
+            Self::NotCreator => "invite signer is not the channel creator",
+            Self::BadPeriod => "channel invite period is invalid",
+            Self::BadCode => "channel invite code is malformed",
+            Self::BadSignature => "channel invite signature is invalid",
+            Self::Expired => "channel invite has expired",
+        })
+    }
+}
+
+impl std::error::Error for ChannelInviteError {}
 
 // --- Локальное хранилище каналов -------------------------------------------
 //
@@ -654,6 +801,45 @@ mod tests {
                 .unwrap_err(),
             DeliveryError::NotAMember
         );
+    }
+
+    fn sample_invite() -> ChannelInvite {
+        ChannelInvite::create(&channel(), CREATOR_SEED, b"invite-seed", 1_000, 10_000).unwrap()
+    }
+
+    #[test]
+    fn channel_invite_is_signed_and_expires() {
+        let invite = sample_invite();
+        assert_eq!(invite.verify(), Ok(()));
+        assert!(invite.valid_at(1_000).is_ok());
+        assert!(invite.valid_at(9_999).is_ok());
+        assert_eq!(invite.valid_at(10_000), Err(ChannelInviteError::Expired));
+        assert_eq!(invite.code.len(), 64);
+    }
+
+    #[test]
+    fn channel_invite_rejects_foreign_creator_and_tampering() {
+        let channel = channel();
+        assert_eq!(
+            ChannelInvite::create(&channel, SUBJECT_SEED, b"x", 1, 0).unwrap_err(),
+            ChannelInviteError::NotCreator
+        );
+
+        let mut invite = sample_invite();
+        invite.title = "другой канал".into();
+        assert_eq!(invite.verify().unwrap_err(), ChannelInviteError::BadSignature);
+
+        let mut invite = sample_invite();
+        invite.creator.fp = fp(OTHER_SEED);
+        assert_eq!(invite.verify().unwrap_err(), ChannelInviteError::BadSignature);
+    }
+
+    #[test]
+    fn channel_invite_does_not_subscribe_by_itself() {
+        let channel = channel();
+        let invite = sample_invite();
+        assert!(invite.verify().is_ok());
+        assert!(!channel.is_subscriber(&fp(SUBJECT_SEED)));
     }
 
     #[test]
