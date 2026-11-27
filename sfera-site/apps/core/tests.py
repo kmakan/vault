@@ -58,6 +58,14 @@ class SiteRoutingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
 
+    def test_sitemap_and_robots_are_host_aware(self):
+        sitemap = self.client.get("/sitemap.xml", HTTP_HOST="vault-msg.tech")
+        self.assertEqual(sitemap.status_code, 200)
+        body = sitemap.content.decode()
+        self.assertIn("vault-msg.tech", body)
+        robots = self.client.get("/robots.txt", HTTP_HOST="vault-msg.tech")
+        self.assertIn("https://vault-msg.tech/sitemap.xml", robots.content.decode())
+
     def test_legacy_redirect_is_data_driven(self):
         Redirect.objects.create(site=self.ru, old_path="/privacy.html", new_path="/legal/privacy")
         response = self.client.get("/privacy.html", HTTP_HOST="vault-msg.ru")

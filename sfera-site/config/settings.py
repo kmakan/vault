@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.sites",
     "django.contrib.staticfiles",
+    "django.contrib.sitemaps",
     "rest_framework",
     "apps.core",
     "apps.pages",
@@ -133,7 +134,8 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-SITE_ID = 1
+# Site is resolved by host in SiteProfileMiddleware; do not pin SITE_ID,
+# otherwise django.contrib.sites ignores the request host (sitemap/robots).
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],

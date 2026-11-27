@@ -3,8 +3,11 @@
 from django.contrib import admin
 from django.urls import include, path
 
+from apps.core.urls import seo_urlpatterns
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("", include((seo_urlpatterns, "core_seo"))),
     path("api/v1/", include("apps.core.urls")),
     path("api/v1/pages/", include("apps.pages.urls")),
     path("api/v1/docs/", include("apps.docs.urls")),
