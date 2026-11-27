@@ -1,0 +1,6 @@
+Django==6.0.10
+djangorestframework==3.18.3
+beautifulsoup4==4.15.0
+PyYAML==6.0.4
+Markdown==3.11.4
+psycopg[binary]==3.3.9

@@ -1,0 +1,26 @@
+[project]
+name = "sfera-site"
+version = "0.1.0"
+description = "Public sites for Vault and Sfera: Django REST + Vue SSR"
+requires-python = ">=3.12"
+dependencies = [
+    "Django==6.0.10",
+    "djangorestframework==3.18.3",
+    "beautifulsoup4==4.15.0",
+    "PyYAML==6.0.4",
+    "Markdown==3.11.4",
+    "psycopg[binary]==3.3.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "pytest-django==4.14.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["tests.py", "test_*.py", "*_tests.py"]

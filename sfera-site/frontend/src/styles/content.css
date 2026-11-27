@@ -1,0 +1,146 @@
+/* Page-level content retained from the legacy legal/pricing pages. */
+
+main.content-page {
+  padding: 56px 0 80px;
+}
+.content-page h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.2;
+  margin-bottom: 18px;
+}
+.content-page h2 {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 34px 0 12px;
+}
+.content-page h3 {
+  font-size: 17px;
+  margin: 22px 0 8px;
+}
+.content-page p,
+.content-page li {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.75;
+}
+.content-page p {
+  margin: 10px 0;
+}
+.content-page ul,
+.content-page ol {
+  margin: 10px 0 10px 22px;
+}
+.content-page li {
+  margin: 5px 0;
+}
+.content-page a {
+  color: var(--gold);
+}
+.content-page table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+  font-size: 14px;
+  min-width: 620px;
+}
+.content-page th,
+.content-page td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+}
+.content-page th {
+  color: var(--text);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.content-page .lead {
+  font-size: 17px;
+  color: var(--muted);
+  max-width: 760px;
+}
+.content-page .updated {
+  font-size: 12px;
+  color: var(--violet);
+  margin-bottom: 22px;
+}
+.content-page .note {
+  border-left: 2px solid var(--gold);
+  padding-left: 14px;
+  color: var(--text);
+}
+.content-page .plans {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin: 28px 0;
+}
+.content-page .plan {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+.content-page .plan.pop {
+  border-color: rgba(245, 158, 11, .45);
+}
+.content-page .plan .tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--gold);
+  letter-spacing: .08em;
+}
+.content-page .plan h3 {
+  margin: 8px 0 4px;
+  font-size: 22px;
+}
+.content-page .plan .price {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text);
+}
+.content-page .plan .price small {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.content-page .plan .year {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.content-page .plan ul {
+  margin-left: 18px;
+}
+.content-page .plan .foot {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.content-page .card.highlight {
+  border-color: rgba(139, 92, 246, .35);
+}
+.content-page .docs-tree {
+  list-style: none;
+  margin: 22px 0;
+  padding: 0;
+}
+.content-page .docs-tree li {
+  margin: 8px 0;
+  font-size: 16px;
+}
+.content-page .docs-tree ul {
+  margin: 6px 0 6px 20px;
+  list-style: none;
+}
+.content-page .muted {
+  color: var(--muted);
+}
+@media (max-width: 860px) {
+  .content-page .plans {
+    grid-template-columns: 1fr;
+  }
+}
