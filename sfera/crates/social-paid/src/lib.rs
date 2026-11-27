@@ -531,6 +531,132 @@ impl fmt::Display for PublicChannelError {
 
 impl std::error::Error for PublicChannelError {}
 
+// --- Витрина публичного канала ---------------------------------------------
+//
+// Публичная витрина — это файл/ответ релея: манифест канала и его посты.
+// Секретов здесь нет, поэтому витрину можно отдавать любому читателю.
+// При загрузке витрина проверяется целиком: подпись манифеста, каждый пост,
+// аудитория `public`, канал и автор. Подменённый файл не станет лентой.
+
+pub const PUBLIC_FEED_VERSION: u8 = 1;
+pub const PUBLIC_FEED_MAX_POSTS: usize = 1000;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicFeed {
+    pub v: u8,
+    pub channel: PublicChannel,
+    #[serde(default)]
+    pub posts: Vec<SignedPost>,
+}
+
+impl PublicFeed {
+    pub fn new(channel: PublicChannel) -> Result<Self, PublicChannelError> {
+        channel.verify()?;
+        Ok(Self {
+            v: PUBLIC_FEED_VERSION,
+            channel,
+            posts: Vec::new(),
+        })
+    }
+
+    /// Добавить пост. Повтор того же поста (та же подпись) — не ошибка и не
+    /// дубликат: релей может присылать один и тот же батч повторно.
+    pub fn publish(&mut self, post: SignedPost) -> Result<bool, PublicFeedError> {
+        self.channel
+            .accept_post(&post)
+            .map_err(PublicFeedError::Channel)?;
+        if self.posts.iter().any(|p| p.sig == post.sig) {
+            return Ok(false);
+        }
+        if self.posts.len() >= PUBLIC_FEED_MAX_POSTS {
+            return Err(PublicFeedError::Full);
+        }
+        self.posts.push(post);
+        Ok(true)
+    }
+
+    /// Свежие посты первыми. Порядок детерминированный: при равном `ts`
+    /// решает подпись, чтобы выдача не зависела от порядка доставки.
+    #[must_use]
+    pub fn latest(&self, limit: usize) -> Vec<&SignedPost> {
+        let mut refs: Vec<&SignedPost> = self.posts.iter().collect();
+        refs.sort_by(|a, b| {
+            b.post
+                .ts
+                .cmp(&a.post.ts)
+                .then_with(|| a.sig.cmp(&b.sig))
+        });
+        refs.truncate(limit);
+        refs
+    }
+
+    pub fn verify(&self) -> Result<(), PublicFeedError> {
+        if self.v != PUBLIC_FEED_VERSION {
+            return Err(PublicFeedError::UnsupportedVersion);
+        }
+        self.channel
+            .verify()
+            .map_err(PublicFeedError::Channel)?;
+        for post in &self.posts {
+            self.channel
+                .accept_post(post)
+                .map_err(PublicFeedError::Channel)?;
+        }
+        Ok(())
+    }
+
+    pub fn save_to(&self, path: &Path) -> Result<(), PublicFeedError> {
+        let body = serde_json::to_vec(self).map_err(|e| PublicFeedError::Format(e.to_string()))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| PublicFeedError::Io(e.to_string()))?;
+        }
+        let tmp = path.with_extension("tmp");
+        {
+            let mut file =
+                std::fs::File::create(&tmp).map_err(|e| PublicFeedError::Io(e.to_string()))?;
+            file.write_all(&body)
+                .and_then(|()| file.sync_all())
+                .map_err(|e| PublicFeedError::Io(e.to_string()))?;
+        }
+        std::fs::rename(&tmp, path).map_err(|e| PublicFeedError::Io(e.to_string()))
+    }
+
+    /// Нет файла — нет витрины. Битый или подменённый файл — ошибка.
+    pub fn load_from(path: &Path) -> Result<Option<Self>, PublicFeedError> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(path).map_err(|e| PublicFeedError::Io(e.to_string()))?;
+        let feed: Self =
+            serde_json::from_slice(&bytes).map_err(|e| PublicFeedError::Format(e.to_string()))?;
+        feed.verify()?;
+        Ok(Some(feed))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublicFeedError {
+    Channel(PublicChannelError),
+    Full,
+    UnsupportedVersion,
+    Io(String),
+    Format(String),
+}
+
+impl fmt::Display for PublicFeedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Channel(e) => write!(f, "public feed channel: {e}"),
+            Self::Full => f.write_str("public feed is full"),
+            Self::UnsupportedVersion => f.write_str("public feed version is not supported"),
+            Self::Io(e) => write!(f, "public feed io: {e}"),
+            Self::Format(e) => write!(f, "public feed format: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for PublicFeedError {}
+
 // --- Локальное хранилище каналов -------------------------------------------
 //
 // Ключи канала — секрет: файл 0600, ключи не уходят в JS и не имеют
@@ -1119,5 +1245,100 @@ mod tests {
             channel.accept_post(&foreign_author).unwrap_err(),
             PublicChannelError::NotCreator
         );
+    }
+
+    fn public_post(seed: &str, channel_id: &str, ts: u64, body: &str) -> SignedPost {
+        social_post::compose(
+            seed,
+            ts,
+            body,
+            social_post::PostAudience {
+                id: channel_id.into(),
+                epoch: 1,
+                spec: Audience::Public,
+            },
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn public_feed_orders_and_deduplicates_posts() {
+        let channel = PublicChannel::create("pub-1", CREATOR_SEED, "Публичный", "", 100).unwrap();
+        let mut feed = PublicFeed::new(channel).unwrap();
+
+        let first = public_post(CREATOR_SEED, "pub-1", 100, "первый");
+        assert!(feed.publish(first.clone()).unwrap());
+        assert!(!feed.publish(first).unwrap(), "повтор не создаёт дубликат");
+        assert_eq!(feed.posts.len(), 1);
+
+        let second = public_post(CREATOR_SEED, "pub-1", 200, "второй");
+        assert!(feed.publish(second).unwrap());
+        assert_eq!(feed.latest(1)[0].post.body, "второй");
+        assert_eq!(feed.latest(10).len(), 2);
+    }
+
+    #[test]
+    fn public_feed_rejects_private_posts_and_foreign_channels() {
+        let channel = PublicChannel::create("pub-1", CREATOR_SEED, "Публичный", "", 100).unwrap();
+        let mut feed = PublicFeed::new(channel).unwrap();
+
+        let private = social_post::compose(
+            CREATOR_SEED,
+            100,
+            "приватный",
+            social_post::PostAudience {
+                id: "pub-1".into(),
+                epoch: 1,
+                spec: Audience::AllContacts,
+            },
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            feed.publish(private).unwrap_err(),
+            PublicFeedError::Channel(PublicChannelError::NotPublic)
+        );
+
+        let foreign = public_post(CREATOR_SEED, "pub-2", 100, "чужой канал");
+        assert_eq!(
+            feed.publish(foreign).unwrap_err(),
+            PublicFeedError::Channel(PublicChannelError::WrongChannel)
+        );
+    }
+
+    #[test]
+    fn public_feed_roundtrip_and_rejects_tampering() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("public-feed.json");
+        let channel = PublicChannel::create("pub-1", CREATOR_SEED, "Публичный", "", 100).unwrap();
+        let mut feed = PublicFeed::new(channel).unwrap();
+        feed.publish(public_post(CREATOR_SEED, "pub-1", 100, "первый"))
+            .unwrap();
+        feed.publish(public_post(CREATOR_SEED, "pub-1", 200, "второй"))
+            .unwrap();
+        feed.save_to(&path).unwrap();
+
+        let loaded = PublicFeed::load_from(&path).unwrap().unwrap();
+        assert_eq!(loaded.posts.len(), 2);
+        assert_eq!(loaded.latest(1)[0].post.body, "второй");
+        assert!(loaded.verify().is_ok());
+
+        let tampered = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("второй", "подмена");
+        std::fs::write(&path, tampered).unwrap();
+        assert!(matches!(
+            PublicFeed::load_from(&path),
+            Err(PublicFeedError::Channel(PublicChannelError::BadPost))
+        ));
+    }
+
+    #[test]
+    fn missing_public_feed_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(PublicFeed::load_from(&dir.path().join("none.json"))
+            .unwrap()
+            .is_none());
     }
 }
