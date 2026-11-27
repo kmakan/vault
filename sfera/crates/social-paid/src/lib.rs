@@ -15,13 +15,19 @@
 //! полученные посты остаются читаемыми старым ключом — это честное
 //! ограничение E2E, а не недоделка.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::io::Write;
+use std::path::Path;
 
 use sfera_billing::creator::{
     check_entitlement, CreatorEntitlement, EntitlementError, EntitlementKind,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use social_audience::{AudienceKeys, MembershipChange};
+use social_audience::{
+    AudienceKeys, AudienceKeysSnapshot, AudienceRestoreError, MembershipChange,
+};
 use social_delivery::{
     unwrap_audience_key, wrap_audience_key, DeliveryError, RecipientKeyMaterial,
     SenderKeyMaterial, WrappedAudienceKey,
@@ -233,6 +239,223 @@ impl fmt::Display for AccessError {
 
 impl std::error::Error for AccessError {}
 
+// --- Локальное хранилище каналов -------------------------------------------
+//
+// Ключи канала — секрет: файл 0600, ключи не уходят в JS и не имеют
+// `Serialize` на уровне `AudienceKeys`. Здесь — единственный слой, который
+// переводит их в hex для диска и обратно. Шифрование ключей ключом устройства
+// (keychain) — следующий слой; до него файл защищён правами 0600.
+
+pub const CHANNEL_BOOK_VERSION: u8 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChannelStoreError {
+    Io(String),
+    Format(String),
+    Invalid(String),
+}
+
+impl fmt::Display for ChannelStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(m) => write!(f, "channel store io: {m}"),
+            Self::Format(m) => write!(f, "channel store format: {m}"),
+            Self::Invalid(m) => write!(f, "channel store invalid: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for ChannelStoreError {}
+
+#[derive(Serialize, Deserialize)]
+struct StoredKey {
+    epoch: u64,
+    key_hex: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredChannel {
+    id: String,
+    creator: String,
+    title: String,
+    audience_id: String,
+    epoch: u64,
+    current_key_hex: String,
+    members: Vec<String>,
+    history: Vec<StoredKey>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredBook {
+    v: u8,
+    channels: Vec<StoredChannel>,
+}
+
+/// Книга платных каналов. Живёт в Rust; в FFI отдаются только метаданные.
+#[derive(Default)]
+pub struct ChannelBook {
+    channels: BTreeMap<String, PaidChannel>,
+}
+
+impl ChannelBook {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.channels.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.channels.is_empty()
+    }
+
+    pub fn insert(&mut self, channel: PaidChannel) -> Option<PaidChannel> {
+        self.channels.insert(channel.id.clone(), channel)
+    }
+
+    pub fn get(&self, id: &str) -> Option<&PaidChannel> {
+        self.channels.get(id)
+    }
+
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut PaidChannel> {
+        self.channels.get_mut(id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PaidChannel> {
+        self.channels.values()
+    }
+
+    pub fn remove(&mut self, id: &str) -> Option<PaidChannel> {
+        self.channels.remove(id)
+    }
+
+    /// Атомарно записать книгу. Каталог создаётся, файл — 0600.
+    pub fn save_to(&self, path: &Path) -> Result<(), ChannelStoreError> {
+        let channels = self
+            .channels
+            .values()
+            .map(|channel| {
+                let snapshot = channel.keys.snapshot_for_storage();
+                StoredChannel {
+                    id: channel.id.clone(),
+                    creator: channel.creator.as_str().to_string(),
+                    title: channel.title.clone(),
+                    audience_id: snapshot.audience_id,
+                    epoch: snapshot.epoch,
+                    current_key_hex: hex::encode(snapshot.current),
+                    members: snapshot.members,
+                    history: snapshot
+                        .history
+                        .into_iter()
+                        .map(|(epoch, key)| StoredKey {
+                            epoch,
+                            key_hex: hex::encode(key),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        let body = serde_json::to_vec(&StoredBook {
+            v: CHANNEL_BOOK_VERSION,
+            channels,
+        })
+        .map_err(|e| ChannelStoreError::Format(e.to_string()))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ChannelStoreError::Io(e.to_string()))?;
+        }
+        let tmp = path.with_extension("tmp");
+        write_private(&tmp, &body)?;
+        std::fs::rename(&tmp, path).map_err(|e| ChannelStoreError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Прочитать книгу. Отсутствующий файл — пустая книга, а не ошибка.
+    /// Повреждённый файл — ошибка: молча терять ключи каналов нельзя.
+    pub fn load_from(path: &Path) -> Result<Self, ChannelStoreError> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let bytes = std::fs::read(path).map_err(|e| ChannelStoreError::Io(e.to_string()))?;
+        let stored: StoredBook = serde_json::from_slice(&bytes)
+            .map_err(|e| ChannelStoreError::Format(e.to_string()))?;
+        if stored.v != CHANNEL_BOOK_VERSION {
+            return Err(ChannelStoreError::Invalid(
+                "unsupported channel book version".into(),
+            ));
+        }
+        let mut book = Self::default();
+        for stored in stored.channels {
+            if stored.id.trim().is_empty() || stored.creator.trim().is_empty() {
+                return Err(ChannelStoreError::Invalid(
+                    "channel has empty id or creator".into(),
+                ));
+            }
+            let current = decode_key(&stored.current_key_hex)?;
+            let mut history = Vec::with_capacity(stored.history.len());
+            for key in stored.history {
+                history.push((key.epoch, decode_key(&key.key_hex)?));
+            }
+            let snapshot = AudienceKeysSnapshot {
+                audience_id: stored.audience_id,
+                epoch: stored.epoch,
+                current,
+                members: stored.members,
+                history,
+            };
+            let keys = AudienceKeys::restore(snapshot).map_err(|e: AudienceRestoreError| {
+                ChannelStoreError::Invalid(format!("channel {}: {e}", stored.id))
+            })?;
+            let channel = PaidChannel {
+                id: stored.id.clone(),
+                creator: Fingerprint::from_str(&stored.creator),
+                title: stored.title,
+                keys,
+            };
+            if book.channels.insert(stored.id.clone(), channel).is_some() {
+                return Err(ChannelStoreError::Invalid(format!(
+                    "duplicate channel {}",
+                    stored.id
+                )));
+            }
+        }
+        Ok(book)
+    }
+}
+
+fn decode_key(value: &str) -> Result<[u8; 32], ChannelStoreError> {
+    let bytes = hex::decode(value.trim())
+        .map_err(|_| ChannelStoreError::Invalid("channel key is not hex".into()))?;
+    bytes
+        .try_into()
+        .map_err(|_| ChannelStoreError::Invalid("channel key is not 32 bytes".into()))
+}
+
+#[cfg(unix)]
+fn write_private(path: &Path, body: &[u8]) -> Result<(), ChannelStoreError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| ChannelStoreError::Io(e.to_string()))?;
+    file.write_all(body)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| ChannelStoreError::Io(e.to_string()))
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, body: &[u8]) -> Result<(), ChannelStoreError> {
+    let mut file = std::fs::File::create(path)
+        .map_err(|e| ChannelStoreError::Io(e.to_string()))?;
+    file.write_all(body)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| ChannelStoreError::Io(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +654,51 @@ mod tests {
                 .unwrap_err(),
             DeliveryError::NotAMember
         );
+    }
+
+    #[test]
+    fn channel_book_roundtrip_keeps_key_and_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("channels.json");
+        let mut book = ChannelBook::new();
+        let mut channel = channel();
+        channel.subscribe(&fp(SUBJECT_SEED));
+        let epoch = channel.epoch();
+        let key_id = channel.current_key_id();
+        book.insert(channel);
+        book.save_to(&path).expect("книга записана");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "ключи каналов только для владельца");
+        }
+
+        let loaded = ChannelBook::load_from(&path).expect("книга прочитана");
+        assert_eq!(loaded.len(), 1);
+        let channel = loaded.get("chan-1").expect("канал на месте");
+        assert_eq!(channel.epoch(), epoch);
+        assert_eq!(channel.current_key_id(), key_id);
+        assert!(channel.is_subscriber(&fp(SUBJECT_SEED)));
+
+        let token = token(channel, EntitlementKind::Channel);
+        assert!(channel
+            .access(&token, &issuer(), &fp(SUBJECT_SEED), 2_000)
+            .is_ok());
+    }
+
+    #[test]
+    fn missing_channel_book_is_empty_and_corrupted_one_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("channels.json");
+        assert!(ChannelBook::load_from(&path).unwrap().is_empty());
+
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(matches!(
+            ChannelBook::load_from(&path),
+            Err(ChannelStoreError::Format(_))
+        ));
     }
 
     #[test]

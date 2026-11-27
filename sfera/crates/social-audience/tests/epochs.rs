@@ -1,7 +1,7 @@
 //! Эпохи аудитории: ротация только на реальное изменение, свежий ключ,
 //! история старых эпох для чтения, ключи не светятся в Debug.
 
-use social_audience::{AudienceKeys, MembershipChange};
+use social_audience::{AudienceKeys, AudienceRestoreError, MembershipChange};
 use social_model::Fingerprint;
 
 fn fp(byte: u8) -> Fingerprint {
@@ -112,4 +112,48 @@ fn debug_does_not_leak_key_material() {
     let rendered = format!("{a:?}");
     assert!(rendered.contains("<redacted>"));
     assert!(!rendered.contains(&hex::encode(a.current_key())));
+}
+
+#[test]
+fn snapshot_roundtrip_keeps_epochs_members_and_history() {
+    let mut a = keys();
+    a.add_member(&fp(4));
+    a.remove_member(&fp(3));
+
+    let snapshot = a.snapshot_for_storage();
+    let restored = AudienceKeys::restore(snapshot.clone()).expect("снимок валиден");
+    assert_eq!(restored.epoch(), a.epoch());
+    assert_eq!(restored.current_key(), a.current_key());
+    assert_eq!(
+        restored.members().collect::<Vec<_>>(),
+        a.members().collect::<Vec<_>>()
+    );
+    for epoch in 1..=a.epoch() {
+        assert_eq!(restored.key_for(epoch), a.key_for(epoch));
+    }
+    assert!(!format!("{snapshot:?}").contains(&hex::encode(a.current_key())));
+}
+
+#[test]
+fn restore_rejects_broken_snapshot() {
+    let mut zero = keys().snapshot_for_storage();
+    zero.epoch = 0;
+    assert_eq!(
+        AudienceKeys::restore(zero).unwrap_err(),
+        AudienceRestoreError::BadEpoch
+    );
+
+    let mut mismatched = keys().snapshot_for_storage();
+    mismatched.current = [9u8; 32];
+    assert_eq!(
+        AudienceKeys::restore(mismatched).unwrap_err(),
+        AudienceRestoreError::MissingCurrent
+    );
+
+    let mut future = keys().snapshot_for_storage();
+    future.history.push((future.epoch + 1, [7u8; 32]));
+    assert_eq!(
+        AudienceKeys::restore(future).unwrap_err(),
+        AudienceRestoreError::FutureHistory
+    );
 }

@@ -137,6 +137,94 @@ impl AudienceKeys {
     }
 }
 
+/// Снимок ключей для Rust-хранилища (не для JS и не для JSON наружу).
+///
+/// Поля содержат секрет, поэтому `Serialize` намеренно не реализован, а
+/// `Debug` скрывает ключи. Использовать только в слое хранения с правами
+/// 0600; в провод и в FFI снимок не попадает.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AudienceKeysSnapshot {
+    pub audience_id: String,
+    pub epoch: u64,
+    pub current: [u8; 32],
+    pub members: Vec<String>,
+    pub history: Vec<(u64, [u8; 32])>,
+}
+
+impl fmt::Debug for AudienceKeysSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AudienceKeysSnapshot")
+            .field("audience_id", &self.audience_id)
+            .field("epoch", &self.epoch)
+            .field("members", &self.members.len())
+            .field("history", &self.history.len())
+            .field("current", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudienceRestoreError {
+    /// Эпоха 0 невозможна: первая эпоха — 1.
+    BadEpoch,
+    /// В истории нет ключа текущей эпохи или он не совпадает с `current`.
+    MissingCurrent,
+    /// История содержит эпоху из будущего.
+    FutureHistory,
+}
+
+impl fmt::Display for AudienceRestoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::BadEpoch => "audience epoch must be >= 1",
+            Self::MissingCurrent => "audience history has no current epoch key",
+            Self::FutureHistory => "audience history contains a future epoch",
+        })
+    }
+}
+
+impl std::error::Error for AudienceRestoreError {}
+
+impl AudienceKeys {
+    /// Снимок для локального хранилища. Ключи не сериализуются.
+    #[must_use]
+    pub fn snapshot_for_storage(&self) -> AudienceKeysSnapshot {
+        AudienceKeysSnapshot {
+            audience_id: self.audience_id.clone(),
+            epoch: self.epoch,
+            current: self.current,
+            members: self.members.iter().cloned().collect(),
+            history: self.history.iter().map(|(e, k)| (*e, *k)).collect(),
+        }
+    }
+
+    /// Восстановить ключи из снимка с проверкой формы. Подпись/происхождение
+    /// снимка проверяет слой хранения; здесь — только структурная целостность.
+    pub fn restore(snapshot: AudienceKeysSnapshot) -> Result<Self, AudienceRestoreError> {
+        if snapshot.epoch == 0 {
+            return Err(AudienceRestoreError::BadEpoch);
+        }
+        let mut history = BTreeMap::new();
+        for (epoch, key) in snapshot.history {
+            if epoch == 0 || epoch > snapshot.epoch {
+                return Err(AudienceRestoreError::FutureHistory);
+            }
+            history.insert(epoch, key);
+        }
+        match history.get(&snapshot.epoch) {
+            Some(key) if key == &snapshot.current => {}
+            _ => return Err(AudienceRestoreError::MissingCurrent),
+        }
+        Ok(Self {
+            audience_id: snapshot.audience_id,
+            epoch: snapshot.epoch,
+            current: snapshot.current,
+            members: snapshot.members.into_iter().collect(),
+            history,
+        })
+    }
+}
+
 // Секрет не должен попасть в лог через `{:?}`.
 impl fmt::Debug for AudienceKeys {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
