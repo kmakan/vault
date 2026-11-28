@@ -32,6 +32,7 @@ SLUGS = {
     "6. Контакты и сферы": "contacts-and-spheres",
     "7. Публикации, лента и обсуждения": "posts-and-feed",
     "8. Профиль и хранилище": "profile-and-storage",
+    "9. Публичные каналы": "public-channels",
     "9. Публичные каналы (в разработке)": "public-channels",
     "10. Платные каналы и монетизация (планы)": "paid-channels",
     "11. Приватность и безопасность": "privacy",
@@ -143,13 +144,14 @@ class Command(BaseCommand):
             else "SMTP/IMAP, приглашения, сферы и роли."
         )
         card_public = (
-            "What is ready in the core and what is not in the UI yet."
+            "Create a channel in the app and read its public page on the site."
             if is_en
-            else "Что уже готово в ядре и чего ещё нет в интерфейсе."
+            else "Создавайте канал в приложении и читайте его публичную страницу на сайте."
         )
         open_guide = "Open the guide" if is_en else "Открыть руководство"
         email_link = "Set up email" if is_en else "Настроить почту"
         all_docs = "All documentation" if is_en else "Все разделы руководства"
+        public_catalog = "Public channel directory" if is_en else "Каталог публичных каналов"
         Page.objects.update_or_create(
             site=site,
             slug="sfera",
@@ -169,7 +171,7 @@ class Command(BaseCommand):
                     f'<p>{card_mail}</p><p><a class="btn btn-ghost" href="/sfera/docs/email">{email_link}</a></p></div>'
                     f'<div class="card"><h3>{"Public channels" if is_en else "Публичные каналы"}</h3>'
                     f'<p>{card_public}</p><p><a class="btn btn-ghost" '
-                    f'href="/sfera/docs/public-channels">{"Read more" if is_en else "Подробнее"}</a></p></div>'
+                    f'href="/sfera/channels">{public_catalog}</a></p></div>'
                     "</div>"
                     f'<p><a class="btn btn-primary" href="/sfera/docs">{all_docs}</a></p>'
                 ),

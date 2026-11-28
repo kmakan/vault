@@ -80,6 +80,10 @@ class SiteRoutingTests(TestCase):
         response = self.client.get("/api/v1/public/channels/../secret/", HTTP_HOST="vault-msg.ru")
         self.assertEqual(response.status_code, 404)
 
+    def test_sitemap_is_ok_without_public_channel_source(self):
+        response = self.client.get("/sitemap.xml", HTTP_HOST="vault-msg.ru")
+        self.assertEqual(response.status_code, 200)
+
 
 class ContentApiTests(TestCase):
     @classmethod

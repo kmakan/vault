@@ -3,7 +3,7 @@ from django.urls import path
 
 from . import views
 from .seo import RobotsView
-from .sitemaps import DocSitemap, LegalSitemap, PageSitemap
+from .sitemaps import DocSitemap, LegalSitemap, PageSitemap, PublicChannelSitemap
 
 app_name = "core"
 
@@ -11,6 +11,7 @@ sitemaps = {
     "pages": PageSitemap,
     "docs": DocSitemap,
     "legal": LegalSitemap,
+    "public-channels": PublicChannelSitemap,
 }
 
 urlpatterns = [

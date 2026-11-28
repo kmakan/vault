@@ -6,6 +6,7 @@ from django.contrib.sitemaps import Sitemap
 from django.contrib.sites.models import Site
 
 from apps.docs.models import DocPage
+from apps.public_channels.views import CHANNEL_ID, configured_source, fetch_verified
 from apps.legal.models import LegalDocument
 from apps.pages.models import Page
 
@@ -62,6 +63,29 @@ class DocSitemap(SiteSitemap):
 
     def lastmod(self, item: DocPage):
         return item.updated_at
+
+
+class PublicChannelSitemap(SiteSitemap):
+    priority = 0.8
+
+    def items(self):
+        if configured_source() is None:
+            return []
+        try:
+            payload = fetch_verified("/sfera/public/channels")
+        except (LookupError, ConnectionError):
+            # SEO discovery must not fail when the optional vitrine is down.
+            return []
+        return [
+            channel
+            for channel in payload.get("channels", [])
+            if isinstance(channel, dict)
+            and isinstance(channel.get("id"), str)
+            and CHANNEL_ID.fullmatch(channel["id"])
+        ]
+
+    def location(self, item: dict) -> str:
+        return f"/sfera/channels/{item['id']}"
 
 
 class LegalSitemap(SiteSitemap):

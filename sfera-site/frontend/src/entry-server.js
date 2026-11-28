@@ -61,6 +61,19 @@ export async function render({ url = '/', host = DEFAULT_SITE } = {}) {
       state.view = 'home'
       title = state.page.seo_title || state.page.title || title
       description = state.page.seo_description || description
+    } else if (path === '/sfera/channels') {
+      state.channels = await get('/api/v1/public/channels/', siteHost)
+      state.view = 'channels'
+      title = shell.site.locale === 'en' ? 'Sfera public channels' : 'Публичные каналы Sfera'
+      description = shell.site.locale === 'en'
+        ? 'Public pages signed by their authors.'
+        : 'Открытые страницы, подписанные их авторами.'
+    } else if (path.startsWith('/sfera/channels/')) {
+      const id = decodeSlug(path, '/sfera/channels/')
+      state.channel = await get(`/api/v1/public/channels/${encodeURIComponent(id)}/`, siteHost)
+      state.view = 'channel'
+      title = state.channel.channel?.title || title
+      description = state.channel.channel?.description || description
     } else if (path === '/pricing' || path === '/pay' || path === '/sfera') {
       state.page = await get(`/api/v1/pages/${path.slice(1)}/`, siteHost)
       state.view = 'page'

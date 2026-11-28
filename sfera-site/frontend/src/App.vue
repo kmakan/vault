@@ -7,6 +7,8 @@ import PageView from './pages/PageView.vue'
 import LegalView from './pages/LegalView.vue'
 import DocsView from './pages/DocsView.vue'
 import DocView from './pages/DocView.vue'
+import ChannelsView from './pages/ChannelsView.vue'
+import ChannelView from './pages/ChannelView.vue'
 import NotFoundView from './pages/NotFoundView.vue'
 
 const props = defineProps({ state: { type: Object, required: true } })
@@ -17,6 +19,8 @@ const VIEWS = {
   legal: LegalView,
   docs: DocsView,
   doc: DocView,
+  channels: ChannelsView,
+  channel: ChannelView,
   notfound: NotFoundView,
 }
 
