@@ -1176,6 +1176,65 @@ fn social_sync_outbox(state: tauri::State<'_, SferaState>, now: u64) -> Result<R
     state.sync_outbox(now)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncPublicChannelRequest {
+    pub v: u8,
+    pub channel_id: String,
+    pub base_url: String,
+    pub upload_token: String,
+}
+
+#[tauri::command]
+fn social_sync_public_channel(
+    state: tauri::State<'_, SferaState>,
+    req: SyncPublicChannelRequest,
+) -> Result<social_public::SyncReport, CommandError> {
+    social_sync_public_channel_impl(&state, req)
+}
+
+/// Тот же production-путь используется изолированным CLI-харнессом: Tauri IPC
+/// не требуется, но HTTP, проверки и DTO не дублируются.
+#[doc(hidden)]
+pub fn sync_public_channel_for_test(
+    state: &SferaState,
+    req: SyncPublicChannelRequest,
+) -> Result<social_public::SyncReport, CommandError> {
+    social_sync_public_channel_impl(state, req)
+}
+
+fn social_sync_public_channel_impl(
+    state: &SferaState,
+    req: SyncPublicChannelRequest,
+) -> Result<social_public::SyncReport, CommandError> {
+    check(req.v)?;
+    if !social_paid::is_valid_channel_id(&req.channel_id) {
+        return Err(CommandError::input("invalid public channel id"));
+    }
+    if !(req.base_url.starts_with("https://") || req.base_url.starts_with("http://")) {
+        return Err(CommandError::input("public relay URL must be HTTP(S)"));
+    }
+    if req.upload_token.is_empty() {
+        return Err(CommandError::input("public relay upload token is required"));
+    }
+    let feed = social_paid::PublicFeed::load_from(&public_root(&state).join(format!("{}.json", req.channel_id)))
+        .map_err(|e| CommandError::backend(e.to_string()))?
+        .ok_or_else(|| CommandError::input("unknown public channel"))?;
+    let url = format!(
+        "{}/sfera/public/channels/{}",
+        req.base_url.trim_end_matches('/'),
+        req.channel_id,
+    );
+    let mut response = ureq::put(&url)
+        .header("Authorization", &format!("Bearer {}", req.upload_token))
+        .header("Content-Type", "application/json")
+        .send_json(&feed)
+        .map_err(|e| CommandError::new("transport", format!("public relay upload failed: {e}")))?;
+    response
+        .body_mut()
+        .read_json::<social_public::SyncReport>()
+        .map_err(|e| CommandError::new("transport", format!("invalid relay sync report: {e}")))
+}
+
 #[tauri::command]
 fn social_store_caps(state: tauri::State<'_, SferaState>) -> Result<StoreCaps, CommandError> {
     state.call(|app| Ok(app.store().caps()))
@@ -1382,6 +1441,7 @@ pub fn handles(command: &str) -> bool {
             | "social_public_channel"
             | "social_create_public_channel"
             | "social_publish_public_post"
+            | "social_sync_public_channel"
     )
 }
 
@@ -1435,6 +1495,7 @@ pub fn social_commands_handler<R: tauri::Runtime>(
         social_public_channel,
         social_create_public_channel,
         social_publish_public_post,
+        social_sync_public_channel,
     ]
 }
 

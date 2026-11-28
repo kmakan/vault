@@ -40,6 +40,7 @@ export function createAppState({
     // Публичные каналы: DTO из Rust, подписи и проверки не в JS.
     publicChannels: [],
     publicChannelViews: {},
+    publicSyncReports: {},
     // Обсуждение по id поста: готовые подписанные события из Rust.
     discussions: {},
     contacts: [],
@@ -296,6 +297,15 @@ export function createAppState({
       await load('feed', () => bridge.feed());
       state.publicChannelViews[channelId] = await bridge.publicChannel(channelId);
       return post;
+    },
+
+    async syncPublicChannel(channelId, baseUrl, uploadToken) {
+      if (state.apiVersion == null) throw new Error('bridge not initialized');
+      const report = await bridge.syncPublicChannel({
+        v: state.apiVersion, channel_id: channelId, base_url: baseUrl, upload_token: uploadToken,
+      });
+      state.publicSyncReports[channelId] = report;
+      return report;
     },
 
     async commentOnPost(postId, body, parentId = null) {

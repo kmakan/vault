@@ -28,13 +28,18 @@ hex = "0.4"
 dirs = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 # Минимальный Tauri: только макрос #[tauri::command] и IPC-типы, без wry/GTK.
 # Те же функции вызываются напрямую в тестах — GUI-рантайм не нужен.
 tauri = { version = "2", default-features = false }
-
-[dev-dependencies]
 social-sync = { path = "../social-sync" }
-tempfile = "3"
 storage-local = { path = "../storage-local" }
 social-model = { path = "../social-model" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "public-sync"
+path = "src/bin/public_sync.rs"

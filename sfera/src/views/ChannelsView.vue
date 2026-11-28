@@ -10,6 +10,8 @@ const channelId = ref('');
 const channelTitle = ref('');
 const channelDescription = ref('');
 const postBody = ref('');
+const relayUrl = ref('https://vault-msg.ru');
+const relayToken = ref('');
 const busy = ref(false);
 
 const channels = computed(() => props.state.publicChannels ?? []);
@@ -48,6 +50,18 @@ async function publish() {
   try {
     await props.api.publishPublicPost(selected.value, postBody.value);
     postBody.value = '';
+  } catch (error) {
+    props.state.error = String(error?.message ?? error);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function syncChannel() {
+  if (busy.value || !selected.value) return;
+  busy.value = true;
+  try {
+    await props.api.syncPublicChannel(selected.value, relayUrl.value.trim(), relayToken.value);
   } catch (error) {
     props.state.error = String(error?.message ?? error);
   } finally {
@@ -102,6 +116,16 @@ function when(ts) {
         <form class="card channel-form" @submit.prevent="publish">
           <textarea v-model="postBody" :placeholder="api.t('channels_post_placeholder')" rows="3" required />
           <button type="submit" class="primary" :disabled="busy">{{ api.t('channels_publish') }}</button>
+        </form>
+
+        <form class="card channel-form" @submit.prevent="syncChannel">
+          <h3>{{ api.t('channels_sync') }}</h3>
+          <input v-model="relayUrl" type="url" :placeholder="api.t('channels_relay_url')" required />
+          <input v-model="relayToken" type="password" :placeholder="api.t('channels_relay_token')" required autocomplete="off" />
+          <button type="submit" class="secondary" :disabled="busy">{{ api.t('channels_sync') }}</button>
+          <p v-if="state.publicSyncReports[selected]" class="muted">
+            {{ api.t('channels_sync_result', state.publicSyncReports[selected]) }}
+          </p>
         </form>
       </div>
     </div>

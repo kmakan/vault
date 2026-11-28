@@ -15,6 +15,7 @@ export const COMMANDS = Object.freeze({
   publicChannel: 'social_public_channel',
   createPublicChannel: 'social_create_public_channel',
   publishPublicPost: 'social_publish_public_post',
+  syncPublicChannel: 'social_sync_public_channel',
   contacts: 'social_contacts',
   setContactRole: 'social_set_contact_role',
   roleOptions: 'social_role_options',
@@ -90,6 +91,10 @@ export function createBridge(invoke) {
 
     publishPublicPost(req) {
       return invoke(COMMANDS.publishPublicPost, { req });
+    },
+
+    syncPublicChannel(req) {
+      return invoke(COMMANDS.syncPublicChannel, { req });
     },
 
     contacts() {

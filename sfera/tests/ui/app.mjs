@@ -109,6 +109,10 @@ const bridge = {
     calls.push({ command: 'publish-public', ...req });
     return { id: 'pub2', ts: req.ts, body: req.body };
   },
+  syncPublicChannel: async (req) => {
+    calls.push({ command: 'sync-public', ...req });
+    return { channel: req.channel_id, inserted: 1, duplicates: 0, posts: 2 };
+  },
 };
 
 const api = createAppState({ bridge, locale: 'ru', theme: 'dark', clock: () => 1000 });
@@ -280,6 +284,13 @@ const publishCall = calls.find((c) => c.command === 'publish-public');
 check(publishCall.channel_id === 'news' && publishCall.body === 'второй пост', 'public publish payload passed through');
 check(publishCall.v === 7 && publishCall.ts === 1000 && publishCall.now === 1000, 'public publish version and clock');
 check(s.publicChannelViews.news.posts.length === 1, 'channel view refreshed after publish');
+
+const syncReport = await api.syncPublicChannel('news', 'http://127.0.0.1:8095', 'test-token');
+check(syncReport.inserted === 1 && syncReport.posts === 2, 'relay report comes from Rust');
+check(s.publicSyncReports.news.channel === 'news', 'relay report stored by channel');
+const syncCall = calls.find((c) => c.command === 'sync-public');
+check(syncCall.v === 7 && syncCall.channel_id === 'news', 'sync uses Rust version and channel id');
+check(syncCall.base_url === 'http://127.0.0.1:8095' && syncCall.upload_token === 'test-token', 'relay config passed through');
 
 failFeed = true;
 const loaded = await api.loadFeed();
